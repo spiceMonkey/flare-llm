@@ -6,8 +6,8 @@ class LlmPerfEquations:
     EQUATIONS = {
         "M_theta_device": {
             "description": "Per-device parameter memory.",
-            "latex": r"M_{\theta,\text{device}} = \frac{L}{PP}\left(\frac{H^2 + 3 H H_{kv}}{TP} + \frac{2 H I N_{\text{exp}}}{TP \cdot EP}\right) b + \frac{V H}{TP} b",
-            "expr": " (L/PP) * ((H**2 + 3*H*H_kv)/TP + (2*H*I*N_exp)/(TP*EP)) * b + (V*H/TP)*b ",
+            "latex": r"M_{\theta,\text{device}} = \frac{L}{PP}\left(\frac{H^2 + 3 H H_{kv}}{TP} + \frac{3 H I N_{\text{exp}}}{TP \cdot EP}\right) b + \frac{V H}{TP} b",
+            "expr": " (L/PP) * ((H**2 + 3*H*H_kv)/TP + (3*H*I*N_exp)/(TP*EP)) * b + (V*H/TP)*b ",
         },
         "M_act_device": {
             "description": "Per-device activation memory.",

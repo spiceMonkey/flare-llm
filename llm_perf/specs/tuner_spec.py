@@ -23,6 +23,9 @@ class TuningSpec:
     # FlashAttention gain γ_FA (γ_FA ≥ 1)
     flash_attn_gain: float = 1.0
 
+    # Flash-MLP gain γ_FMLP (γ_FMLP ≥ 1)
+    flash_mlp_gain: float = 1.0
+
     # Overlap factor ρ in t_token ≈ max(t_local, ρ t_comm)
     overlap_factor: float = 0.3
 

@@ -17,6 +17,7 @@ from .constants import (
     TP_ALGORITHMS,
     EP_ALGORITHMS,
     GB_TO_BYTES,
+    MB_TO_BYTES,
     TB_TO_FLOPS,
     US_TO_SECONDS,
 )
@@ -34,6 +35,7 @@ __all__ = [
     "TP_ALGORITHMS",
     "EP_ALGORITHMS",
     "GB_TO_BYTES",
+    "MB_TO_BYTES",
     "TB_TO_FLOPS",
     "save_config_tps_scatter",
     "US_TO_SECONDS",
