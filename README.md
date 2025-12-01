@@ -9,6 +9,7 @@
 - **InferenceCalculator** that runs the full stack and returns structured results
 - **HuggingFace adapter** that converts HF `config.json` files into the `llm_perf` schema
 - **Quickstart notebook** (`quickstart.ipynb`) demonstrating database discovery, optional HF conversion, and diagnostic output
+- **Ready-to-run scripts** for HuggingFace config conversion and partition sweeps (with CSV-style tables and Matplotlib scatter plots)
 
 ## Repository Layout
 
@@ -19,6 +20,9 @@
 │   ├── codebase.structure.md
 │   ├── equations.cheetsheet.{md,pdf}
 │   └── modeling.methodology.{md,pdf}
+├── scripts/
+│   ├── convert_hf_model.py
+│   └── partition_sweep.py
 └── llm_perf/
     ├── calculators/
     │   └── inference_calculator.py
@@ -48,7 +52,8 @@
         ├── constants.py
         ├── data_check.py
         ├── equations.py
-        └── hf_model_adapter.py
+        ├── hf_model_adapter.py
+        └── plotting.py
 ```
 
 ## Quickstart
@@ -61,6 +66,26 @@
    - Inspecting partitions with the nested DP→PP→EP→TP→SP hierarchy
    - Running `InferenceCalculator` to obtain memory/FLOPs/traffic/communication/latency diagnostics
 3. **Customize specs** by editing JSON files under `llm_perf/database/**` or generating new ones via the HF adapter.
+
+## Utility Scripts
+
+Two small helpers live under `scripts/` for repeatable experiments outside the notebook:
+
+1. **`convert_hf_model.py`** — converts a HuggingFace `config.json`, writes the adapted JSON into `llm_perf/database/model/`, reloads it via `load_model_spec`, and prints a summary that now includes estimated total parameters and byte footprint.
+
+    ```powershell
+    .\.llm_perf\Scripts\python.exe scripts\convert_hf_model.py
+    ```
+
+    Adjust `HF_FILE_NAME`/paths inside the script as needed. Because it bootstraps `sys.path`, you can run it from the repo root without extra setup.
+
+2. **`partition_sweep.py`** — iterates every `(PP, TP, EP, SP)` factorization for a given cluster budget (DP fixed, default 1), runs `InferenceCalculator` per config, prints a detailed table (latency breakdown in microseconds plus per-device parameter/activation/KV memory), and saves a scatter plot via `llm_perf.utils.save_config_tps_scatter`.
+
+    ```powershell
+    .\.llm_perf\Scripts\python.exe scripts\partition_sweep.py --cluster-size 32 --system llm_perf/database/system/h100.32gpu.json
+    ```
+
+    The plot filename automatically incorporates the hardware system name (e.g., `artifacts/partition_sweep_h100_32gpu_cluster.png`). Install Matplotlib in your environment to enable plotting (already bundled in `.llm_perf`).
 
 ## Programmatic Usage
 
