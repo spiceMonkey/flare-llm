@@ -18,7 +18,9 @@ from .constants import (
     EP_ALGORITHMS,
     GB_TO_BYTES,
     TB_TO_FLOPS,
+    US_TO_SECONDS,
 )
+from .plotting import save_config_tps_scatter
 
 __all__ = [
     "LlmPerfEquations",
@@ -33,4 +35,6 @@ __all__ = [
     "EP_ALGORITHMS",
     "GB_TO_BYTES",
     "TB_TO_FLOPS",
+    "save_config_tps_scatter",
+    "US_TO_SECONDS",
 ]

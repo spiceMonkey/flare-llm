@@ -1,0 +1,17 @@
+{
+  "schema": "llm_perf.system",
+  "name": "imaginary_32npu_cluster",
+  "num_devices": 32,
+  "device": {
+    "name": "someNPU",
+    "hbm_capacity_GB": 24.0,
+    "hbm_bandwidth_GBps": 3350.0,
+    "peak_flops_TF": 40.0
+  },
+  "network_domains": {
+    "TP": { "name": "pcie5", "alpha_us": 10.0, "bandwidth_GBps": 64.0 },
+    "EP": { "name": "pcie5", "alpha_us": 100.0, "bandwidth_GBps": 64.0 },
+    "SP": { "name": "pcie5", "alpha_us": 100.0, "bandwidth_GBps": 64.0 },
+    "PP": { "name": "pcie4", "alpha_us": 200.0, "bandwidth_GBps": 32.0 }
+  }
+}

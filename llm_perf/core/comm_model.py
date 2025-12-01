@@ -5,6 +5,7 @@ from ..specs.model_spec import LlmModelSpec
 from ..specs.system_spec import SystemSpec
 from ..specs.partition_spec import PartitionSpec
 from ..specs.tuner_spec import TuningSpec
+from ..utils import GB_TO_BYTES, US_TO_SECONDS
 
 
 @dataclass
@@ -44,16 +45,16 @@ def compute_comm(
     dom_SP = system.get_domain("SP")
 
     # Convert alpha from us to s
-    a_PP = dom_PP.alpha_us * 1e-6
-    a_TP = dom_TP.alpha_us * 1e-6
-    a_EP = dom_EP.alpha_us * 1e-6
-    a_SP = dom_SP.alpha_us * 1e-6
+    a_PP = dom_PP.alpha_us * US_TO_SECONDS
+    a_TP = dom_TP.alpha_us * US_TO_SECONDS
+    a_EP = dom_EP.alpha_us * US_TO_SECONDS
+    a_SP = dom_SP.alpha_us * US_TO_SECONDS
 
     # Convert GB/s → bytes/s (decimal)
-    B_PP = dom_PP.bandwidth_GBps * 1e9  # bytes/s
-    B_TP = dom_TP.bandwidth_GBps * 1e9
-    B_EP = dom_EP.bandwidth_GBps * 1e9
-    B_SP = dom_SP.bandwidth_GBps * 1e9
+    B_PP = dom_PP.bandwidth_GBps * GB_TO_BYTES
+    B_TP = dom_TP.bandwidth_GBps * GB_TO_BYTES
+    B_EP = dom_EP.bandwidth_GBps * GB_TO_BYTES
+    B_SP = dom_SP.bandwidth_GBps * GB_TO_BYTES
     
     # PP: shard-preserving hop of H/TP
     msg_PP = (H / TP) * b
