@@ -4,12 +4,12 @@
 
 ## Features
 
-- **Typed specs** for models, hardware systems, partition plans, and tuning knobs
+- **Typed specs** for models, hardware systems, partition plans, and tuning knobs (now including `flash_attn_gain` (γ_FA) and `flash_mlp_gain` (γ_FMLP) scalars for attention/FFN traffic efficiency)
 - **Core analytical models** (memory, FLOPs, traffic, communication, latency)
 - **InferenceCalculator** that runs the full stack and returns structured results
 - **HuggingFace adapter** that converts HF `config.json` files into the `llm_perf` schema
 - **Quickstart notebook** (`quickstart.ipynb`) demonstrating database discovery, optional HF conversion, and diagnostic output
-- **Ready-to-run scripts** for HuggingFace config conversion and partition sweeps (with CSV-style tables and Matplotlib scatter plots)
+- **Ready-to-run scripts** for HuggingFace config conversion and partition sweeps (with separate latency/memory vs. comm/traffic tables plus Matplotlib scatter plots)
 
 ## Repository Layout
 
@@ -79,7 +79,7 @@ Two small helpers live under `scripts/` for repeatable experiments outside the n
 
     Adjust `HF_FILE_NAME`/paths inside the script as needed. Because it bootstraps `sys.path`, you can run it from the repo root without extra setup.
 
-2. **`partition_sweep.py`** — iterates every `(PP, TP, EP, SP)` factorization for a given cluster budget (DP fixed, default 1), runs `InferenceCalculator` per config, prints a detailed table (latency breakdown in microseconds plus per-device parameter/activation/KV memory), and saves a scatter plot via `llm_perf.utils.save_config_tps_scatter`.
+2. **`partition_sweep.py`** — iterates every `(PP, TP, EP, SP)` factorization for a given cluster budget (DP fixed, default 1), runs `InferenceCalculator` per config, prints *two* aligned tables (first: TPS/TPS plus latency + memory footprint, second: TPS/TPS plus collective message sizes and parameter/activation/KV traffic), and saves a scatter plot via `llm_perf.utils.save_config_tps_scatter`.
 
     ```powershell
     .\.llm_perf\Scripts\python.exe scripts\partition_sweep.py --cluster-size 32 --system llm_perf/database/system/h100.32gpu.json

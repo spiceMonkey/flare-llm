@@ -12,7 +12,7 @@
   },
   "n_kv": 4,
   "n_q": 64,
-  "name": "qwen3_vl_moe_text",
+  "name": "qwen3_vl_235b_fp8",
   "schema": "llm_perf.model",
   "vocab_size": 151936
 }
