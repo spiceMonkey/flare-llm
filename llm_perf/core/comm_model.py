@@ -15,6 +15,10 @@ class CommResults:
     t_EP: float
     t_SP: float
     t_comm_stage: float
+    msg_PP_bytes: float
+    msg_TP_bytes: float
+    msg_EP_bytes: float
+    msg_SP_bytes: float
 
 
 def compute_comm(
@@ -80,12 +84,12 @@ def compute_comm(
             t_EP = (EP - 1) * a_EP + (EP - 1) * (msg_EP / (EP * B_EP))
         elif ep_algorithm == "tree":
             # Approx: log2 tree all-to-all
-            h = math.ceil(math.log2(EP))
-            t_EP = h * a_EP + (EP - 1) / EP * (msg_EP / B_EP)
+            t_EP = math.ceil(math.log2(EP)) * a_EP + (msg_EP / B_EP)
         else:
             raise ValueError(f"Unsupported ep_algorithm: {ep_algorithm!r}")
     else:
         t_EP = 0.0
+        msg_EP = 0.0
 
     # TP: 2-pass all-reduce of size H/TP
     if TP > 1:
@@ -95,12 +99,12 @@ def compute_comm(
             t_TP = 2 * (TP - 1) * a_TP + 2 * ((TP - 1) / TP) * (msg_TP / B_TP)
         elif tp_algorithm == "tree":
             # 2-pass tree all-reduce (reduce + broadcast)
-            h = math.ceil(math.log2(TP))
-            t_TP = 2 * h * a_TP + 2 * h * (msg_TP / B_TP)
+            t_TP = 2 * math.ceil(math.log2(TP)) * a_TP + 2 * (msg_TP / B_TP)
         else:
             raise ValueError(f"Unsupported tp_algorithm: {tp_algorithm!r}")
     else:
         t_TP = 0.0
+        msg_TP = 0.0
 
     # SP: 2-pass ring for KV shard
     if SP > 1:
@@ -108,11 +112,16 @@ def compute_comm(
         t_SP = 2 * (SP - 1) * a_SP + 2 * ((SP - 1) / SP) * (msg_SP / B_SP)
     else:
         t_SP = 0.0
+        msg_SP = 0.0
 
     # Per-stage comm (same for all PP stages in this simple model)
     t_comm_stage = (L / PP) * (n_TP * t_TP + n_EP * t_EP + t_SP) + t_PP
 
     return CommResults(
+        msg_PP_bytes=msg_PP,
+        msg_TP_bytes=msg_TP,
+        msg_EP_bytes=msg_EP,
+        msg_SP_bytes=msg_SP,
         t_PP=t_PP,
         t_TP=t_TP,
         t_EP=t_EP,

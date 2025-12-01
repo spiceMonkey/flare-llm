@@ -31,6 +31,7 @@ def compute_traffic(
     b = model.bytes_per_param
 
     gamma_FA = tuner.flash_attn_gain
+    gamma_FMLP = tuner.flash_mlp_gain
     c_act = tuner.c_act  # heuristic constant for activation traffic
 
     # MoE params
@@ -43,7 +44,7 @@ def compute_traffic(
         EP = 1
         I = model.I_dense
 
-    moe_term = (2 * H * I * N_exp) / (TP * EP)
+    moe_term = (3 * H * I * N_exp) / (TP * EP * gamma_FMLP)
 
     # Parameter traffic
     T_theta = (

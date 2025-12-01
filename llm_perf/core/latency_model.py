@@ -36,8 +36,8 @@ def compute_latency(
     # Effective memory bandwidth in bytes/s (GB/s → bytes/s, decimal)
     B_eff_mem = system.device.hbm_bandwidth_GBps * GB_TO_BYTES
 
-    t_compute = flops.F_token_device / R_gpu if R_gpu > 0 else 0.0
-    t_mem = traffic.T_token_eff / B_eff_mem if B_eff_mem > 0 else 0.0
+    t_compute = flops.F_token_device / R_gpu
+    t_mem = traffic.T_token_eff / B_eff_mem
     t_local = max(t_compute, t_mem)
 
     t_comm = comm.t_comm_stage

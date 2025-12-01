@@ -47,7 +47,7 @@ def compute_memory(
         I = model.I_dense
 
     # Parameter memory M_theta_device
-    moe_term = (2 * H * I * N_exp) / (TP * EP)
+    moe_term = (3 * H * I * N_exp) / (TP * EP)
 
     M_theta_device = (
         (L / PP)

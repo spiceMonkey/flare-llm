@@ -42,7 +42,7 @@ def compute_flops(
     F_layer_per_device = (
         (2 * H**2 + 6 * H * H_kv) / TP
         + (4 * H * I_eff) / (TP * EP)
-        + (4 * S * H_kv) / (TP * SP if SP > 0 else 1)
+        + (4 * S * H_kv) / (TP * SP)
         + 2 * H * N_eff
     )
 

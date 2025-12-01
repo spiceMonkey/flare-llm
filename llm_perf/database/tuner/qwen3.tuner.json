@@ -7,12 +7,12 @@
   "tp_algorithm": "ring",
   "ep_algorithm": "ring",
 
-  "c_act": 5.0,
+  "c_act": 10.0,
 
   "n_TP_collectives": 2,
-  "n_EP_collectives": 2,
-  "n_SP_collectives": 1,
+  "n_EP_collectives": 1,
 
-  "flash_attn_gain": 1.2,
+  "flash_attn_gain": 5.0,
+  "flash_mlp_gain": 1.5,
   "overlap_factor": 0.3
 }
