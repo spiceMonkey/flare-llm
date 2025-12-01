@@ -1,0 +1,13 @@
+{
+  "H": 7168,
+  "I_dense": 18432,
+  "L": 61,
+  "bytes_per_param": 1,
+  "max_seq_len": 163840,
+  "moe": null,
+  "n_kv": 128,
+  "n_q": 128,
+  "name": "deepseek_v3",
+  "schema": "llm_perf.model",
+  "vocab_size": 129280
+}
