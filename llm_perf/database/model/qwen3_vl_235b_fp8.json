@@ -1,0 +1,18 @@
+{
+  "H": 4096,
+  "I_dense": 12288,
+  "L": 94,
+  "bytes_per_param": 1,
+  "max_seq_len": 262144,
+  "moe": {
+    "I_moe": 1536,
+    "k_active": 8,
+    "n_experts": 128,
+    "n_moe_layers": 94
+  },
+  "n_kv": 4,
+  "n_q": 64,
+  "name": "qwen3_vl_235b_fp8",
+  "schema": "llm_perf.model",
+  "vocab_size": 151936
+}

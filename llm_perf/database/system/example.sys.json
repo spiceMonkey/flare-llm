@@ -1,0 +1,17 @@
+{
+  "schema": "llm_perf.system",
+  "name": "example_cluster",
+  "num_devices": 64,
+  "device": {
+    "name": "H100",
+    "hbm_capacity_GB": 80.0,
+    "hbm_bandwidth_GBps": 3350.0,
+    "peak_flops_TF": 1000.0
+  },
+  "network_domains": {
+    "TP": { "name": "nvlink", "alpha_us": 1.0, "bandwidth_GBps": 400.0 },
+    "EP": { "name": "nvlink", "alpha_us": 1.0, "bandwidth_GBps": 400.0 },
+    "SP": { "name": "nvlink", "alpha_us": 1.0, "bandwidth_GBps": 400.0 },
+    "PP": { "name": "ib",     "alpha_us": 5.0, "bandwidth_GBps": 50.0  }
+  }
+}
