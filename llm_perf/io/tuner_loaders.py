@@ -5,6 +5,7 @@ from typing import Any, Dict
 from ..specs.tuner_spec import TuningSpec
 from ..utils import (
     validate_positive_int_fields,
+    validate_nonnegative_int_fields,
     validate_nonnegative_float_fields,
     validate_positive_float_fields,
     TP_ALGORITHMS,
@@ -34,6 +35,7 @@ def tuning_spec_from_json_dict(cfg: Dict[str, Any]) -> TuningSpec:
 
           "n_TP_collectives": 2,
           "n_EP_collectives": 1,
+          "n_SP_collectives": 1,
 
           "c_act": 5.0,
         
@@ -56,10 +58,17 @@ def tuning_spec_from_json_dict(cfg: Dict[str, Any]) -> TuningSpec:
     # Positive integer checks
     validate_positive_int_fields(
         cfg,
+        ["S_decode"],
+        prefix="tuning configuration",
+    )
+
+    # Nonnegative integer checks
+    validate_nonnegative_int_fields(
+        cfg,
         [
-            "S_decode",
             "n_TP_collectives",
             "n_EP_collectives",
+            "n_SP_collectives",
         ],
         prefix="tuning configuration",
     )
@@ -78,7 +87,8 @@ def tuning_spec_from_json_dict(cfg: Dict[str, Any]) -> TuningSpec:
     return TuningSpec(
         n_TP_collectives=int(cfg.get("n_TP_collectives", 2)),
         n_EP_collectives=int(cfg.get("n_EP_collectives", 1)),
-        overlap_factor=float(cfg.get("overlap_factor", 0.3)),
+        n_SP_collectives=int(cfg.get("n_SP_collectives", 1)),
+        overlap_factor=float(cfg.get("overlap_factor", 0.0)),
         S_decode=int(cfg.get("S_decode", 2048)),
         tp_algorithm=tp_algorithm,
         ep_algorithm=ep_algorithm,

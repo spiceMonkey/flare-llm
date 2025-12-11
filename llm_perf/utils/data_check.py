@@ -73,6 +73,23 @@ def validate_positive_int_fields(
     )
 
 
+def validate_nonnegative_int_fields(
+    cfg: Dict[str, Any],
+    fields: Iterable[str],
+    *,
+    allow_float_for_int: bool = False,
+    prefix: str = "configuration",
+) -> None:
+    """Specialization of ``validate_int_fields`` enforcing values >= 0."""
+    validate_int_fields(
+        cfg,
+        fields,
+        min_value=0,
+        allow_float_for_int=allow_float_for_int,
+        prefix=prefix,
+    )
+
+
 def validate_float_fields(
     cfg: Dict[str, Any],
     fields: Iterable[str],

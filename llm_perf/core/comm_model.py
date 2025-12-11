@@ -41,6 +41,7 @@ def compute_comm(
 
     n_TP = tuner.n_TP_collectives
     n_EP = tuner.n_EP_collectives
+    n_SP = tuner.n_SP_collectives
 
     # Network domains
     dom_PP = system.get_domain("PP")
@@ -138,7 +139,7 @@ def compute_comm(
         msg_SP = 0.0
 
     # Per-stage comm (same for all PP stages in this simple model)
-    t_comm_stage = (L / PP) * (n_TP * t_TP + n_EP * t_EP + t_SP) + t_PP
+    t_comm_stage = (L / PP) * (n_TP * t_TP + n_EP * t_EP + n_SP * t_SP) + t_PP
 
     return CommResults(
         msg_PP_bytes=msg_PP,

@@ -9,6 +9,7 @@ from .hf_model_adapter import (
 from .data_check import (
     validate_int_fields,
     validate_positive_int_fields,
+    validate_nonnegative_int_fields,
     validate_float_fields,
     validate_nonnegative_float_fields,
     validate_positive_float_fields,
@@ -29,6 +30,7 @@ __all__ = [
     "convert_hf_config_to_model_json",
     "validate_int_fields",
     "validate_positive_int_fields",
+    "validate_nonnegative_int_fields",
     "validate_float_fields",
     "validate_nonnegative_float_fields",
     "validate_positive_float_fields",
