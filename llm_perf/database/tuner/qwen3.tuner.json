@@ -12,7 +12,5 @@
   "n_TP_collectives": 2,
   "n_EP_collectives": 1,
 
-  "flash_attn_gain": 5.0,
-  "flash_mlp_gain": 1.5,
   "overlap_factor": 0.3
 }

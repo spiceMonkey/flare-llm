@@ -36,7 +36,7 @@ def compute_flops(
         N_exp = 1
         EP = 1
         I_eff = model.I_dense
-        N_eff = 1
+        N_eff = 0
 
     # Per-layer FLOPs per device
     F_layer_per_device = (

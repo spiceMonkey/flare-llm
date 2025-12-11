@@ -68,7 +68,7 @@ def compute_comm(
     tp_algorithm = getattr(tuner, "tp_algorithm", "ring").lower()
     ep_algorithm = getattr(tuner, "ep_algorithm", "ring").lower()
 
-    # EP: 1-pass all-to-all of size kH; default k=1 if no MoE
+    # EP: 2-pass all-to-all of size kH; default k=1 if no MoE
     if model.moe is not None:
         N_exp = max(1, model.moe.n_experts)
         EP = min(EP, N_exp)
@@ -80,20 +80,20 @@ def compute_comm(
     if EP > 1:
         msg_EP = k * H * b  # bytes per device
         if ep_algorithm == "ring":
-            # 1-pass ring all-to-all (simple alpha-beta)
-            t_EP = (EP - 1) * a_EP + (EP - 1) * (msg_EP / (EP * B_EP))
+            # 2-pass ring all-to-all (Dispatch + Combine)
+            t_EP = 2 * (EP - 1) * a_EP + 2 * (EP - 1) * (msg_EP / (EP * B_EP))
         elif ep_algorithm == "tree":
-            # Approx: log2 tree all-to-all
-            t_EP = math.ceil(math.log2(EP)) * a_EP + (msg_EP / B_EP)
+            # Approx: 2-pass log2 tree all-to-all
+            t_EP = 2 * math.ceil(math.log2(EP)) * a_EP + 2 * (msg_EP / B_EP)
         else:
             raise ValueError(f"Unsupported ep_algorithm: {ep_algorithm!r}")
     else:
         t_EP = 0.0
         msg_EP = 0.0
 
-    # TP: 2-pass all-reduce of size H/TP
+    # TP: 2-pass all-reduce of size H
     if TP > 1:
-        msg_TP = (H / TP) * b  # bytes
+        msg_TP = H * b  # bytes (Full Vector H)
         if tp_algorithm == "ring":
             # 2-pass ring all-reduce
             t_TP = 2 * (TP - 1) * a_TP + 2 * ((TP - 1) / TP) * (msg_TP / B_TP)
@@ -106,10 +106,33 @@ def compute_comm(
         t_TP = 0.0
         msg_TP = 0.0
 
-    # SP: 2-pass ring for KV shard
+    # SP: 1-pass ring for KV shard (All-Gather)
     if SP > 1:
         msg_SP = (S / SP) * (2 * H_kv / TP) * b
-        t_SP = 2 * (SP - 1) * a_SP + 2 * ((SP - 1) / SP) * (msg_SP / B_SP)
+        t_SP = (SP - 1) * a_SP + (SP - 1) * (msg_SP / B_SP)
+    else:
+        t_SP = 0.0
+        msg_SP = 0.0
+
+    # TP: 2-pass all-reduce of size H
+    if TP > 1:
+        msg_TP = H * b  # bytes (Full Vector H)
+        if tp_algorithm == "ring":
+            # 2-pass ring all-reduce
+            t_TP = 2 * (TP - 1) * a_TP + 2 * ((TP - 1) / TP) * (msg_TP / B_TP)
+        elif tp_algorithm == "tree":
+            # 2-pass tree all-reduce (reduce + broadcast)
+            t_TP = 2 * math.ceil(math.log2(TP)) * a_TP + 2 * (msg_TP / B_TP)
+        else:
+            raise ValueError(f"Unsupported tp_algorithm: {tp_algorithm!r}")
+    else:
+        t_TP = 0.0
+        msg_TP = 0.0
+
+    # SP: 1-pass ring for KV shard (All-Gather)
+    if SP > 1:
+        msg_SP = (S / SP) * (2 * H_kv / TP) * b
+        t_SP = (SP - 1) * a_SP + (SP - 1) * (msg_SP / B_SP)
     else:
         t_SP = 0.0
         msg_SP = 0.0

@@ -37,8 +37,6 @@ def tuning_spec_from_json_dict(cfg: Dict[str, Any]) -> TuningSpec:
 
           "c_act": 5.0,
         
-                    "flash_attn_gain": 5.0,
-                    "flash_mlp_gain": 1.5,
           "overlap_factor": 0.3,
 
         }
@@ -73,18 +71,9 @@ def tuning_spec_from_json_dict(cfg: Dict[str, Any]) -> TuningSpec:
         prefix="tuning configuration",
     )
 
-    # Positive floats: flash_attn_gain, flash_mlp_gain
-    validate_positive_float_fields(
-        cfg,
-        ["flash_attn_gain", "flash_mlp_gain"],
-        prefix="tuning configuration",
-    )
-
     return TuningSpec(
         n_TP_collectives=int(cfg.get("n_TP_collectives", 2)),
         n_EP_collectives=int(cfg.get("n_EP_collectives", 1)),
-        flash_attn_gain=float(cfg.get("flash_attn_gain", 5.0)),
-        flash_mlp_gain=float(cfg.get("flash_mlp_gain", 1.5)),
         overlap_factor=float(cfg.get("overlap_factor", 0.3)),
         S_decode=int(cfg.get("S_decode", 2048)),
         tp_algorithm=tp_algorithm,
