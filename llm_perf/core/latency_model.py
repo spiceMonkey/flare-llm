@@ -43,7 +43,10 @@ def compute_latency(
     t_comm = comm.t_comm_stage
     rho = tuner.overlap_factor
 
-    t_token = max(t_local, rho * t_comm)
+    # Unified Overlap Model:
+    # t_token = t_local + unhidden_comm
+    # unhidden_comm = max(0, t_comm - rho * t_local)
+    t_token = t_local + max(0.0, t_comm - rho * t_local)
 
     t_stage = t_token
     TPS_single = 1.0 / t_stage if t_stage > 0 else 0.0

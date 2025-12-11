@@ -20,6 +20,7 @@ class TuningSpec:
     # Heuristic constant for activation traffic scaling
     c_act: float = 5.0
 
-    # Overlap factor ρ in t_token ≈ max(t_local, ρ t_comm)
-    overlap_factor: float = 0.3
+    # Overlap factor ρ in [0, 1]: Fraction of local time utilized to hide comms.
+    # t_token = t_local + max(0, t_comm - ρ * t_local)
+    overlap_factor: float = 0.0
 

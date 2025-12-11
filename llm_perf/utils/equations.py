@@ -33,8 +33,8 @@ class LlmPerfEquations:
         },
         "t_token": {
             "description": "Per-token latency with overlap.",
-            "latex": r"t_{\text{token}} \approx \max(t_{\text{local}}, \rho t_{\text{comm}})",
-            "expr": " max(t_local, rho * t_comm) ",
+            "latex": r"t_{\text{token}} = t_{\text{local}} + \max(0, t_{\text{comm}} - \rho t_{\text{local}})",
+            "expr": " t_local + max(0, t_comm - rho * t_local) ",
         },
     }
 

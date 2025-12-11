@@ -71,6 +71,10 @@ def tuning_spec_from_json_dict(cfg: Dict[str, Any]) -> TuningSpec:
         prefix="tuning configuration",
     )
 
+    # Additional check for overlap_factor <= 1.0
+    if float(cfg.get("overlap_factor", 0.0)) > 1.0:
+        raise ValueError(f"overlap_factor must be <= 1.0, got {cfg['overlap_factor']}")
+
     return TuningSpec(
         n_TP_collectives=int(cfg.get("n_TP_collectives", 2)),
         n_EP_collectives=int(cfg.get("n_EP_collectives", 1)),

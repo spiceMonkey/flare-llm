@@ -12,5 +12,5 @@
   "n_TP_collectives": 2,
   "n_EP_collectives": 1,
 
-  "overlap_factor": 0.3
+  "overlap_factor": 0.0
 }
