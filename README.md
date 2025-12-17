@@ -4,7 +4,7 @@
 
 ## Features
 
-- **Typed specs** for models, hardware systems, partition plans, and tuning knobs (now including `flash_attn_gain` (γ_FA) and `flash_mlp_gain` (γ_FMLP) scalars for attention/FFN traffic efficiency)
+- **Typed specs** for models, hardware systems, partition plans, and tuning knobs
 - **Core analytical models** (memory, FLOPs, traffic, communication, latency)
 - **InferenceCalculator** that runs the full stack and returns structured results
 - **HuggingFace adapter** that converts HF `config.json` files into the `llm_perf` schema
