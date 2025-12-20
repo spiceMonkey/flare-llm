@@ -4,10 +4,10 @@ from dataclasses import dataclass
 class PartitionSpec:
     """
     Parallel partitioning of the model across devices.
-    Purely describes how we shard: DP, PP, TP, EP, SP.
+    Purely describes how we shard: PP, TP, EP, SP.
+    DP is inferred from the total number of devices available.
     """
 
-    DP: int
     PP: int
     TP: int
     EP: int

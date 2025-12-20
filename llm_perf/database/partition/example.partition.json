@@ -1,7 +1,6 @@
 {
   "schema": "llm_perf.partition",
   "name": "example_partition",
-  "DP": 1,
   "PP": 1,
   "TP": 4,
   "EP": 8,

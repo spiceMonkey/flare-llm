@@ -20,7 +20,6 @@ def partition_spec_from_json_dict(cfg: Dict[str, Any]) -> PartitionSpec:
 
         {
           "schema": "llm_perf.partition",
-          "DP": 4,
           "PP": 4,
           "TP": 4,
           "EP": 8,
@@ -34,12 +33,11 @@ def partition_spec_from_json_dict(cfg: Dict[str, Any]) -> PartitionSpec:
     # Ensure all parallelism dimensions are integers ≥ 1
     validate_positive_int_fields(
         cfg,
-        ["DP", "PP", "TP", "EP", "SP"],
+        ["PP", "TP", "EP", "SP"],
         prefix="partition configuration",
     )
 
     return PartitionSpec(
-        DP=int(cfg["DP"]),
         PP=int(cfg["PP"]),
         TP=int(cfg["TP"]),
         EP=int(cfg["EP"]),

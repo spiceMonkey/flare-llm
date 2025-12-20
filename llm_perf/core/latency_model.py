@@ -50,7 +50,11 @@ def compute_latency(
 
     t_stage = t_token
     TPS_single = 1.0 / t_stage if t_stage > 0 else 0.0
-    TTPS = partition.DP * TPS_single
+
+    # Infer DP from system size and partition dimensions
+    replica_size = partition.PP * partition.TP * max(1, partition.EP) * partition.SP
+    DP = system.num_devices // replica_size
+    TTPS = DP * TPS_single
 
     return LatencyResults(
         t_compute=t_compute,
