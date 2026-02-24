@@ -26,27 +26,44 @@ def compute_flops(
     SP = partition.SP
     S = tuner.S_decode
 
-    # MoE effective params
+    # Determine layer split (MoE vs dense)
     if model.moe is not None:
+        L_moe = model.moe.n_moe_layers if model.moe.n_moe_layers else L
+        L_dense = L - L_moe
         N_exp = max(1, model.moe.n_experts)
         EP = min(EP, N_exp)
-        I_eff = model.moe.k_active * model.moe.I_moe
-        N_eff = N_exp
+        k = model.moe.k_active
+        I_moe = model.moe.I_moe
     else:
-        N_exp = 1
+        L_moe = 0
+        L_dense = L
+        N_exp = 0
         EP = 1
-        I_eff = model.I_dense
-        N_eff = 0
+        k = 0
+        I_moe = 0
 
-    # Per-layer FLOPs per device
-    F_layer_per_device = (
+    I_dense = model.I_dense
+
+    # Dense layer FLOPs per device (per layer)
+    F_layer_dense = (
         (2 * H**2 + 6 * H * H_kv) / TP
-        + (4 * H * I_eff) / (TP * EP)
+        + (4 * H * I_dense) / TP  # EP=1 for dense
         + (4 * S * H_kv) / (TP * SP)
-        + 2 * H * N_eff
+        # No router FLOPs for dense layers
     )
 
-    F_token_device = (L / PP) * F_layer_per_device
+    # MoE layer FLOPs per device (per layer)
+    F_layer_moe = (
+        (2 * H**2 + 6 * H * H_kv) / TP
+        + (4 * H * k * I_moe) / (TP * EP)
+        + (4 * S * H_kv) / (TP * SP)
+        + 2 * H * N_exp  # Router FLOPs (unsharded)
+    )
+
+    F_token_device = (L_dense / PP) * F_layer_dense + (L_moe / PP) * F_layer_moe
+
+    # Compute average F_layer_per_device for backward compatibility
+    F_layer_per_device = F_token_device / (L / PP) if L > 0 else 0.0
 
     return FlopsResults(
         F_token_device=F_token_device,

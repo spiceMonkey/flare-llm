@@ -115,31 +115,18 @@ def compute_comm(
         t_SP = 0.0
         msg_SP = 0.0
 
-    # TP: 2-pass all-reduce of size H
-    if TP > 1:
-        msg_TP = H * b  # bytes (Full Vector H)
-        if tp_algorithm == "ring":
-            # 2-pass ring all-reduce
-            t_TP = 2 * (TP - 1) * a_TP + 2 * ((TP - 1) / TP) * (msg_TP / B_TP)
-        elif tp_algorithm == "tree":
-            # 2-pass tree all-reduce (reduce + broadcast)
-            t_TP = 2 * math.ceil(math.log2(TP)) * a_TP + 2 * (msg_TP / B_TP)
-        else:
-            raise ValueError(f"Unsupported tp_algorithm: {tp_algorithm!r}")
+    # Determine layer split for EP communication (MoE layers only)
+    if model.moe is not None:
+        L_moe = model.moe.n_moe_layers if model.moe.n_moe_layers else L
     else:
-        t_TP = 0.0
-        msg_TP = 0.0
+        L_moe = 0
 
-    # SP: 1-pass ring for KV shard (All-Gather)
-    if SP > 1:
-        msg_SP = (S / SP) * (2 * H_kv / TP) * b
-        t_SP = (SP - 1) * a_SP + (SP - 1) * (msg_SP / B_SP)
-    else:
-        t_SP = 0.0
-        msg_SP = 0.0
-
-    # Per-stage comm (same for all PP stages in this simple model)
-    t_comm_stage = (L / PP) * (n_TP * t_TP + n_EP * t_EP + n_SP * t_SP) + t_PP
+    # Per-stage comm: TP and SP apply to all layers, EP only to MoE layers
+    t_comm_stage = (
+        (L / PP) * (n_TP * t_TP + n_SP * t_SP)  # All layers
+        + (L_moe / PP) * (n_EP * t_EP)           # MoE layers only
+        + t_PP
+    )
 
     return CommResults(
         msg_PP_bytes=msg_PP,

@@ -32,27 +32,33 @@ def compute_traffic(
 
     c_act = tuner.c_act  # heuristic constant for activation traffic
 
-    # MoE params
+    # Determine layer split (MoE vs dense)
     if model.moe is not None:
+        L_moe = model.moe.n_moe_layers if model.moe.n_moe_layers else L
+        L_dense = L - L_moe
         N_exp = max(1, model.moe.n_experts)
         EP = min(EP, N_exp)
-        I = model.moe.I_moe
+        I_moe = model.moe.I_moe
     else:
+        L_moe = 0
+        L_dense = L
         N_exp = 1
         EP = 1
-        I = model.I_dense
+        I_moe = 0
 
-    moe_term = (3 * H * I * N_exp) / (TP * EP)
+    I_dense = model.I_dense
 
-    # Parameter traffic
-    T_theta = (
-        (L / PP)
-        * (
-            (H**2 + 3 * H * H_kv) / TP
-            + moe_term
-        )
-        * b
-    )
+    # Parameter traffic - dense layers
+    T_theta_dense = (L_dense / PP) * (
+        (H**2 + 3 * H * H_kv) / TP + (3 * H * I_dense) / TP
+    ) * b
+
+    # Parameter traffic - MoE layers
+    T_theta_moe = (L_moe / PP) * (
+        (H**2 + 3 * H * H_kv) / TP + (3 * H * I_moe * N_exp) / (TP * EP)
+    ) * b
+
+    T_theta = T_theta_dense + T_theta_moe
 
     # Activation traffic
     T_act = (L / PP) * c_act * H * b
