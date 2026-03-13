@@ -137,4 +137,4 @@ The new JSON will appear alongside other model cards and can be loaded with `loa
 
 ## License
 
-See `LICENSE` if/when it is added; otherwise this repository currently follows the default terms under which it was shared.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
