@@ -9,8 +9,9 @@ from ..specs.tuner_spec import TuningSpec
 class TrafficResults:
     T_theta: float
     T_act: float
-    T_kv: float
-    T_token_eff: float
+    T_kv: float          # KV traffic per token (single sequence)
+    T_token_eff: float   # effective per-token traffic at B=1
+    T_step_eff: float    # effective per-step traffic at batch B
 
 
 def compute_traffic(
@@ -50,12 +51,12 @@ def compute_traffic(
 
     # Parameter traffic - dense layers
     T_theta_dense = (L_dense / PP) * (
-        (H**2 + 3 * H * H_kv) / TP + (3 * H * I_dense) / TP
+        (2 * H**2 + 2 * H * H_kv) / TP + (3 * H * I_dense) / TP
     ) * b
 
     # Parameter traffic - MoE layers
     T_theta_moe = (L_moe / PP) * (
-        (H**2 + 3 * H * H_kv) / TP + (3 * H * I_moe * N_exp) / (TP * EP)
+        (2 * H**2 + 2 * H * H_kv) / TP + (3 * H * I_moe * N_exp) / (TP * EP)
     ) * b
 
     T_theta = T_theta_dense + T_theta_moe
@@ -66,11 +67,17 @@ def compute_traffic(
     # KV traffic
     T_kv = (L / PP) * (2 * S * H_kv * b) / (TP * SP)
 
+    B = tuner.B_decode
+
     T_token_eff = T_theta + T_act + T_kv
+
+    # Batched step traffic: weights loaded once, KV read per sequence
+    T_step_eff = T_theta + T_act + B * T_kv
 
     return TrafficResults(
         T_theta=T_theta,
         T_act=T_act,
         T_kv=T_kv,
         T_token_eff=T_token_eff,
+        T_step_eff=T_step_eff,
     )

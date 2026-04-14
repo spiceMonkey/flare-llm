@@ -35,6 +35,7 @@ def compute_memory(
     EP = max(1, partition.EP)
     SP = partition.SP
     S = tuner.S_decode
+    B = tuner.B_decode
 
     # Determine layer split (MoE vs dense)
     if model.moe is not None:
@@ -55,21 +56,21 @@ def compute_memory(
     # Parameter memory M_theta_device (split by layer type)
     # Dense layers: EP=1, N_exp=1
     M_theta_dense = (L_dense / PP) * (
-        (H**2 + 3 * H * H_kv) / TP + (3 * H * I_dense) / TP
+        (2 * H**2 + 2 * H * H_kv) / TP + (3 * H * I_dense) / TP
     ) * b
 
     # MoE layers: use EP, N_exp, I_moe
     M_theta_moe = (L_moe / PP) * (
-        (H**2 + 3 * H * H_kv) / TP + (3 * H * I_moe * N_exp) / (TP * EP)
+        (2 * H**2 + 2 * H * H_kv) / TP + (3 * H * I_moe * N_exp) / (TP * EP)
     ) * b
 
     M_theta_device = M_theta_dense + M_theta_moe + (V * H / TP) * b
 
-    # Activation memory M_act_device
-    M_act_device = (L / PP) * (4 * H + 2 * H_kv) * b
+    # Activation memory M_act_device (one-layer working set, scales with B)
+    M_act_device = B * (4 * H + 2 * H_kv) * b
 
-    # KV memory M_kv_device
-    M_kv_device = (L / PP) * (2 * S * H_kv * b) / (TP * SP)
+    # KV memory M_kv_device (B sequences, each with context S)
+    M_kv_device = B * (L / PP) * (2 * S * H_kv * b) / (TP * SP)
 
     M_total = M_theta_device + M_act_device + M_kv_device
 

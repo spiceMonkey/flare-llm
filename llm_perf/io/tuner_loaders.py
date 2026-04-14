@@ -93,6 +93,10 @@ def tuning_spec_from_json_dict(cfg: Dict[str, Any]) -> TuningSpec:
         tp_algorithm=tp_algorithm,
         ep_algorithm=ep_algorithm,
         c_act=float(cfg.get("c_act", 5.0)),
+        B_decode=int(cfg.get("B_decode", 1)),
+        S_input=int(cfg.get("S_input", 0)),
+        B_prefill=int(cfg.get("B_prefill", 1)),
+        chunk_size=int(cfg.get("chunk_size", 0)),
     )
 
 

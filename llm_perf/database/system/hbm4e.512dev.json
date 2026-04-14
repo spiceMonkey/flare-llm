@@ -1,0 +1,17 @@
+{
+  "schema": "llm_perf.system",
+  "name": "hbm4e_512dev",
+  "num_devices": 512,
+  "device": {
+    "name": "HBM4E_device",
+    "hbm_capacity_GB": 192.0,
+    "hbm_bandwidth_GBps": 6400.0,
+    "peak_flops_TF": 989.0
+  },
+  "network_domains": {
+    "TP": { "name": "scaleup", "alpha_us": 1.0, "bandwidth_GBps": 400.0 },
+    "EP": { "name": "scaleup", "alpha_us": 1.0, "bandwidth_GBps": 400.0 },
+    "SP": { "name": "scaleup", "alpha_us": 1.0, "bandwidth_GBps": 400.0 },
+    "PP": { "name": "scaleup", "alpha_us": 1.0, "bandwidth_GBps": 400.0 }
+  }
+}
