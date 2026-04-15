@@ -1,0 +1,17 @@
+{
+  "schema": "llm_perf.system",
+  "name": "h100_8gpu_dgx",
+  "num_devices": 8,
+  "device": {
+    "name": "H100-SXM",
+    "hbm_capacity_GB": 80.0,
+    "hbm_bandwidth_GBps": 3350.0,
+    "peak_flops_TF": 989.0
+  },
+  "network_domains": {
+    "TP": { "name": "nvlink", "alpha_us": 1.0, "bandwidth_GBps": 450.0 },
+    "EP": { "name": "nvlink", "alpha_us": 1.0, "bandwidth_GBps": 450.0 },
+    "SP": { "name": "nvlink", "alpha_us": 1.0, "bandwidth_GBps": 450.0 },
+    "PP": { "name": "nvlink", "alpha_us": 1.0, "bandwidth_GBps": 450.0 }
+  }
+}

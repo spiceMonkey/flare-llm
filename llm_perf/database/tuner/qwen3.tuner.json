@@ -7,8 +7,6 @@
   "tp_algorithm": "ring",
   "ep_algorithm": "ring",
 
-  "c_act": 10.0,
-
   "n_TP_collectives": 2,
   "n_EP_collectives": 1,  
   "n_SP_collectives": 1,

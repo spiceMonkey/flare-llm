@@ -1,0 +1,14 @@
+{
+  "schema": "llm_perf.model",
+  "name": "LLaMA-3.1-70B",
+  "L": 80,
+  "H": 8192,
+  "n_q": 64,
+  "n_kv": 8,
+  "I_dense": 28672,
+  "vocab_size": 128256,
+  "max_seq_len": 131072,
+  "bytes_per_param": 2,
+
+  "moe": null
+}
