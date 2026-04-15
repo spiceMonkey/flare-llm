@@ -100,7 +100,7 @@ print(f"tok/s/GPU  = {e2e.throughput_per_gpu:.1f}")
 
 Each notebook is a self-contained design question with a plot and a short takeaway. They're meant as reading material — a reader can step through the cells to understand how a specific decision (partition, I/O BW, HBM BW, overhead, chunk size, disagg) shapes the end-to-end metric that matters.
 
-All six case studies use **GPT-1.8T MoE @ FP4** on **GB200 NVL72** to stay consistent with the NVIDIA Blackwell inference blog configuration.
+All six case studies use **GPT-1.8T MoE @ FP4** on **GB200 NVL72**.
 
 ### `pareto_basic.ipynb` — the full exploration space behind the frontier
 
