@@ -1,0 +1,13 @@
+{
+  "schema": "llm_perf.model",
+  "name": "dense_1t",
+  "L": 192,
+  "H": 20480,
+  "n_q": 128,
+  "n_kv": 8,
+  "I_dense": 73728,
+  "vocab_size": 128256,
+  "max_seq_len": 131072,
+  "bytes_per_param": 2,
+  "moe": null
+}

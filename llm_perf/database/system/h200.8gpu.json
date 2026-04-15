@@ -1,0 +1,19 @@
+{
+  "schema": "llm_perf.system",
+  "name": "h200_8gpu_dgx",
+  "num_devices": 8,
+  "device": {
+    "name": "H200-SXM",
+    "hbm_capacity_GB": 141.0,
+    "hbm_bandwidth_GBps": 4800.0,
+    "peak_flops_TF": 1979.0
+  },
+  "network_domains": {
+    "TP": { "name": "nvlink4", "alpha_us": 1.0, "bandwidth_GBps": 450.0 },
+    "EP": { "name": "nvlink4", "alpha_us": 1.0, "bandwidth_GBps": 450.0 },
+    "SP": { "name": "nvlink4", "alpha_us": 1.0, "bandwidth_GBps": 450.0 },
+    "PP": { "name": "nvlink4", "alpha_us": 1.0, "bandwidth_GBps": 450.0 }
+  },
+
+  "_comment": "NVIDIA HGX H200: 141 GB HBM3E @ 4.8 TB/s, FP8 dense 1979 TFLOPS/GPU, NVLink4 900 GB/s bidir (450 GB/s unidir). 8-GPU NVLink domain only; cross-node would be InfiniBand."
+}

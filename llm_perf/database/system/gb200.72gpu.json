@@ -1,0 +1,19 @@
+{
+  "schema": "llm_perf.system",
+  "name": "gb200_nvl72",
+  "num_devices": 72,
+  "device": {
+    "name": "GB200-NVL72",
+    "hbm_capacity_GB": 192.0,
+    "hbm_bandwidth_GBps": 8000.0,
+    "peak_flops_TF": 9000.0
+  },
+  "network_domains": {
+    "TP": { "name": "nvlink5", "alpha_us": 0.5, "bandwidth_GBps": 900.0 },
+    "EP": { "name": "nvlink5", "alpha_us": 0.5, "bandwidth_GBps": 900.0 },
+    "SP": { "name": "nvlink5", "alpha_us": 0.5, "bandwidth_GBps": 900.0 },
+    "PP": { "name": "nvlink5", "alpha_us": 0.5, "bandwidth_GBps": 900.0 }
+  },
+
+  "_comment": "GB200 NVL72: Blackwell B200, 192 GB HBM3E @ 8 TB/s, FP4 dense 9000 TFLOPS/GPU, NVLink5 1.8 TB/s bidir (900 GB/s unidirectional). All 72 GPUs in a single NVLink domain. peak_flops_TF set to FP4 dense to match the blog's FP4 quantization assumption."
+}

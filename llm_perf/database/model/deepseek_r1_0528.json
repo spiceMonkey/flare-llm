@@ -1,0 +1,24 @@
+{
+  "schema": "llm_perf.model",
+  "name": "DeepSeek-R1-0528",
+
+  "L": 61,
+  "H": 7168,
+  "n_q": 128,
+  "n_kv": 5,
+  "I_dense": 18432,
+  "vocab_size": 129280,
+  "max_seq_len": 163840,
+  "bytes_per_param": 1,
+
+  "moe": {
+    "n_experts": 256,
+    "k_active": 9,
+    "I_moe": 2048,
+    "n_moe_layers": 60
+  },
+
+  "_comment_n_kv": "MLA approximation: real KV cache = (d_c=512 + d_rope=64)/2 = 288 per head-pair; n_kv=5 gives H_kv=280 (~3% under). MLA stores compressed latent, not separate K/V heads.",
+  "_comment_k_active": "8 routed experts + 1 shared expert (always active). Shared expert approximated by k=9.",
+  "_comment_n_q": "MLA uses d_head=56 (=7168/128) for the base, but Q projects to d_h=128 internally. Attention FLOPs are approximate."
+}

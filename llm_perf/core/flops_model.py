@@ -8,6 +8,7 @@ from ..specs.tuner_spec import TuningSpec
 class FlopsResults:
     F_token_device: float   # FLOPs per token per device
     F_layer_per_device: float
+    F_step_device: float    # FLOPs per decode step (B tokens) per device
 
 
 def compute_flops(
@@ -46,26 +47,32 @@ def compute_flops(
 
     # Dense layer FLOPs per device (per layer)
     F_layer_dense = (
-        (2 * H**2 + 6 * H * H_kv) / TP
-        + (4 * H * I_dense) / TP  # EP=1 for dense
-        + (4 * S * H_kv) / (TP * SP)
+        (4 * H**2 + 4 * H * H_kv) / TP
+        + (6 * H * I_dense) / TP  # EP=1 for dense
+        + (4 * S * H) / (TP * SP)
         # No router FLOPs for dense layers
     )
 
     # MoE layer FLOPs per device (per layer)
     F_layer_moe = (
-        (2 * H**2 + 6 * H * H_kv) / TP
-        + (4 * H * k * I_moe) / (TP * EP)
-        + (4 * S * H_kv) / (TP * SP)
+        (4 * H**2 + 4 * H * H_kv) / TP
+        + (6 * H * k * I_moe) / (TP * EP)
+        + (4 * S * H) / (TP * SP)
         + 2 * H * N_exp  # Router FLOPs (unsharded)
     )
+
+    B = tuner.B_decode
 
     F_token_device = (L_dense / PP) * F_layer_dense + (L_moe / PP) * F_layer_moe
 
     # Compute average F_layer_per_device for backward compatibility
     F_layer_per_device = F_token_device / (L / PP) if L > 0 else 0.0
 
+    # Step FLOPs: B tokens processed per decode step
+    F_step_device = B * F_token_device
+
     return FlopsResults(
         F_token_device=F_token_device,
         F_layer_per_device=F_layer_per_device,
+        F_step_device=F_step_device,
     )

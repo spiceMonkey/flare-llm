@@ -1,0 +1,22 @@
+{
+  "schema": "llm_perf.model",
+  "name": "GPT-1.8T-MoE",
+
+  "L": 120,
+  "H": 20480,
+  "n_q": 128,
+  "n_kv": 16,
+  "I_dense": 0,
+  "vocab_size": 128256,
+  "max_seq_len": 8192,
+  "bytes_per_param": 0.5,
+
+  "moe": {
+    "n_experts": 16,
+    "k_active": 2,
+    "I_moe": 14336,
+    "n_moe_layers": 120
+  },
+
+  "_comment": "Approximation of NVIDIA's hypothetical GPT-1.8T MoE used in the 'Demystifying AI Inference' blog. Full architecture is not publicly disclosed; these are best-guess values. Total params: 120 * (2.25 * 20480^2 + 16 * 3 * 20480 * 14336) ~= 1.80T. FP4 weights (bytes_per_param=0.5). GQA 128:16. All layers MoE (16 experts, top-2). Vocab/seqlen match typical GPT-family conventions."
+}
