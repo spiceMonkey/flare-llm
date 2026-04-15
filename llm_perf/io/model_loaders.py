@@ -76,13 +76,23 @@ def model_spec_from_json_dict(cfg: Dict[str, Any]) -> LlmModelSpec:
             "H",
             "n_q",
             "n_kv",
-            "I_dense",
             "vocab_size",
             "max_seq_len",
-            "bytes_per_param",
         ],
-        # bytes_per_param is often given as a float in JSON
-        allow_float_for_int=True,
+        prefix="model configuration",
+    )
+    from ..utils.data_check import (
+        validate_nonnegative_int_fields,
+        validate_positive_float_fields,
+    )
+    validate_nonnegative_int_fields(
+        cfg,
+        ["I_dense"],
+        prefix="model configuration",
+    )
+    validate_positive_float_fields(
+        cfg,
+        ["bytes_per_param"],
         prefix="model configuration",
     )
 

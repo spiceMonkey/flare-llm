@@ -37,8 +37,6 @@ def tuning_spec_from_json_dict(cfg: Dict[str, Any]) -> TuningSpec:
           "n_EP_collectives": 1,
           "n_SP_collectives": 1,
 
-          "c_act": 5.0,
-        
           "overlap_factor": 0.3,
 
         }
@@ -73,10 +71,10 @@ def tuning_spec_from_json_dict(cfg: Dict[str, Any]) -> TuningSpec:
         prefix="tuning configuration",
     )
 
-    # Nonnegative floats: c_act and overlap_factor
+    # Nonnegative floats: overlap_factor
     validate_nonnegative_float_fields(
         cfg,
-        ["c_act", "overlap_factor"],
+        ["overlap_factor"],
         prefix="tuning configuration",
     )
 
@@ -92,7 +90,6 @@ def tuning_spec_from_json_dict(cfg: Dict[str, Any]) -> TuningSpec:
         S_decode=int(cfg.get("S_decode", 2048)),
         tp_algorithm=tp_algorithm,
         ep_algorithm=ep_algorithm,
-        c_act=float(cfg.get("c_act", 5.0)),
         B_decode=int(cfg.get("B_decode", 1)),
         S_input=int(cfg.get("S_input", 0)),
         B_prefill=int(cfg.get("B_prefill", 1)),

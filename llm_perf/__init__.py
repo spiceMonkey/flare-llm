@@ -5,6 +5,8 @@ from .specs.model_spec import LlmModelSpec, MoESpec
 from .specs.system_spec import DeviceSpec, NetworkDomainSpec, SystemSpec
 from .specs.partition_spec import PartitionSpec
 from .specs.tuner_spec import TuningSpec
+from .specs.overhead_spec import OverheadSpec
+from .specs.disagg_spec import DisaggSpec
 
 from .calculators.inference_calculator import InferenceCalculator, InferenceResults
 
@@ -17,6 +19,8 @@ __all__ = [
     "SystemSpec",
     "PartitionSpec",
     "TuningSpec",
+    "OverheadSpec",
+    "DisaggSpec",
     # Calculators
     "InferenceCalculator",
 ]

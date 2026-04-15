@@ -31,15 +31,55 @@ class LlmPerfEquations:
                 ") "
             ),
         },
-        "t_token": {
-            "description": "Per-token latency with overlap.",
-            "latex": r"t_{\text{token}} = t_{\text{local}} + \max(0, t_{\text{comm}} - \rho t_{\text{local}})",
+        "t_stage": {
+            "description": "Per-PP-stage step time with overlap (pre-bubble).",
+            "latex": r"t_{\text{stage}} = t_{\text{local}} + \max(0, t_{\text{comm}} - \rho\, t_{\text{local}})",
             "expr": " t_local + max(0, t_comm - rho * t_local) ",
         },
+        "pp_bubble_factor": {
+            "description": "Pipeline-bubble multiplier for user-observed step time.",
+            "latex": r"\text{pp\_bubble\_factor} = \max\!\left(1,\; \frac{PP}{B}\right)",
+            "expr": " max(1.0, PP / max(1, B)) ",
+        },
+        "t_step_user": {
+            "description": "User-observed per-step decode time (bubble-corrected).",
+            "latex": r"t_{\text{step,user}} = t_{\text{stage}} \cdot \max\!\left(1,\; \frac{PP}{B}\right)",
+            "expr": " t_stage * max(1.0, PP / max(1, B)) ",
+        },
         "TPOT": {
-            "description": "Time per output token (batched decode).",
-            "latex": r"\text{TPOT} = \frac{t_{\text{token}}(B)}{B}",
-            "expr": " t_token / B ",
+            "description": "Time per output token (user-observed): equals step time, not t_stage/B.",
+            "latex": r"\text{TPOT}(B) = t_{\text{step,user}}(B) = t_{\text{stage}}(B) \cdot \max\!\left(1,\; \frac{PP}{B}\right)",
+            "expr": " t_step_user ",
+        },
+        "TPS_single": {
+            "description": "Per-DP-replica decode throughput.",
+            "latex": r"TPS_{\text{single}} = \frac{B}{t_{\text{step,user}}}",
+            "expr": " B / t_step_user ",
+        },
+        "TTPS": {
+            "description": "Global decode throughput across DP replicas.",
+            "latex": r"TTPS = \frac{DP \cdot B}{t_{\text{step,user}}}",
+            "expr": " DP * B / t_step_user ",
+        },
+        "msg_PP": {
+            "description": "Per-device PP hop payload per decode step (B activations).",
+            "latex": r"m_{PP} = B \cdot (H/TP) \cdot b",
+            "expr": " B * (H/TP) * b ",
+        },
+        "msg_TP": {
+            "description": "Per-device TP all-reduce payload per decode step.",
+            "latex": r"m_{TP} = B \cdot H \cdot b",
+            "expr": " B * H * b ",
+        },
+        "msg_EP": {
+            "description": "Per-device EP all-to-all payload per decode step (MoE).",
+            "latex": r"m_{EP} = B \cdot k \cdot H \cdot b",
+            "expr": " B * k * H * b ",
+        },
+        "msg_SP": {
+            "description": "Per-device SP ring all-gather payload per decode step.",
+            "latex": r"m_{SP} = B \cdot (S/SP) \cdot (2 H_{kv}/TP) \cdot b",
+            "expr": " B * (S/SP) * (2*H_kv/TP) * b ",
         },
         "B_star": {
             "description": "Compute-bound crossover batch size.",
@@ -58,18 +98,13 @@ class LlmPerfEquations:
         },
         "TTFT_single": {
             "description": "Time to first token (co-located single-request).",
-            "latex": r"TTFT = t_{\text{sched}} + t_{\text{prefill}} + t_{\text{token}}",
-            "expr": " t_sched + t_prefill + t_token ",
+            "latex": r"TTFT = t_{\text{sched}} + t_{\text{prefill}} + t_{\text{step,user}}",
+            "expr": " t_sched + t_prefill + t_step_user ",
         },
         "TTFT_disagg": {
             "description": "TTFT for disaggregated prefill architecture.",
-            "latex": r"TTFT_{\text{disagg}} = t_{\text{sched}} + t_{\text{prefill}} + t_{\text{KV,transfer}} + t_{\text{token}}",
-            "expr": " t_sched + t_prefill + t_KV_transfer + t_token ",
-        },
-        "E2E_latency": {
-            "description": "End-to-end request latency.",
-            "latex": r"E2E(N_{\text{out}}) = TTFT + (N_{\text{out}} - 1) \times \text{TPOT}",
-            "expr": " TTFT + (N_out - 1) * TPOT ",
+            "latex": r"TTFT_{\text{disagg}} = t_{\text{sched}} + t_{\text{prefill}} + t_{\text{KV,transfer}} + t_{\text{step,user}}",
+            "expr": " t_sched + t_prefill + t_KV_transfer + t_step_user ",
         },
         "S_max_paged": {
             "description": "Max context length with paged KV cache.",

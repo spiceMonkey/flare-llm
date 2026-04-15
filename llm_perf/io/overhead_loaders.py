@@ -21,8 +21,6 @@ def overhead_spec_from_json_dict(cfg: Dict[str, Any]) -> OverheadSpec:
         t_graph_us=float(cfg.get("t_graph_us", 0.0)),
         t_sample_us=float(cfg.get("t_sample_us", 0.0)),
         t_detok_us=float(cfg.get("t_detok_us", 0.0)),
-        disagg_alpha_us=float(cfg.get("disagg_alpha_us", 0.0)),
-        disagg_bandwidth_GBps=float(cfg.get("disagg_bandwidth_GBps", 0.0)),
     )
 
 

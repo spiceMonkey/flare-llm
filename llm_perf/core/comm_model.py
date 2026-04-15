@@ -37,6 +37,7 @@ def compute_comm(
     EP = max(1, partition.EP)
     SP = partition.SP
     S = tuner.S_decode
+    B = max(1, tuner.B_decode)
     b = model.bytes_per_param
 
     n_TP = tuner.n_TP_collectives
@@ -61,8 +62,8 @@ def compute_comm(
     B_EP = dom_EP.bandwidth_GBps * GB_TO_BYTES
     B_SP = dom_SP.bandwidth_GBps * GB_TO_BYTES
     
-    # PP: shard-preserving hop of H/TP
-    msg_PP = (H / TP) * b
+    # PP: shard-preserving hop of B tokens × (H/TP) activation bytes
+    msg_PP = B * (H / TP) * b
     t_PP = a_PP + msg_PP / B_PP
 
     # Algorithm choices (default to "ring" if fields are missing)
@@ -79,7 +80,8 @@ def compute_comm(
         EP = 1
         k = 1
     if EP > 1:
-        msg_EP = k * H * b  # bytes per device
+        # B tokens × k active experts × H activation bytes per expert
+        msg_EP = B * k * H * b  # bytes per device
         if ep_algorithm == "ring":
             # 2-pass ring all-to-all (Dispatch + Combine)
             t_EP = 2 * (EP - 1) * a_EP + 2 * (EP - 1) * (msg_EP / (EP * B_EP))
@@ -92,9 +94,9 @@ def compute_comm(
         t_EP = 0.0
         msg_EP = 0.0
 
-    # TP: 2-pass all-reduce of size H
+    # TP: 2-pass all-reduce of B tokens × H activation bytes
     if TP > 1:
-        msg_TP = H * b  # bytes (Full Vector H)
+        msg_TP = B * H * b  # bytes
         if tp_algorithm == "ring":
             # 2-pass ring all-reduce
             t_TP = 2 * (TP - 1) * a_TP + 2 * ((TP - 1) / TP) * (msg_TP / B_TP)
@@ -107,9 +109,9 @@ def compute_comm(
         t_TP = 0.0
         msg_TP = 0.0
 
-    # SP: 1-pass ring for KV shard (All-Gather)
+    # SP: 1-pass ring for KV shard (All-Gather) over B sequences
     if SP > 1:
-        msg_SP = (S / SP) * (2 * H_kv / TP) * b
+        msg_SP = B * (S / SP) * (2 * H_kv / TP) * b
         t_SP = (SP - 1) * a_SP + (SP - 1) * (msg_SP / B_SP)
     else:
         t_SP = 0.0

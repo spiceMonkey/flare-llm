@@ -17,11 +17,8 @@ class TuningSpec:
     n_EP_collectives: int = 2
     n_SP_collectives: int = 1
 
-    # Heuristic constant for activation traffic scaling
-    c_act: float = 5.0
-
     # Overlap factor ρ in [0, 1]: Fraction of local time utilized to hide comms.
-    # t_token = t_local + max(0, t_comm - ρ * t_local)
+    # t_stage = t_local + max(0, t_comm - ρ * t_local)
     overlap_factor: float = 0.0
 
     # Batch size for decode phase (B=1 is single-request decode)
