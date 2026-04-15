@@ -23,6 +23,7 @@ The core is a five-stage pipeline (memory → FLOPs → traffic → comm → lat
 .
 ├── README.md                         — this file
 ├── quickstart.ipynb                  — tutorial: load specs, run the full stack
+├── pareto_basic.ipynb                — full (partition, B) exploration space  (case study)
 ├── pareto_vs_io.ipynb                — decode Pareto × scale-up I/O sweep      (case study)
 ├── pareto_vs_mem.ipynb               — decode Pareto × HBM-BW sweep            (case study)
 ├── pareto_vs_overhead.ipynb          — decode Pareto × framework overhead      (case study)
@@ -99,7 +100,17 @@ print(f"tok/s/GPU  = {e2e.throughput_per_gpu:.1f}")
 
 Each notebook is a self-contained design question with a plot and a short takeaway. They're meant as reading material — a reader can step through the cells to understand how a specific decision (partition, I/O BW, HBM BW, overhead, chunk size, disagg) shapes the end-to-end metric that matters.
 
-All five case studies use **GPT-1.8T MoE @ FP4** on **GB200 NVL72** to stay consistent with the NVIDIA Blackwell inference blog configuration.
+All six case studies use **GPT-1.8T MoE @ FP4** on **GB200 NVL72** to stay consistent with the NVIDIA Blackwell inference blog configuration.
+
+### `pareto_basic.ipynb` — the full exploration space behind the frontier
+
+![full (partition, B) exploration cloud vs. extracted frontier](assets/pareto_basic.png)
+
+*Question: where does the Pareto frontier come from? What does the underlying point cloud look like?*
+
+Enumerates every valid `(PP, TP, EP, SP)` partition, sweeps `B` from 1 to the KV-paging max per partition, then extracts the upper-right envelope in (throughput/GPU, interactivity) space. Left panel shows the full cloud with the frontier overlaid; right panel colors the same cloud by pipeline parallelism (PP) so the regime segmentation is visible.
+
+**Headline:** at baseline GB200 NVL72, **91 valid partitions → 2,247 `(partition, B)` evaluations → 38 frontier points (~1.7% of the cloud)**. Of those 38, `PP=8 TP=8 EP=1` claims 34 and `PP=6 TP=4 EP=1` claims the remaining 4. PP dominates regime selection: shallow PP sits in the high-interactivity corner (low per-GPU throughput, small B), deep PP in the high-throughput corner (large B amortizes warmup). The later notebooks (`pareto_vs_io`, `pareto_vs_mem`, `pareto_vs_overhead`) re-run this exact enumeration once per hardware/overhead anchor and plot only the frontier — this notebook is what's underneath.
 
 ### `pareto_vs_io.ipynb` — decode Pareto under scale-up I/O provisioning
 
