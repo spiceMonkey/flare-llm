@@ -6,18 +6,23 @@ The core is a five-stage pipeline (memory → FLOPs → traffic → comm → lat
 
 ---
 
-## Capabilities
+## Modeled Architecture
 
-- **Decode-phase pipeline** — memory residency, FLOPs, HBM traffic, scale-up collectives, roofline + overlap-aware latency. Batch-parameterized (B>1) with B\* crossover and TPOT.
-- **Prefill pipeline** — analogous stack for prompt processing, with pipeline warmup, **batched prefill**, and **chunked prefill** (per-chunk `C` loop with quadratic attention and re-read weights).
-- **End-to-end metric assembly** (`E2ECalculator`) — TTFT (single-pass or chunked) + TPOT + throughput/GPU + interactivity, with framework overhead and KV-handoff costs folded in.
-- **Disaggregated prefill/decode** (`DisaggSpec`) — models inter-cluster KV transfer (BW + α + RDMA WR overhead), decode-side repack (partition-reshuffle η), and prefill↔transfer overlap (ρ_KV). Switches cleanly between co-located and disaggregated modes.
-- **Framework overhead** (`OverheadSpec`) — scheduler, CUDA-graph replay, sampling, detokenization; applied per-step and per-request.
-- **KV paging** — PagedAttention-style block model; computes effective HBM capacity and the maximum concurrent-sequence batch for a given partition.
-- **Partition-optimal Pareto sweeps** — enumerate valid (PP, TP, EP, SP) × batch configurations, extract the upper-right envelope in (throughput/GPU, interactivity) space, annotate the winning partition at each corner.
-- **Typed spec database** — JSON files under `llm_perf/database/{model,system,partition,tuner}/` loaded into `LlmModelSpec`, `SystemSpec`, `PartitionSpec`, `TuningSpec` dataclasses.
-- **HuggingFace adapter** — convert HF `config.json` directly into the `llm_perf.model` schema, including MoE and GQA detection.
-- **DRAM3D utility** (`utils/dram3d.py`) — derive HBM bandwidth from physical die-interface parameters (pitch, data-pin fraction, data rate) to evaluate future memory classes.
+![LLM inference cluster architecture](assets/cluster_architecture.png)
+
+The diagram above shows the components of an LLM inference cluster that `llm_perf` models analytically. The system is organized as a disaggregated prefill/decode pipeline with a shared distributed KV cache underneath.
+
+**Serving Framework** sits at the top of the stack — continuous batching, request scheduling, tokenization, and KV-aware routing. The framework contributes per-request and per-step CPU overhead (scheduler dispatch, CUDA graph replay, token sampling, detokenization) modeled via `OverheadSpec` and folded into E2E latency. See [`modeling/framework.md`](documentation/modeling/framework.md).
+
+**Prefill Cluster** is the compute-heavy phase that processes the full input prompt in one (or multiple chunked) forward passes. Each device runs the same transformer layers but at sequence-length `S` rather than single-token decode. Prefill FLOPs scale quadratically with `S` in the attention block and linearly in the FFN/projection layers. See [`modeling/prefill.md`](documentation/modeling/prefill.md) and [`core/prefill_model.py`](llm_perf/core/prefill_model.py).
+
+**Decode Cluster** is the memory-bandwidth-bound autoregressive phase. Devices are connected via a scale-up switch that carries TP, EP, and SP collectives; pipeline-parallel (PP) stages communicate via point-to-point sends. Data parallelism (DP) replicates the full pipeline to increase throughput without affecting per-request latency. The roofline model inside each device balances compute time against HBM read time, and the overlap-aware latency model hides communication behind whichever is the bottleneck. See [`modeling/tpot.md`](documentation/modeling/tpot.md) and [`core/latency_model.py`](llm_perf/core/latency_model.py).
+
+**KV Transfer** interconnect bridges the two clusters in a disaggregated deployment. When prefill and decode run on separate device groups, the KV cache produced during prefill must be shipped to the decode cluster before autoregressive generation can begin. The transfer cost (startup latency α + bulk BW) is modeled in [`modeling/e2e.md`](documentation/modeling/e2e.md) and can dominate TTFT for short prompts or low-bandwidth fabrics.
+
+**Distributed KV Cache** spans HBM, host DRAM, and SSD tiers. `llm_perf` models PagedAttention-style block accounting — block size, per-sequence block count, internal fragmentation, and effective HBM capacity after subtracting weights and activations — to determine the maximum concurrent-sequence batch a given partition can serve. See [`modeling/kv.md`](documentation/modeling/kv.md) and [`core/kv_paging_model.py`](llm_perf/core/kv_paging_model.py).
+
+The **scale-up switch** within each cluster carries collective traffic for tensor parallelism (TP), expert parallelism (EP), and sequence parallelism (SP). The switching model accounts for effective per-port bandwidth under aggregate capacity constraints, latency (α), and the algorithm choice (ring vs. tree). See [`modeling/switching.md`](documentation/modeling/switching.md) and [`core/comm_model.py`](llm_perf/core/comm_model.py).
 
 ---
 
@@ -56,26 +61,6 @@ The core is a five-stage pipeline (memory → FLOPs → traffic → comm → lat
     ├── io/                           — JSON loaders + list helpers per schema
     └── utils/                        — constants, equations, HF adapter, DRAM3D helper, plotting
 ```
-
----
-
-## Modeled Architecture
-
-![LLM inference cluster architecture](assets/cluster_architecture.png)
-
-The diagram above shows the components of an LLM inference cluster that `llm_perf` models analytically. The system is organized as a disaggregated prefill/decode pipeline with a shared distributed KV cache underneath.
-
-**Serving Framework** sits at the top of the stack — continuous batching, request scheduling, tokenization, and KV-aware routing. The framework contributes per-request and per-step CPU overhead (scheduler dispatch, CUDA graph replay, token sampling, detokenization) modeled via `OverheadSpec` and folded into E2E latency. See [`modeling/framework.md`](documentation/modeling/framework.md).
-
-**Prefill Cluster** is the compute-heavy phase that processes the full input prompt in one (or multiple chunked) forward passes. Each device runs the same transformer layers but at sequence-length `S` rather than single-token decode. Prefill FLOPs scale quadratically with `S` in the attention block and linearly in the FFN/projection layers. See [`modeling/prefill.md`](documentation/modeling/prefill.md) and [`core/prefill_model.py`](llm_perf/core/prefill_model.py).
-
-**Decode Cluster** is the memory-bandwidth-bound autoregressive phase. Devices are connected via a scale-up switch that carries TP, EP, and SP collectives; pipeline-parallel (PP) stages communicate via point-to-point sends. Data parallelism (DP) replicates the full pipeline to increase throughput without affecting per-request latency. The roofline model inside each device balances compute time against HBM read time, and the overlap-aware latency model hides communication behind whichever is the bottleneck. See [`modeling/tpot.md`](documentation/modeling/tpot.md) and [`core/latency_model.py`](llm_perf/core/latency_model.py).
-
-**KV Transfer** interconnect bridges the two clusters in a disaggregated deployment. When prefill and decode run on separate device groups, the KV cache produced during prefill must be shipped to the decode cluster before autoregressive generation can begin. The transfer cost (startup latency α + bulk BW) is modeled in [`modeling/e2e.md`](documentation/modeling/e2e.md) and can dominate TTFT for short prompts or low-bandwidth fabrics.
-
-**Distributed KV Cache** spans HBM, host DRAM, and SSD tiers. `llm_perf` models PagedAttention-style block accounting — block size, per-sequence block count, internal fragmentation, and effective HBM capacity after subtracting weights and activations — to determine the maximum concurrent-sequence batch a given partition can serve. See [`modeling/kv.md`](documentation/modeling/kv.md) and [`core/kv_paging_model.py`](llm_perf/core/kv_paging_model.py).
-
-The **scale-up switch** within each cluster carries collective traffic for tensor parallelism (TP), expert parallelism (EP), and sequence parallelism (SP). The switching model accounts for effective per-port bandwidth under aggregate capacity constraints, latency (α), and the algorithm choice (ring vs. tree). See [`modeling/switching.md`](documentation/modeling/switching.md) and [`core/comm_model.py`](llm_perf/core/comm_model.py).
 
 ---
 
