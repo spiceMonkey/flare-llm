@@ -24,6 +24,7 @@ The core is a five-stage pipeline (memory → FLOPs → traffic → comm → lat
 ├── README.md                         — this file
 ├── quickstart.ipynb                  — tutorial: load specs, run the full stack
 ├── pareto_basic.ipynb                — full (partition, B) exploration space  (case study)
+├── pareto_vs_cluster_size.ipynb      — decode Pareto × cluster size (N)        (case study)
 ├── pareto_vs_io.ipynb                — decode Pareto × scale-up I/O sweep      (case study)
 ├── pareto_vs_mem.ipynb               — decode Pareto × HBM-BW sweep            (case study)
 ├── pareto_vs_overhead.ipynb          — decode Pareto × framework overhead      (case study)
@@ -100,7 +101,7 @@ print(f"tok/s/GPU  = {e2e.throughput_per_gpu:.1f}")
 
 Each notebook is a self-contained design question with a plot and a short takeaway. They're meant as reading material — a reader can step through the cells to understand how a specific decision (partition, I/O BW, HBM BW, overhead, chunk size, disagg) shapes the end-to-end metric that matters.
 
-All six case studies use **GPT-1.8T MoE @ FP4** on **GB200 NVL72**.
+All seven case studies use **GPT-1.8T MoE @ FP4** on **GB200-class devices** (NVL72 baseline; cluster-size study extends past 72 GPUs hypothetically).
 
 ### `pareto_basic.ipynb` — the full exploration space behind the frontier
 
@@ -111,6 +112,26 @@ All six case studies use **GPT-1.8T MoE @ FP4** on **GB200 NVL72**.
 Enumerates every valid `(PP, TP, EP, SP)` partition, sweeps `B` from 1 to the KV-paging max per partition, then extracts the upper-right envelope in (throughput/GPU, interactivity) space. Left panel shows the full cloud with the frontier overlaid; right panel colors the same cloud by pipeline parallelism (PP) so the regime segmentation is visible.
 
 **Headline:** at baseline GB200 NVL72, **91 valid partitions → 2,247 `(partition, B)` evaluations → 38 frontier points (~1.7% of the cloud)**. Of those 38, `PP=8 TP=8 EP=1` claims 34 and `PP=6 TP=4 EP=1` claims the remaining 4. PP dominates regime selection: shallow PP sits in the high-interactivity corner (low per-GPU throughput, small B), deep PP in the high-throughput corner (large B amortizes warmup). The later notebooks (`pareto_vs_io`, `pareto_vs_mem`, `pareto_vs_overhead`) re-run this exact enumeration once per hardware/overhead anchor and plot only the frontier — this notebook is what's underneath.
+
+### `pareto_vs_cluster_size.ipynb` — decode Pareto under cluster-size scaling
+
+![decode Pareto vs. cluster size](assets/pareto_vs_cluster_size.png)
+
+*Question: as the cluster grows from 64 to 1024 GPUs (per-device hardware held fixed), how does the frontier shift and which partitions win?*
+
+Enumerates every valid `(PP, TP, EP, SP)` partition with `PP·TP·EP·SP ≤ N` for each `N ∈ {64, 128, 256, 512, 1024}`, sweeps `B` per partition, extracts the frontier per `N`. Per-device HW held uniform — a hypothetical sweep ignoring real scale-out tier changes beyond the 72-GPU rack.
+
+**Headline:** winning `PP` climbs to `L=120` (one layer per rank) by `N=128`, then further devices go to TP. Winning TP steps **1 → 1 → 2 → 4 → 8** as N doubles from 64 → 1024. EP stays at 1 throughout — MoE routing overhead outweighs expert parallelism at this scale and batch size.
+
+| N    | dominant winner (× points) | replica | DP | util |
+|------|----------------------------|---------|----|------|
+| 64   | `PP=60  TP=1` (×25)       | 60  | 1  | 93.8% |
+| 128  | `PP=120 TP=1` (×26)       | 120 | 1  | 93.8% |
+| 256  | `PP=120 TP=2` (×30)       | 240 | 1  | 93.8% |
+| 512  | `PP=120 TP=4` (×26)       | 480 | 1  | 93.8% |
+| 1024 | `PP=120 TP=8` (×22)       | 960 | 1  | 93.8% |
+
+Device utilization is the silent cost — `DP = N // replica` is floored, so partitions whose replica doesn't divide `N` waste devices. All listed `N` land on ≥93.8% util shapes, but "in-between" sizes (e.g. N=768) force partial-utilization choices and produce diverse but less efficient frontiers. **Practical rule:** pick cluster sizes that are multiples of `L` (or its divisors like 60) to land on high-utilization frontiers.
 
 ### `pareto_vs_io.ipynb` — decode Pareto under scale-up I/O provisioning
 
