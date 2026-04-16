@@ -4,6 +4,8 @@
 
 The core is a five-stage pipeline (memory → FLOPs → traffic → comm → latency) extended with prefill, end-to-end metric assembly, KV paging, chunked prefill, and disaggregated prefill/decode. Everything is composable pure functions over typed dataclasses — no global state, no training-specific baggage.
 
+---
+
 ## Capabilities
 
 - **Decode-phase pipeline** — memory residency, FLOPs, HBM traffic, scale-up collectives, roofline + overlap-aware latency. Batch-parameterized (B>1) with B\* crossover and TPOT.
@@ -16,6 +18,8 @@ The core is a five-stage pipeline (memory → FLOPs → traffic → comm → lat
 - **Typed spec database** — JSON files under `llm_perf/database/{model,system,partition,tuner}/` loaded into `LlmModelSpec`, `SystemSpec`, `PartitionSpec`, `TuningSpec` dataclasses.
 - **HuggingFace adapter** — convert HF `config.json` directly into the `llm_perf.model` schema, including MoE and GQA detection.
 - **DRAM3D utility** (`utils/dram3d.py`) — derive HBM bandwidth from physical die-interface parameters (pitch, data-pin fraction, data rate) to evaluate future memory classes.
+
+---
 
 ## Repository Layout
 
@@ -52,6 +56,28 @@ The core is a five-stage pipeline (memory → FLOPs → traffic → comm → lat
     ├── io/                           — JSON loaders + list helpers per schema
     └── utils/                        — constants, equations, HF adapter, DRAM3D helper, plotting
 ```
+
+---
+
+## Modeled Architecture
+
+![LLM inference cluster architecture](assets/cluster_architecture.png)
+
+The diagram above shows the components of an LLM inference cluster that `llm_perf` models analytically. The system is organized as a disaggregated prefill/decode pipeline with a shared distributed KV cache underneath.
+
+**Serving Framework** sits at the top of the stack — continuous batching, request scheduling, tokenization, and KV-aware routing. The framework contributes per-request and per-step CPU overhead (scheduler dispatch, CUDA graph replay, token sampling, detokenization) modeled via `OverheadSpec` and folded into E2E latency. See [`modeling/framework.md`](documentation/modeling/framework.md).
+
+**Prefill Cluster** is the compute-heavy phase that processes the full input prompt in one (or multiple chunked) forward passes. Each device runs the same transformer layers but at sequence-length `S` rather than single-token decode. Prefill FLOPs scale quadratically with `S` in the attention block and linearly in the FFN/projection layers. See [`modeling/prefill.md`](documentation/modeling/prefill.md) and [`core/prefill_model.py`](llm_perf/core/prefill_model.py).
+
+**Decode Cluster** is the memory-bandwidth-bound autoregressive phase. Devices are connected via a scale-up switch that carries TP, EP, and SP collectives; pipeline-parallel (PP) stages communicate via point-to-point sends. Data parallelism (DP) replicates the full pipeline to increase throughput without affecting per-request latency. The roofline model inside each device balances compute time against HBM read time, and the overlap-aware latency model hides communication behind whichever is the bottleneck. See [`modeling/tpot.md`](documentation/modeling/tpot.md) and [`core/latency_model.py`](llm_perf/core/latency_model.py).
+
+**KV Transfer** interconnect bridges the two clusters in a disaggregated deployment. When prefill and decode run on separate device groups, the KV cache produced during prefill must be shipped to the decode cluster before autoregressive generation can begin. The transfer cost (startup latency α + bulk BW) is modeled in [`modeling/e2e.md`](documentation/modeling/e2e.md) and can dominate TTFT for short prompts or low-bandwidth fabrics.
+
+**Distributed KV Cache** spans HBM, host DRAM, and SSD tiers. `llm_perf` models PagedAttention-style block accounting — block size, per-sequence block count, internal fragmentation, and effective HBM capacity after subtracting weights and activations — to determine the maximum concurrent-sequence batch a given partition can serve. See [`modeling/kv.md`](documentation/modeling/kv.md) and [`core/kv_paging_model.py`](llm_perf/core/kv_paging_model.py).
+
+The **scale-up switch** within each cluster carries collective traffic for tensor parallelism (TP), expert parallelism (EP), and sequence parallelism (SP). The switching model accounts for effective per-port bandwidth under aggregate capacity constraints, latency (α), and the algorithm choice (ring vs. tree). See [`modeling/switching.md`](documentation/modeling/switching.md) and [`core/comm_model.py`](llm_perf/core/comm_model.py).
+
+---
 
 ## Quickstart
 
@@ -218,42 +244,21 @@ The U-shape is genuine — small C (128) pays `n_chunks × T_θ` weight re-reads
 
 ---
 
-## HuggingFace Adapter
+## Utilities
 
-```python
-from pathlib import Path
-from llm_perf.utils import convert_hf_config_to_model_json
+**HuggingFace Adapter** — converts any HuggingFace `config.json` (including MoE and GQA variants) into the `llm_perf.model` schema so it can be used directly with the calculators. Available as a library call (`convert_hf_config_to_model_json()`) or as a CLI script (`python scripts/convert_hf_model.py`). See [`utils/hf_model_adapter.py`](llm_perf/utils/hf_model_adapter.py).
 
-convert_hf_config_to_model_json(
-    hf_config_path=Path("llm_perf/database/model/external.model/hf/qwen3_vl_235b_a22b_thinking_fp8.json"),
-    out_path=Path("llm_perf/database/model/qwen3_vl_235b_fp8.json"),
-    name_override="qwen3_vl_235b_fp8",
-    overwrite=True,
-)
-```
+**DRAM3D Bandwidth Calculator** — derives HBM bandwidth from physical die-interface parameters (die area, bump pitch, data-pin fraction, data rate, number of dies) to evaluate future memory classes (HBM3E, HBM4, HBM4E) before silicon is available. Can also update an existing `database/system/*.json` file in place with the computed bandwidth. See [`utils/dram3d.py`](llm_perf/utils/dram3d.py) and [`modeling/dram3d.md`](documentation/modeling/dram3d.md).
 
-Also available as a command-line script: `python scripts/convert_hf_model.py` (edit paths at the top of the file).
-
-## Documentation
-
-Per-topic methodology lives under `documentation/modeling/`:
-
-- `notation.md` — symbols, units, indexing conventions
-- `tpot.md` — decode-phase latency derivation (roofline, overlap, B\* crossover)
-- `prefill.md` — prefill FLOPs/traffic/comm, batched + chunked + disaggregated
-- `e2e.md` — TTFT + TPOT + throughput assembly
-- `kv.md` — PagedAttention block accounting, effective capacity
-- `framework.md` — per-request and per-step CPU overhead
-- `dram3d.md` — HBM bandwidth from physical die parameters
-- `references.md` — citations
-
-Design-intent walkthroughs live under `documentation/explaining/` (batched decode, context-length impact, I/O bandwidth scaling, network topology, pipeline bubbles).
+---
 
 ## Contributing
 
 - Open issues or PRs for new spec types, adapters, or analytical improvements.
 - Keep JSON schemas backward compatible when possible.
 - Run the quickstart notebook after large changes to confirm the pipeline still loads and runs.
+
+---
 
 ## License
 
