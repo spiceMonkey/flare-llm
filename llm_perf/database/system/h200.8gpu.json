@@ -14,6 +14,12 @@
     "SP": { "name": "nvlink4", "alpha_us": 1.0, "bandwidth_GBps": 450.0 },
     "PP": { "name": "nvlink4", "alpha_us": 1.0, "bandwidth_GBps": 450.0 }
   },
+  "scale_up_switch": {
+    "B_agg_TBps": 3.6,
+    "num_ports": 8,
+    "eta": 1.0,
+    "delta_alpha_us": 0.0
+  },
 
-  "_comment": "NVIDIA HGX H200: 141 GB HBM3E @ 4.8 TB/s, FP8 dense 1979 TFLOPS/GPU, NVLink4 900 GB/s bidir (450 GB/s unidir). 8-GPU NVLink domain only; cross-node would be InfiniBand."
+  "_comment": "NVIDIA HGX H200: 141 GB HBM3E @ 4.8 TB/s, FP8 dense 1979 TFLOPS/GPU, NVLink4 900 GB/s bidir (450 GB/s single-direction). 8-GPU NVLink domain via 4 NVSwitch chips. B_agg = 8 × 450 GB/s = 3.6 TB/s single-dir system aggregate. Cross-node would be InfiniBand."
 }

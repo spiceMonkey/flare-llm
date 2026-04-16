@@ -14,6 +14,12 @@
     "SP": { "name": "nvlink5", "alpha_us": 0.5, "bandwidth_GBps": 900.0 },
     "PP": { "name": "nvlink5", "alpha_us": 0.5, "bandwidth_GBps": 900.0 }
   },
+  "scale_up_switch": {
+    "B_agg_TBps": 64.8,
+    "num_ports": 72,
+    "eta": 1.0,
+    "delta_alpha_us": 0.0
+  },
 
-  "_comment": "GB200 NVL72: Blackwell B200, 192 GB HBM3E @ 8 TB/s, FP4 dense 9000 TFLOPS/GPU, NVLink5 1.8 TB/s bidir (900 GB/s unidirectional). All 72 GPUs in a single NVLink domain. peak_flops_TF set to FP4 dense to match the blog's FP4 quantization assumption."
+  "_comment": "GB200 NVL72: Blackwell B200, 192 GB HBM3E @ 8 TB/s, FP4 dense 9000 TFLOPS/GPU, NVLink5 1.8 TB/s bidir (900 GB/s single-direction). All 72 GPUs in a single NVLink domain via 9 NVSwitch Gen3 chips (7.2 TB/s single-dir each, 64.8 TB/s system aggregate). peak_flops_TF set to FP4 dense. eta=1.0 means no efficiency discount applied by default."
 }

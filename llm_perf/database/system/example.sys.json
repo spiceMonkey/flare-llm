@@ -13,5 +13,13 @@
     "EP": { "name": "nvlink", "alpha_us": 1.0, "bandwidth_GBps": 400.0 },
     "SP": { "name": "nvlink", "alpha_us": 1.0, "bandwidth_GBps": 400.0 },
     "PP": { "name": "ib",     "alpha_us": 5.0, "bandwidth_GBps": 50.0  }
-  }
+  },
+  "scale_up_switch": {
+    "B_agg_TBps": 3.2,
+    "num_ports": 8,
+    "eta": 1.0,
+    "delta_alpha_us": 0.0
+  },
+
+  "_comment": "Example H100-class cluster: 64 devices, 8-GPU NVLink domains (400 GB/s single-direction), IB for cross-node PP. Scale-up switch covers the NVLink domain only (8 ports × 400 GB/s = 3.2 TB/s single-dir)."
 }

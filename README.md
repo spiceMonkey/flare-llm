@@ -117,11 +117,11 @@ Enumerates every valid `(PP, TP, EP, SP)` partition, sweeps `B` from 1 to the KV
 
 ![decode Pareto vs. cluster size](assets/pareto_vs_cluster_size.png)
 
-*Question: as the cluster grows from 64 to 1024 GPUs (per-device hardware held fixed), how does the frontier shift and which partitions win?*
+*Question: as the cluster grows from 64 to 1024 GPUs (per-device hardware held fixed), how does the frontier shift — and what happens when larger fabrics lose effective bandwidth?*
 
-Enumerates every valid `(PP, TP, EP, SP)` partition with `PP·TP·EP·SP ≤ N` for each `N ∈ {64, 128, 256, 512, 1024}`, sweeps `B` per partition, extracts the frontier per `N`. Per-device HW held uniform — a hypothetical sweep ignoring real scale-out tier changes beyond the 72-GPU rack.
+Enumerates every valid `(PP, TP, EP, SP)` partition with `PP·TP·EP·SP ≤ N` for each `N ∈ {64, 128, 256, 512, 1024}`, sweeps `B` per partition, extracts the frontier per `N`. Solid curves assume ideal fabric (η=1.0); dashed curves apply a diminishing fabric efficiency η for large clusters (η=0.90 at N=256, 0.80 at N=512, 0.70 at N=1024) to model head-of-line blocking, buffering contention, and protocol overhead at scale.
 
-**Headline:** winning `PP` climbs to `L=120` (one layer per rank) by `N=128`, then further devices go to TP. Winning TP steps **1 → 1 → 2 → 4 → 8** as N doubles from 64 → 1024. EP stays at 1 throughout — MoE routing overhead outweighs expert parallelism at this scale and batch size.
+**Headline:** winning `PP` climbs to `L=120` (one layer per rank) by `N=128`, then further devices go to TP. Winning TP steps **1 → 1 → 2 → 4 → 8** as N doubles from 64 → 1024. EP stays at 1 throughout — MoE routing overhead outweighs expert parallelism at this scale and batch size. With diminishing η, the frontier at large N pulls inward — the gap between ideal and η-discounted grows with cluster size, quantifying the cost of fabric inefficiency on achievable throughput and interactivity.
 
 | N    | dominant winner (× points) | replica | DP | util |
 |------|----------------------------|---------|----|------|

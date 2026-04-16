@@ -14,6 +14,12 @@
     "SP": { "name": "nvlink5", "alpha_us": 0.5, "bandwidth_GBps": 900.0 },
     "PP": { "name": "nvlink5", "alpha_us": 0.5, "bandwidth_GBps": 900.0 }
   },
+  "scale_up_switch": {
+    "B_agg_TBps": 64.8,
+    "num_ports": 72,
+    "eta": 1.0,
+    "delta_alpha_us": 0.0
+  },
 
-  "_comment": "GB300 NVL72: Blackwell Ultra, 288GB HBM3E ~12TB/s, FP8 ~5000 TFLOPS, NVLink5 1.8TB/s bidir (900 unidirectional). All 72 GPUs in single NVLink domain."
+  "_comment": "GB300 NVL72: Blackwell Ultra, 288 GB HBM3E @ 12 TB/s, FP8 dense 5000 TFLOPS/GPU, NVLink5 1.8 TB/s bidir (900 GB/s single-direction). All 72 GPUs in single NVLink domain via 9 NVSwitch Gen3 chips (64.8 TB/s single-dir system aggregate)."
 }
