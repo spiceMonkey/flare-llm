@@ -148,6 +148,12 @@ Enumerates every valid `(PP, TP, EP, SP)` partition with `PP·TP·EP·SP ≤ N` 
 
 Device utilization is the silent cost — `DP = N // replica` is floored, so partitions whose replica doesn't divide `N` waste devices. All listed `N` land on ≥93.8% util shapes, but "in-between" sizes (e.g. N=768) force partial-utilization choices and produce diverse but less efficient frontiers. **Practical rule:** pick cluster sizes that are multiples of `L` (or its divisors like 60) to land on high-utilization frontiers.
 
+**Cross-model comparison — DeepSeek-R1 on the same sweep:**
+
+![decode Pareto vs. cluster size — GPT-1.8T MoE vs DeepSeek-R1](assets/pareto_vs_cluster_size_deepseek.png)
+
+DeepSeek-R1 has a very different lever profile on paper: `L=61` is prime (so PP is binary, 1 or 61), `n_experts=256` makes EP a headline capability, and `n_kv=5` keeps KV traffic tiny. A naïve prediction is that DeepSeek scales via EP while GPT scales via PP. The actual sweep **refutes that prediction** — on the frontier, DeepSeek's winning shape is `PP=61 + TP ∈ {1,2,4,8}` as N doubles 64 → 1024, mirroring GPT's `PP=120 + TP ∈ {1,2,4,8}`. EP stays at 1 almost everywhere, flickering to EP=2 only on a few interior points at N=1024. The decode-Pareto optimizer dislikes EP: MoE all-to-all adds per-layer latency on the interactivity corner that low-TP plain PP avoids. `n_experts=256` is an *architectural capability*, not a partition the frontier wants to use. **Both models converge on the same scaling rule: max out PP to L, then grow TP, leave EP at 1.**
+
 ### `pareto_vs_io.ipynb` — decode Pareto under scale-up I/O provisioning
 
 ![decode Pareto vs. scale-up I/O](assets/pareto_vs_io.png)
@@ -221,6 +227,12 @@ Applies framework overhead post-hoc — runs the hardware sweep once per partiti
 Runs the same partition sweep on both systems. The hierarchical variant pays α = 3.0 μs and is bandwidth-capped at 400 GB/s on any collective >72 ranks; the ideal variant stays at (0.5 μs, 900 GB/s) for all collective sizes.
 
 **Headline:** for this model (GPT-1.8T MoE, `n_kv=16`, `n_experts=16`), the two Pareto frontiers overlap exactly — 10,156 of 10,156 evaluation points are identical. Every valid partition keeps TP, EP, SP ≤ 16, so every collective fits inside one NVL72 rack and never touches tier 1. The 72-rank cliff is real — §6 shows a forced TP=144 stress test where the hierarchical `t_TP` is ~6× the ideal — it simply doesn't bite any configuration this model supports. **Extending scale-up past NVL72 buys nothing at decode unless the model's per-role parallelism routinely exceeds 72 ranks** (large-TP dense, fine-grained MoE with many hundreds of experts, or prefill/training collectives). See `documentation/modeling/switching.md` §7 for the multi-tier model.
+
+**Cross-model check — DeepSeek-R1, where EP is the cliff-crossing knob:**
+
+![DeepSeek-R1 Pareto: ideal vs 2-tier NVL576, full set vs EP-crossing subset](assets/pareto_vs_scale_up_tier_deepseek.png)
+
+GPT-1.8T forces the cliff through TP because `n_q=128` gives TP headroom. DeepSeek-R1 flips the asymmetry: `n_kv=5` (MLA) kills TP range, but `n_experts=256` makes EP the natural cliff-crosser. EP=256 is not a diagnostic — it's the canonical DeepSeek deployment shape. Left panel shows the full partition set: frontiers overlap exactly, the optimizer just picks EP ≤ 64 and stays rack-local (phantom cliff, same pattern as GPT). Right panel restricts to EP ∈ {128, 256} — the shapes you actually run if you want to spread the MoE FFN across all experts on one rail — and the hierarchical envelope visibly shifts left on interactivity. On the EP sweep itself (`assets/pareto_vs_scale_up_tier_deepseek_cliff.png`), `t_EP` jumps ~6× at EP=80 where the all-to-all starts crossing tier 1, and `TPOT` inherits a proportional penalty per MoE layer per token. **Sizing rule:** NVL72 is enough for any model whose largest per-role group stays ≤72; for EP=256 MoE, only NVL256+ avoids the cliff.
 
 ### `ttft_vs_io.ipynb` — mismatched-partition disaggregation: does it pay off?
 
