@@ -1,0 +1,30 @@
+{
+  "schema": "llm_perf.system",
+  "name": "gb200_nvl576_hierarchical",
+  "num_devices": 576,
+  "device": {
+    "name": "GB200-NVL576-hierarchical",
+    "hbm_capacity_GB": 192.0,
+    "hbm_bandwidth_GBps": 8000.0,
+    "peak_flops_TF": 9000.0
+  },
+  "fabrics": {
+    "nvlink5": {
+      "tiers": [
+        {"name": "intra-rack-nvswitch", "ports": 72, "bw_per_port_GBps": 900.0, "alpha_us": 0.5}
+      ]
+    },
+    "ib": {
+      "tiers": [
+        {"name": "inter-rack-quantum-ib", "ports": 8, "bw_per_port_GBps": 400.0, "alpha_us": 2.5}
+      ]
+    }
+  },
+  "collective_fabrics": {
+    "TP": ["nvlink5", "ib"],
+    "EP": ["nvlink5", "ib"],
+    "SP": ["nvlink5", "ib"],
+    "PP": ["nvlink5", "ib"]
+  },
+  "_comment": "Realistic NVL576: 8 NVL72 racks stitched by a scale-out InfiniBand fabric. Fabric 'nvlink5' is intra-rack only (72-port NVSwitch, 900 GB/s, 0.5 us). Fabric 'ib' is the inter-rack scale-out network (8 racks, 400 GB/s, 2.5 us per traversal). A collective over ≤72 ranks stays on nvlink5; a collective spanning up to 576 ranks escalates into ib, paying α = 0.5 + 2.5 = 3.0 us and being bandwidth-floored to 400 GB/s."
+}

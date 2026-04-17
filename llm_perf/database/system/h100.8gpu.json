@@ -8,11 +8,18 @@
     "hbm_bandwidth_GBps": 3350.0,
     "peak_flops_TF": 989.0
   },
-  "network_domains": {
-    "TP": { "name": "nvlink", "alpha_us": 1.0, "bandwidth_GBps": 450.0 },
-    "EP": { "name": "nvlink", "alpha_us": 1.0, "bandwidth_GBps": 450.0 },
-    "SP": { "name": "nvlink", "alpha_us": 1.0, "bandwidth_GBps": 450.0 },
-    "PP": { "name": "nvlink", "alpha_us": 1.0, "bandwidth_GBps": 450.0 }
+  "fabrics": {
+    "nvlink4": {
+      "tiers": [
+        {"name": "nvswitch", "ports": 8, "bw_per_port_GBps": 450.0, "alpha_us": 1.0}
+      ]
+    }
+  },
+  "collective_fabrics": {
+    "TP": "nvlink4",
+    "EP": "nvlink4",
+    "SP": "nvlink4",
+    "PP": "nvlink4"
   },
   "scale_up_switch": {
     "B_agg_TBps": 3.6,

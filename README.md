@@ -24,7 +24,7 @@ The diagram above shows the components of an LLM inference cluster that `llm_per
 
 The **scale-up switch** within each cluster carries collective traffic for tensor parallelism (TP), expert parallelism (EP), and sequence parallelism (SP). The switching model accounts for effective per-port bandwidth under aggregate capacity constraints, latency (α), and the algorithm choice (ring vs. tree). See [`modeling/switching.md`](documentation/modeling/switching.md) and [`core/comm_model.py`](llm_perf/core/comm_model.py).
 
-**Current scope — single-tier scale-up only.** Each parallelism domain's `α_role` and `BW_role` today represent the *effective end-to-end* startup latency and per-port bandwidth across a **single switching tier** — e.g., one NVSwitch fabric inside an NVL72 rack, or a single UALink leaf. Multi-tier / hierarchical scale-up fabrics (intra-rack NVSwitch plus inter-rack NVL-domain switch, or Clos-style fat-trees with multiple switching layers) are not yet modeled and are on the roadmap; see [`modeling/switching.md`](documentation/modeling/switching.md) §1 "In scope / out of scope". Scale-out Ethernet/IB fabrics between scale-up domains are also out of scope here.
+**Hierarchical scale-up.** Each parallelism domain is described by an ordered list of switching tiers (innermost first), each with its own radix `P_i`, per-port bandwidth `BW_i`, and latency `α_i`. A collective over `G` ranks crosses the minimum number of tiers needed to reach all ranks, pays the sum of those tiers' α values, and is bandwidth-limited by the narrowest crossed tier. A single-tier list reproduces the legacy flat `(α_role, BW_role)` model exactly; multi-tier configurations (e.g. NVL72 intra-rack NVSwitch + inter-rack aggregation) are supported via a `"tiers": [...]` JSON form. See [`modeling/switching.md`](documentation/modeling/switching.md) §7 "Multi-tier extension" and the `pareto_vs_scale_up_tier` case study for a worked example. Topology-explicit networks (torus, dragonfly) and scale-out Ethernet/IB fabrics between scale-up domains remain out of scope.
 
 ---
 
@@ -40,6 +40,7 @@ The **scale-up switch** within each cluster carries collective traffic for tenso
 ├── pareto_vs_mem.ipynb               — decode Pareto × HBM-BW sweep            (case study)
 ├── pareto_vs_flops.ipynb             — decode Pareto × peak-FLOPS sweep        (case study)
 ├── pareto_vs_overhead.ipynb          — decode Pareto × framework overhead      (case study)
+├── pareto_vs_scale_up_tier.ipynb     — decode Pareto × scale-up tiering        (case study)
 ├── ttft_vs_io.ipynb                  — TTFT × mismatched-partition disagg I/O  (case study)
 ├── ttft_vs_chunk.ipynb               — TTFT × chunk-size sweep (co-lo)         (case study)
 ├── documentation/
@@ -210,6 +211,16 @@ Applies framework overhead post-hoc — runs the hardware sweep once per partiti
 | 5 ms | Unoptimized HF `generate()` loop |
 
 **Headline:** overhead is an **asymmetric tax** — it crushes the high-interactivity (small B) corner but barely moves the high-throughput corner. Despite that, the winning partition at every corner is **stable** across all six overhead values — overhead shifts you along the frontier but does not re-order partition choice.
+
+### `pareto_vs_scale_up_tier.ipynb` — decode Pareto under scale-up tiering
+
+![decode Pareto: imaginary single-tier NVL576 vs. realistic 2-tier NVL576](assets/pareto_vs_scale_up_tier.png)
+
+*Question: on a 576-GPU scale-up domain, how much does a realistic 2-tier NVL576 (8× NVL72 racks + inter-rack aggregation) give up to an "imaginary" single-tier NVL576 that flattens all 576 ranks onto one monolithic NVLink fabric?*
+
+Runs the same partition sweep on both systems. The hierarchical variant pays α = 3.0 μs and is bandwidth-capped at 400 GB/s on any collective >72 ranks; the ideal variant stays at (0.5 μs, 900 GB/s) for all collective sizes.
+
+**Headline:** for this model (GPT-1.8T MoE, `n_kv=16`, `n_experts=16`), the two Pareto frontiers overlap exactly — 10,156 of 10,156 evaluation points are identical. Every valid partition keeps TP, EP, SP ≤ 16, so every collective fits inside one NVL72 rack and never touches tier 1. The 72-rank cliff is real — §6 shows a forced TP=144 stress test where the hierarchical `t_TP` is ~6× the ideal — it simply doesn't bite any configuration this model supports. **Extending scale-up past NVL72 buys nothing at decode unless the model's per-role parallelism routinely exceeds 72 ranks** (large-TP dense, fine-grained MoE with many hundreds of experts, or prefill/training collectives). See `documentation/modeling/switching.md` §7 for the multi-tier model.
 
 ### `ttft_vs_io.ipynb` — mismatched-partition disaggregation: does it pay off?
 

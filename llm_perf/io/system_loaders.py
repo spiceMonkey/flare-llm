@@ -2,9 +2,15 @@
 
 import json
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List
 
-from ..specs.system_spec import DeviceSpec, NetworkDomainSpec, SystemSpec
+from ..specs.system_spec import (
+    COLLECTIVES,
+    DeviceSpec,
+    FabricSpec,
+    SwitchTierSpec,
+    SystemSpec,
+)
 from ..utils import (
     validate_positive_int_fields,
     validate_nonnegative_float_fields,
@@ -18,9 +24,52 @@ def _load_json(path: str | Path) -> Dict[str, Any]:
         return json.load(f)
 
 
-def system_spec_from_json_dict(cfg: Dict[str, Any]) -> SystemSpec:
+def _parse_fabric(fabric_name: str, fc: Dict[str, Any]) -> FabricSpec:
+    """Parse one fabric entry. Requires a non-empty 'tiers' list."""
+    if "tiers" not in fc:
+        raise ValueError(f"fabric '{fabric_name}': missing 'tiers' list")
+    tiers_cfg = fc["tiers"]
+    if not isinstance(tiers_cfg, list) or not tiers_cfg:
+        raise ValueError(f"fabric '{fabric_name}': 'tiers' must be a non-empty list")
+
+    tiers: List[SwitchTierSpec] = []
+    for i, tc in enumerate(tiers_cfg):
+        prefix = f"fabric '{fabric_name}' tier[{i}]"
+        validate_positive_int_fields(tc, ["ports"], prefix=prefix)
+        validate_nonnegative_float_fields(tc, ["alpha_us"], prefix=prefix)
+        validate_positive_float_fields(tc, ["bw_per_port_GBps"], prefix=prefix)
+        tiers.append(
+            SwitchTierSpec(
+                name=str(tc.get("name", f"tier{i}")),
+                ports=int(tc["ports"]),
+                bw_per_port_GBps=float(tc["bw_per_port_GBps"]),
+                alpha_us=float(tc["alpha_us"]),
+            )
+        )
+    return FabricSpec(name=fabric_name, tiers=tiers)
+
+
+def _normalize_chain(collective: str, value: Any) -> List[str]:
+    """Normalize a collective_fabrics value to a list of fabric names.
+
+    String sugar: `"nvlink5"` → `["nvlink5"]`.
     """
-    Build SystemSpec from a config dict.
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list) and all(isinstance(v, str) for v in value):
+        if not value:
+            raise ValueError(
+                f"collective '{collective}': fabric chain must be non-empty"
+            )
+        return list(value)
+    raise ValueError(
+        f"collective '{collective}': must map to a fabric name or list of fabric names, "
+        f"got {type(value).__name__}"
+    )
+
+
+def system_spec_from_json_dict(cfg: Dict[str, Any]) -> SystemSpec:
+    """Build SystemSpec from a config dict.
 
     Expected format:
 
@@ -34,25 +83,43 @@ def system_spec_from_json_dict(cfg: Dict[str, Any]) -> SystemSpec:
             "hbm_bandwidth_GBps": 3350.0,
             "peak_flops_TF": 1000.0
           },
-          "network_domains": {
-            "TP": { "name": "...", "alpha_us": 1.0, "bandwidth_GBps": 400.0 },
-            ...
+          "fabrics": {
+            "nvlink5": {
+              "tiers": [
+                {"name": "intra-rack-nvswitch", "ports": 72,
+                 "bw_per_port_GBps": 900.0, "alpha_us": 0.5}
+              ]
+            },
+            "ib": {
+              "tiers": [
+                {"name": "inter-rack-quantum-ib", "ports": 8,
+                 "bw_per_port_GBps": 400.0, "alpha_us": 2.5}
+              ]
+            }
+          },
+          "collective_fabrics": {
+            "TP": ["nvlink5", "ib"],
+            "EP": "nvlink5",
+            "SP": "nvlink5",
+            "PP": ["nvlink5", "ib"]
           }
         }
+
+    A collective's value may be a single string (single-fabric shorthand) or
+    an ordered list of fabric names (escalation chain, innermost first).
     """
     schema = cfg.get("schema", "llm_perf.system")
     if not schema.startswith("llm_perf.system"):
         raise ValueError(f"Unsupported system schema: {schema}")
 
-    # num_devices must be integer >= 1
     validate_positive_int_fields(
         cfg,
         ["num_devices"],
         prefix="system configuration",
     )
+    num_devices = int(cfg["num_devices"])
 
     dev_cfg = cfg["device"]
-    # Device numeric fields must be floats > 0.0
     validate_positive_float_fields(
         dev_cfg,
         ["hbm_capacity_GB", "hbm_bandwidth_GBps", "peak_flops_TF"],
@@ -65,41 +132,57 @@ def system_spec_from_json_dict(cfg: Dict[str, Any]) -> SystemSpec:
         peak_flops_TF=float(dev_cfg["peak_flops_TF"]),
     )
 
-    net_cfg = cfg["network_domains"]
-    network_domains: Dict[str, NetworkDomainSpec] = {}
-    for role, nd in net_cfg.items():
-        # alpha_us must be >= 0.0; bandwidth_GBps must be > 0.0
-        validate_nonnegative_float_fields(
-            nd,
-            ["alpha_us"],
-            prefix=f"network domain '{role}'",
+    if "fabrics" not in cfg:
+        raise ValueError("system configuration: missing 'fabrics' block")
+    if "collective_fabrics" not in cfg:
+        raise ValueError("system configuration: missing 'collective_fabrics' block")
+
+    fab_cfg = cfg["fabrics"]
+    if not isinstance(fab_cfg, dict) or not fab_cfg:
+        raise ValueError("'fabrics' must be a non-empty object")
+    fabrics: Dict[str, FabricSpec] = {}
+    for fabric_name, fc in fab_cfg.items():
+        fabrics[str(fabric_name)] = _parse_fabric(str(fabric_name), fc)
+
+    coll_cfg = cfg["collective_fabrics"]
+    if not isinstance(coll_cfg, dict):
+        raise ValueError("'collective_fabrics' must be an object")
+
+    # Validation: unknown collectives, missing collectives, dangling fabric refs.
+    unknown = set(coll_cfg.keys()) - set(COLLECTIVES)
+    if unknown:
+        raise ValueError(
+            f"collective_fabrics: unknown collective(s) {sorted(unknown)}; "
+            f"allowed: {list(COLLECTIVES)}"
         )
-        validate_positive_float_fields(
-            nd,
-            ["bandwidth_GBps"],
-            prefix=f"network domain '{role}'",
+    missing = set(COLLECTIVES) - set(coll_cfg.keys())
+    if missing:
+        raise ValueError(
+            f"collective_fabrics: missing required collective(s) {sorted(missing)}; "
+            f"all of {list(COLLECTIVES)} must be mapped"
         )
 
-        network_domains[role] = NetworkDomainSpec(
-            name=str(nd["name"]),
-            alpha_us=float(nd["alpha_us"]),
-            bandwidth_GBps=float(nd["bandwidth_GBps"]),
-        )
+    collective_fabrics: Dict[str, List[str]] = {}
+    for collective in COLLECTIVES:
+        chain = _normalize_chain(collective, coll_cfg[collective])
+        for fabric_name in chain:
+            if fabric_name not in fabrics:
+                raise ValueError(
+                    f"collective_fabrics['{collective}']: fabric '{fabric_name}' "
+                    f"not defined in 'fabrics'; known: {sorted(fabrics.keys())}"
+                )
+        collective_fabrics[collective] = chain
 
     return SystemSpec(
         name=str(cfg.get("name", "unnamed_system")),
         device=device,
-        num_devices=int(cfg["num_devices"]),
-        network_domains=network_domains,
+        num_devices=num_devices,
+        fabrics=fabrics,
+        collective_fabrics=collective_fabrics,
     )
 
 
 def load_system_spec(path: str | Path) -> SystemSpec:
-    """
-    Load SystemSpec from a JSON file.
-
-    Example:
-        system = load_system_spec("system.json")
-    """
+    """Load SystemSpec from a JSON file."""
     cfg = _load_json(path)
     return system_spec_from_json_dict(cfg)

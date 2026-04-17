@@ -2,7 +2,7 @@
 import math
 from dataclasses import dataclass
 from ..specs.model_spec import LlmModelSpec
-from ..specs.system_spec import SystemSpec
+from ..specs.system_spec import SystemSpec, span_tiers
 from ..specs.partition_spec import PartitionSpec
 from ..specs.tuner_spec import TuningSpec
 from ..utils import GB_TO_BYTES, TB_TO_FLOPS, US_TO_SECONDS
@@ -203,27 +203,31 @@ def compute_prefill_comm(
     n_EP = tuner.n_EP_collectives
     n_SP = tuner.n_SP_collectives
 
-    dom_PP = system.get_domain("PP")
-    dom_TP = system.get_domain("TP")
-    dom_EP = system.get_domain("EP")
-    dom_SP = system.get_domain("SP")
+    # Resolve EP group size up front so span_tiers sees the correct radix.
+    if model.moe is not None:
+        N_exp = max(1, model.moe.n_experts)
+        EP = min(EP, N_exp)
+        k_active = model.moe.k_active
+    else:
+        EP = 1
+        k_active = 1
 
-    a_PP = dom_PP.alpha_us * US_TO_SECONDS
-    a_TP = dom_TP.alpha_us * US_TO_SECONDS
-    a_EP = dom_EP.alpha_us * US_TO_SECONDS
-    a_SP = dom_SP.alpha_us * US_TO_SECONDS
+    def _cost(collective, group_size):
+        tiers = system.get_tier_chain(collective)
+        alpha_us, bw_GBps, _ = span_tiers(tiers, max(1, int(group_size)))
+        return alpha_us * US_TO_SECONDS, bw_GBps * GB_TO_BYTES
 
-    B_PP = dom_PP.bandwidth_GBps * GB_TO_BYTES
-    B_TP = dom_TP.bandwidth_GBps * GB_TO_BYTES
-    B_EP = dom_EP.bandwidth_GBps * GB_TO_BYTES
-    B_SP = dom_SP.bandwidth_GBps * GB_TO_BYTES
+    a_PP, B_PP = _cost("PP", 2)
+    a_TP, B_TP = _cost("TP", TP)
+    a_EP, B_EP = _cost("EP", EP)
+    a_SP, B_SP = _cost("SP", SP)
 
     tp_algorithm = getattr(tuner, "tp_algorithm", "ring").lower()
     ep_algorithm = getattr(tuner, "ep_algorithm", "ring").lower()
 
     # PP: S_input-scaled activation hop
     msg_PP = (S * H / TP) * b
-    t_PP = a_PP + msg_PP / B_PP if PP > 1 else 0.0
+    t_PP = a_PP + msg_PP / B_PP if (PP > 1 and B_PP > 0) else 0.0
 
     # TP: S_input-scaled all-reduce
     if TP > 1:
@@ -236,13 +240,6 @@ def compute_prefill_comm(
         t_TP = 0.0
 
     # EP
-    if model.moe is not None:
-        N_exp = max(1, model.moe.n_experts)
-        EP = min(EP, N_exp)
-        k_active = model.moe.k_active
-    else:
-        EP = 1
-        k_active = 1
     if EP > 1:
         msg_EP = k_active * S * H * b
         if ep_algorithm == "ring":

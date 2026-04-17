@@ -2,7 +2,7 @@
 """LLM performance modeling toolkit."""
 
 from .specs.model_spec import LlmModelSpec, MoESpec
-from .specs.system_spec import DeviceSpec, NetworkDomainSpec, SystemSpec
+from .specs.system_spec import DeviceSpec, FabricSpec, SwitchTierSpec, SystemSpec
 from .specs.partition_spec import PartitionSpec
 from .specs.tuner_spec import TuningSpec
 from .specs.overhead_spec import OverheadSpec
@@ -15,7 +15,8 @@ __all__ = [
     "LlmModelSpec",
     "MoESpec",
     "DeviceSpec",
-    "NetworkDomainSpec",
+    "FabricSpec",
+    "SwitchTierSpec",
     "SystemSpec",
     "PartitionSpec",
     "TuningSpec",

@@ -1,0 +1,25 @@
+{
+  "schema": "llm_perf.system",
+  "name": "gb200_nvl576_ideal_single_tier",
+  "num_devices": 576,
+  "device": {
+    "name": "GB200-NVL576-ideal",
+    "hbm_capacity_GB": 192.0,
+    "hbm_bandwidth_GBps": 8000.0,
+    "peak_flops_TF": 9000.0
+  },
+  "fabrics": {
+    "nvlink5-flat": {
+      "tiers": [
+        {"name": "flat-nvswitch-576", "ports": 576, "bw_per_port_GBps": 900.0, "alpha_us": 0.5}
+      ]
+    }
+  },
+  "collective_fabrics": {
+    "TP": "nvlink5-flat",
+    "EP": "nvlink5-flat",
+    "SP": "nvlink5-flat",
+    "PP": "nvlink5-flat"
+  },
+  "_comment": "Hypothetical 576-GPU scale-up domain flattened onto a single monolithic NVLink fabric — every pair of ranks enjoys intra-rack-class latency (0.5 us) and bandwidth (900 GB/s). Physically unrealizable at this radix; serves as the upper bound against which the realistic 2-tier NVL576 can be compared."
+}
