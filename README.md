@@ -24,6 +24,8 @@ The diagram above shows the components of an LLM inference cluster that `llm_per
 
 The **scale-up switch** within each cluster carries collective traffic for tensor parallelism (TP), expert parallelism (EP), and sequence parallelism (SP). The switching model accounts for effective per-port bandwidth under aggregate capacity constraints, latency (α), and the algorithm choice (ring vs. tree). See [`modeling/switching.md`](documentation/modeling/switching.md) and [`core/comm_model.py`](llm_perf/core/comm_model.py).
 
+**Current scope — single-tier scale-up only.** Each parallelism domain's `α_role` and `BW_role` today represent the *effective end-to-end* startup latency and per-port bandwidth across a **single switching tier** — e.g., one NVSwitch fabric inside an NVL72 rack, or a single UALink leaf. Multi-tier / hierarchical scale-up fabrics (intra-rack NVSwitch plus inter-rack NVL-domain switch, or Clos-style fat-trees with multiple switching layers) are not yet modeled and are on the roadmap; see [`modeling/switching.md`](documentation/modeling/switching.md) §1 "In scope / out of scope". Scale-out Ethernet/IB fabrics between scale-up domains are also out of scope here.
+
 ---
 
 ## Repository Layout
