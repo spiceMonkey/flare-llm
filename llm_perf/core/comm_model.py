@@ -2,7 +2,7 @@
 import math
 from dataclasses import dataclass
 from ..specs.model_spec import LlmModelSpec
-from ..specs.system_spec import SystemSpec
+from ..specs.system_spec import SystemSpec, span_tiers
 from ..specs.partition_spec import PartitionSpec
 from ..specs.tuner_spec import TuningSpec
 from ..utils import GB_TO_BYTES, US_TO_SECONDS
@@ -19,6 +19,17 @@ class CommResults:
     msg_TP_bytes: float
     msg_EP_bytes: float
     msg_SP_bytes: float
+
+
+def _fabric_cost(system: SystemSpec, collective: str, group_size: int) -> tuple[float, float]:
+    """Return (alpha_s, bw_bytes_per_s) for `collective` over `group_size` ranks.
+
+    Walks the concatenated tier chain of the collective's fabric list,
+    summing α and flooring bandwidth to the narrowest tier actually crossed.
+    """
+    tiers = system.get_tier_chain(collective)
+    alpha_us, bw_GBps, _ = span_tiers(tiers, max(1, int(group_size)))
+    return alpha_us * US_TO_SECONDS, bw_GBps * GB_TO_BYTES
 
 
 def compute_comm(
@@ -44,33 +55,7 @@ def compute_comm(
     n_EP = tuner.n_EP_collectives
     n_SP = tuner.n_SP_collectives
 
-    # Network domains
-    dom_PP = system.get_domain("PP")
-    dom_TP = system.get_domain("TP")
-    dom_EP = system.get_domain("EP")
-    dom_SP = system.get_domain("SP")
-
-    # Convert alpha from us to s
-    a_PP = dom_PP.alpha_us * US_TO_SECONDS
-    a_TP = dom_TP.alpha_us * US_TO_SECONDS
-    a_EP = dom_EP.alpha_us * US_TO_SECONDS
-    a_SP = dom_SP.alpha_us * US_TO_SECONDS
-
-    # Convert GB/s → bytes/s (decimal)
-    B_PP = dom_PP.bandwidth_GBps * GB_TO_BYTES
-    B_TP = dom_TP.bandwidth_GBps * GB_TO_BYTES
-    B_EP = dom_EP.bandwidth_GBps * GB_TO_BYTES
-    B_SP = dom_SP.bandwidth_GBps * GB_TO_BYTES
-    
-    # PP: shard-preserving hop of B tokens × (H/TP) activation bytes
-    msg_PP = B * (H / TP) * b
-    t_PP = a_PP + msg_PP / B_PP
-
-    # Algorithm choices (default to "ring" if fields are missing)
-    tp_algorithm = getattr(tuner, "tp_algorithm", "ring").lower()
-    ep_algorithm = getattr(tuner, "ep_algorithm", "ring").lower()
-
-    # EP: 2-pass all-to-all of size kH; default k=1 if no MoE
+    # Expert-parallel bookkeeping up front (EP group size feeds _fabric_cost)
     if model.moe is not None:
         N_exp = max(1, model.moe.n_experts)
         EP = min(EP, N_exp)
@@ -79,6 +64,23 @@ def compute_comm(
         N_exp = 1
         EP = 1
         k = 1
+
+    # Per-collective α (s) and BW (bytes/s) resolved against the relevant group size.
+    # PP is a point-to-point hop between adjacent stages → group size 2.
+    a_PP, B_PP = _fabric_cost(system, "PP", 2)
+    a_TP, B_TP = _fabric_cost(system, "TP", TP)
+    a_EP, B_EP = _fabric_cost(system, "EP", EP)
+    a_SP, B_SP = _fabric_cost(system, "SP", SP)
+
+    # PP: shard-preserving hop of B tokens × (H/TP) activation bytes
+    msg_PP = B * (H / TP) * b
+    t_PP = a_PP + msg_PP / B_PP if B_PP > 0 else 0.0
+
+    # Algorithm choices (default to "ring" if fields are missing)
+    tp_algorithm = getattr(tuner, "tp_algorithm", "ring").lower()
+    ep_algorithm = getattr(tuner, "ep_algorithm", "ring").lower()
+
+    # EP: 2-pass all-to-all of size kH; default k=1 if no MoE
     if EP > 1:
         # B tokens × k active experts × H activation bytes per expert
         msg_EP = B * k * H * b  # bytes per device
