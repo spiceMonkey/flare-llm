@@ -120,7 +120,7 @@ All seven case studies use **GPT-1.8T MoE @ FP4** on **GB200-class devices** (NV
 
 *Question: where does the Pareto frontier come from? What does the underlying point cloud look like?*
 
-Enumerates every valid `(PP, TP, EP, SP)` partition, sweeps `B` from 1 to the KV-paging max per partition, then extracts the upper-right envelope in (throughput/GPU, interactivity) space. Left panel shows the full cloud with the frontier overlaid; right panel colors the same cloud by pipeline parallelism (PP) so the regime segmentation is visible.
+Enumerates every valid `(PP, TP, EP, SP)` partition, sweeps `B` from 1 to the KV-paging max per partition, then extracts the upper-right envelope in (interactivity, throughput/GPU) space. Left panel shows the full cloud with the frontier overlaid; right panel colors the same cloud by pipeline parallelism (PP) so the regime segmentation is visible.
 
 **Headline:** at baseline GB200 NVL72, **91 valid partitions → 2,247 `(partition, B)` evaluations → 38 frontier points (~1.7% of the cloud)**. Of those 38, `PP=8 TP=8 EP=1` claims 34 and `PP=6 TP=4 EP=1` claims the remaining 4. PP dominates regime selection: shallow PP sits in the high-interactivity corner (low per-GPU throughput, small B), deep PP in the high-throughput corner (large B amortizes warmup). The later notebooks (`pareto_vs_io`, `pareto_vs_mem`, `pareto_vs_overhead`) re-run this exact enumeration once per hardware/overhead anchor and plot only the frontier — this notebook is what's underneath.
 
@@ -150,7 +150,7 @@ Device utilization is the silent cost — `DP = N // replica` is floored, so par
 
 *Question: how does the partition-optimal Pareto frontier move as you vary scale-up NVLink bandwidth and α?*
 
-Sweeps BW (1× → ~2.67× GB200 baseline) and α (1.0× → 0.25× baseline) as two panels. Enumerates all valid (PP, TP, EP, SP) partitions, finds the upper-right envelope in (throughput/GPU, interactivity) space, annotates winners.
+Sweeps BW (1× → ~2.67× GB200 baseline) and α (1.0× → 0.25× baseline) as two panels. Enumerates all valid (PP, TP, EP, SP) partitions, finds the upper-right envelope in (interactivity, throughput/GPU) space, annotates winners.
 
 **Headline:** the frontier shifts smoothly with I/O provisioning but winning partitions re-order at corners — low-BW regimes favor shallower PP and more TP locality; high-BW regimes favor deeper PP that exploits cheap cross-stage comm.
 
