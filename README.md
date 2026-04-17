@@ -36,6 +36,7 @@ The **scale-up switch** within each cluster carries collective traffic for tenso
 ├── pareto_vs_cluster_size.ipynb      — decode Pareto × cluster size (N)        (case study)
 ├── pareto_vs_io.ipynb                — decode Pareto × scale-up I/O sweep      (case study)
 ├── pareto_vs_mem.ipynb               — decode Pareto × HBM-BW sweep            (case study)
+├── pareto_vs_flops.ipynb             — decode Pareto × peak-FLOPS sweep        (case study)
 ├── pareto_vs_overhead.ipynb          — decode Pareto × framework overhead      (case study)
 ├── ttft_vs_io.ipynb                  — TTFT × mismatched-partition disagg I/O  (case study)
 ├── ttft_vs_chunk.ipynb               — TTFT × chunk-size sweep (co-lo)         (case study)
@@ -172,6 +173,22 @@ Sweeps HBM BW from 1× (8 TB/s, baseline) to 4× (32 TB/s) at fixed scale-up I/O
 | ideal (∞)   | `PP=6–8 TP=1` — TP collective is pure overhead |
 
 Scarce memory bandwidth favors wide TP to parallelize weight reads; abundant memory bandwidth makes the TP collective pure overhead.
+
+### `pareto_vs_flops.ipynb` — decode Pareto under peak-FLOPS scaling
+
+![decode Pareto vs. peak FLOPS at two context lengths](assets/pareto_vs_flops_short_vs_long.png)
+
+*Question: if GPU peak FLOPS grew without any change to HBM or scale-up I/O, how much further would the decode Pareto frontier push?*
+
+Sweeps peak FLOPS from 0.5× (H100-class ~4.5 PF) to 4× (~36 PF) at fixed HBM (8 TB/s) and scale-up I/O, plus an `ideal compute` (FLOPS → ∞) reference. Runs the same sweep at two context lengths to expose the regime boundary.
+
+**Headline (split by regime):**
+- **At `S`=8192 (left): all five curves overlap exactly** — peak FLOPS is a non-knob. `t_mem / t_compute` is 6×–1400× across every `B`, so the memory-bound asymptote pins the frontier. More FLOPS only widens the machine balance point further from the workload's per-`B` arithmetic intensity.
+- **At `S`=1024 (right): the right corner fans out** — shorter context shrinks `T_kv`'s slope in `B` ~8×, pushing per-`B` AI above GB200's 1125 FLOPs/byte balance. At `B`=8192 on 1× FLOPS the step flips compute-bound; 4× FLOPS then lifts high-`B` throughput/GPU from ~7850 → ~9550, tracing the ideal-compute ceiling.
+
+**Complementary read with `pareto_vs_mem`:** at long `S` this workload is memory-bound end-to-end, so HBM BW moves both corners and FLOPS moves neither. At short `S`, the corners split — memory BW still drives the high-interactivity corner, FLOPS drives the high-throughput corner.
+
+**Prefill / training are the opposite regime** — their attention compute grows as `S²` while KV traffic grows as `S`, putting arithmetic intensity orders of magnitude above any hardware balance point. FLOPS is the primary knob for TTFT and for training throughput. See `documentation/explaining/why_flops_doesnt_help_at_long_context.md` for the full AI / slope derivation and the decode-vs-prefill-vs-training contrast, and `documentation/explaining/frontier_convergence_at_high_b.md` for the $B^*$ story.
 
 ### `pareto_vs_overhead.ipynb` — decode Pareto under framework overhead
 
