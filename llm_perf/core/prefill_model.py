@@ -80,12 +80,14 @@ def compute_prefill_flops(
     if model.moe is not None:
         L_moe = model.moe.n_moe_layers if model.moe.n_moe_layers else L
         L_dense = L - L_moe
-        EP = min(EP, max(1, model.moe.n_experts))
+        N_exp = max(1, model.moe.n_experts)
+        EP = min(EP, N_exp)
         k = model.moe.k_active
         I_moe = model.moe.I_moe
     else:
         L_moe = 0
         L_dense = L
+        N_exp = 0
         k = 0
         I_moe = 0
 
@@ -96,16 +98,19 @@ def compute_prefill_flops(
     F_attn = 4 * S**2 * H
     F_ffn_dense = 6 * H * I_dense * S
     F_ffn_moe = 6 * H * k * I_moe * S
+    F_router_moe = 2 * H * N_exp * S  # unsharded H → N_exp gate GEMM (prefill.md §1.3.5)
 
     F_layer_dense = F_proj + F_attn + F_ffn_dense
-    F_layer_moe = F_proj + F_attn + F_ffn_moe
+    F_layer_moe = F_proj + F_attn + F_ffn_moe + F_router_moe
 
-    # Per-device with parallelism sharding
+    # Per-device with parallelism sharding. Router is unsharded (replicated
+    # across TP ranks) — matches the decode convention (see flops_model.py):
+    # H → N_exp is tiny, no point sharding it.
     F_device_dense = (L_dense / PP) * (
         F_proj / TP + F_attn / (TP * SP) + F_ffn_dense / TP
     )
     F_device_moe = (L_moe / PP) * (
-        F_proj / TP + F_attn / (TP * SP) + F_ffn_moe / (TP * EP)
+        F_proj / TP + F_attn / (TP * SP) + F_ffn_moe / (TP * EP) + F_router_moe
     )
 
     F_prefill_device = F_device_dense + F_device_moe

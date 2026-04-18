@@ -87,9 +87,14 @@ class LlmPerfEquations:
             "expr": " T_theta * R_gpu / (F_token * B_eff_mem - T_kv * R_gpu) ",
         },
         "F_prefill_device": {
-            "description": "Per-device prefill FLOPs.",
-            "latex": r"F_{\text{prefill,device}} = \frac{L}{PP}\left[\frac{(4H^2 + 4HH_{kv})S}{TP} + \frac{6HI_{\text{eff}}S}{TP \cdot EP} + \frac{4S^2 H}{TP \cdot SP}\right]",
-            "expr": " (L/PP) * ((4*H**2+4*H*H_kv)*S/TP + 6*H*I_eff*S/(TP*EP) + 4*S**2*H/(TP*SP)) ",
+            "description": "Per-device prefill FLOPs, split by dense vs MoE layers. MoE adds an unsharded router term.",
+            "latex": r"F_{\text{prefill,device}} = \frac{L_{\text{dense}}}{PP}\left[\frac{(4H^2 + 4HH_{kv} + 6HI_{\text{dense}})S}{TP} + \frac{4S^2 H}{TP \cdot SP}\right] + \frac{L_{\text{moe}}}{PP}\left[\frac{(4H^2 + 4HH_{kv})S}{TP} + \frac{6HkI_{\text{moe}}S}{TP \cdot EP} + \frac{4S^2 H}{TP \cdot SP} + 2HN_{\text{exp}}S\right]",
+            "expr": " (L_dense/PP) * ((4*H**2+4*H*H_kv+6*H*I_dense)*S/TP + 4*S**2*H/(TP*SP)) + (L_moe/PP) * ((4*H**2+4*H*H_kv)*S/TP + 6*H*k*I_moe*S/(TP*EP) + 4*S**2*H/(TP*SP) + 2*H*N_exp*S) ",
+        },
+        "F_router_prefill": {
+            "description": "Per-MoE-layer prefill router FLOPs (unsharded across TP; zero for dense layers).",
+            "latex": r"F_{\text{router,prefill}} = 2 H N_{\text{exp}} S_{\text{input}}",
+            "expr": " 2 * H * N_exp * S_input ",
         },
         "t_prefill": {
             "description": "Hardware prefill latency (single-request, co-located).",
