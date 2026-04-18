@@ -28,7 +28,7 @@ The **scale-up switch** within each cluster carries collective traffic for tenso
 
 ---
 
-## Key Equations
+## Key Modeling Equations
 
 One line per component in the architecture diagram above. Full derivations live in `documentation/modeling/*.md`; this table is a cross-reference, not a second source of truth.
 
