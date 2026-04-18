@@ -5,10 +5,12 @@ from ..specs.system_spec import SystemSpec
 from ..specs.partition_spec import PartitionSpec
 from ..specs.tuner_spec import TuningSpec
 from ..core.memory_model import compute_memory, MemoryResults
-from ..core.flops_model import compute_flops, FlopsResults
-from ..core.traffic_model import compute_traffic, TrafficResults
-from ..core.comm_model import compute_comm, CommResults
-from ..core.latency_model import compute_latency, LatencyResults
+from ..core.decode_model import (
+    compute_flops, FlopsResults,
+    compute_traffic, TrafficResults,
+    compute_comm, CommResults,
+    compute_latency, LatencyResults,
+)
 
 
 @dataclass
