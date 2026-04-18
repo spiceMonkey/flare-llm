@@ -17,8 +17,11 @@ below reproduces that flatten step verbatim — no rounding, no
 intermediate arithmetic reshuffling.
 
 Torus and dragonfly tiers route into their respective primitives.
-Phase D wires in `dragonfly_*` properly; until then, dragonfly tiers
-fall back to the crossbar-flatten bound with a `UserWarning`.
+Pure-dragonfly tier sets (a single DragonflyTier, matching the canonical
+balanced dragonfly parameterization) dispatch to `dragonfly_*`; multi-
+dragonfly chains and genuinely mixed crossbar/torus/dragonfly chains
+still fall back to the crossbar-flatten bound with a `UserWarning`
+(Phase E expands coverage to explicit hybrid compositions).
 """
 
 from __future__ import annotations
@@ -29,6 +32,9 @@ from typing import List, Tuple
 from ...specs.system_spec import TierSpec, span_tiers
 from ...utils import GB_TO_BYTES, US_TO_SECONDS
 from .collective_cost import (
+    dragonfly_all_gather,
+    dragonfly_all_reduce,
+    dragonfly_moe_all_to_all,
     p2p_hop,
     ring_all_gather,
     ring_all_reduce,
@@ -111,8 +117,15 @@ def cost_collective(
             )
         return _torus_cost(op, M, G, crossed)
 
-    # Anything else (dragonfly-only, or mixed): Phase C does not yet cost
-    # these precisely. Fall back to crossbar-flatten so the interface is
+    # Pure dragonfly, single tier: dispatch to dragonfly primitives (Phase D).
+    # Multi-dragonfly chains fall through to the mixed-topology fallback —
+    # their hierarchical composition isn't in §3.4 and is reserved for a
+    # future pass.
+    if topologies == {"dragonfly"} and len(crossed) == 1:
+        return _dragonfly_cost(op, M, G, crossed[0], algorithm, worst_case)
+
+    # Anything else (multi-dragonfly, or genuinely mixed): Phase D does not
+    # cost these precisely. Fall back to crossbar-flatten so the interface is
     # live and numerically bounded; emit a warning so callers notice.
     warnings.warn(
         f"cost_collective: topology mix {sorted(topologies)} not yet "
@@ -196,6 +209,89 @@ def _torus_cost(op: str, M: float, G: int, crossed: List[TierSpec]) -> float:
         return torus_all_gather(M, subdims, alpha_s, bw_Bps)
     if op == "moe_a2a":
         return torus_moe_all_to_all(M, subdims, alpha_s, bw_Bps)
+    raise AssertionError(f"unreachable op={op!r}")  # caller validated
+
+
+# ────────────────────────────────────────────────────────────
+# Dragonfly path (Phase D primitives)
+# ────────────────────────────────────────────────────────────
+
+def _dragonfly_cost(
+    op: str, M: float, G: int, tier, algorithm: str, worst_case: bool
+) -> float:
+    """Cost a collective on a single DragonflyTier using the three-tier
+    hierarchical decomposition (switching.md §9.4).
+
+    The full tier reach is `p·a·g`; for `G < reach` we truncate the tier
+    triple to the innermost levels that cover `G`. A group of size `G ≤ p`
+    stays inside one router; `p < G ≤ p·a` fills one group; larger `G` uses
+    the full (p, a, g_eff) triple. This keeps dispatcher semantics aligned
+    with span_tiers: `G` is the authoritative group size, and the cost
+    formula only includes tiers the collective actually crosses.
+    """
+    p = tier.p_endpoints
+    a = tier.a_routers
+    g = tier.g_groups
+    if G <= p:
+        p_eff, a_eff, g_eff = G, 1, 1
+    elif G <= p * a:
+        # G covers at most one group — L1 rings the subset of routers needed.
+        # Integer alignment (G multiple of p) gives exact; misaligned G is
+        # conservatively rounded up (one extra router participates).
+        p_eff = p
+        a_eff = (G + p - 1) // p
+        g_eff = 1
+    else:
+        p_eff = p
+        a_eff = a
+        g_eff = (G + p * a - 1) // (p * a)
+        if g_eff > g:
+            g_eff = g
+
+    alpha_r_s = tier.alpha_us * US_TO_SECONDS
+    bw_r_Bps = tier.bw_per_port_GBps * GB_TO_BYTES
+    alpha_l_s = tier.alpha_local_us * US_TO_SECONDS
+    bw_l_Bps = tier.bw_local_GBps * GB_TO_BYTES
+    alpha_g_s = tier.alpha_global_us * US_TO_SECONDS
+    bw_g_Bps = tier.bw_global_GBps * GB_TO_BYTES
+
+    if op == "p2p":
+        # Conservative single-hop: use the slowest tier crossed.
+        if g_eff > 1:
+            return p2p_hop(M, alpha_g_s, bw_g_Bps)
+        if a_eff > 1:
+            return p2p_hop(M, alpha_l_s, bw_l_Bps)
+        return p2p_hop(M, alpha_r_s, bw_r_Bps)
+    if op == "all_reduce":
+        if algorithm not in ("ring", "tree"):
+            raise ValueError(f"Unsupported algorithm for all_reduce: {algorithm!r}")
+        # Tree variant is not modeled per-tier on dragonfly in this pass;
+        # fall back to the hierarchical ring (conservative vs tree on large g).
+        return dragonfly_all_reduce(
+            M, p_eff, a_eff, g_eff,
+            alpha_r_s, bw_r_Bps,
+            alpha_l_s, bw_l_Bps,
+            alpha_g_s, bw_g_Bps,
+            worst_case=worst_case,
+        )
+    if op == "all_gather":
+        return dragonfly_all_gather(
+            M, p_eff, a_eff, g_eff,
+            alpha_r_s, bw_r_Bps,
+            alpha_l_s, bw_l_Bps,
+            alpha_g_s, bw_g_Bps,
+            worst_case=worst_case,
+        )
+    if op == "moe_a2a":
+        if algorithm not in ("ring", "tree"):
+            raise ValueError(f"Unsupported algorithm for moe_a2a: {algorithm!r}")
+        return dragonfly_moe_all_to_all(
+            M, p_eff, a_eff, g_eff,
+            alpha_r_s, bw_r_Bps,
+            alpha_l_s, bw_l_Bps,
+            alpha_g_s, bw_g_Bps,
+            worst_case=worst_case,
+        )
     raise AssertionError(f"unreachable op={op!r}")  # caller validated
 
 

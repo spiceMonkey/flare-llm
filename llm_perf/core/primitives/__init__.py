@@ -18,6 +18,9 @@ from .collective_cost import (
     torus_all_reduce,
     torus_all_gather,
     torus_moe_all_to_all,
+    dragonfly_all_reduce,
+    dragonfly_all_gather,
+    dragonfly_moe_all_to_all,
     aggregate_per_stage,
 )
 from .weight_footprint import (
@@ -40,6 +43,9 @@ __all__ = [
     "torus_all_reduce",
     "torus_all_gather",
     "torus_moe_all_to_all",
+    "dragonfly_all_reduce",
+    "dragonfly_all_gather",
+    "dragonfly_moe_all_to_all",
     "aggregate_per_stage",
     # footprints
     "dense_weight_bytes",

@@ -160,6 +160,106 @@ def torus_moe_all_to_all(
     return diam * alpha_s + d_max * M / (4 * bw_Bps)
 
 
+def dragonfly_all_reduce(
+    M: float,
+    p: int, a: int, g: int,
+    alpha_r_s: float, bw_r_Bps: float,
+    alpha_l_s: float, bw_l_Bps: float,
+    alpha_g_s: float, bw_g_Bps: float,
+    worst_case: bool = False,
+) -> float:
+    """Hierarchical 3-level ring AR on a balanced dragonfly — switching.md §9.4.
+
+        t_AR = 2(p-1)α_r + 2(p-1)/p · M/BW_r           (L0 intra-router)
+             + 2(a-1)α_l + 2(a-1)/a · (M/p)/BW_l       (L1 intra-group)
+             + c·[2(g-1)α_g + 2(g-1)/g · (M/(p·a))/BW_g]   (L2 inter-group)
+
+    where `c = 2` under `worst_case=True` (Valiant routing: L2 α-hops and
+    effective BW both double) and `c = 1` otherwise (adaptive minimal
+    routing under structured admissible traffic, [KDSA08 §3-4, JAIN22 §4]).
+
+    Payload shrinks down the tiers as L0 RS → L1 RS: by factor p after L0,
+    then by factor a after L1, so L2 sees M/(p·a) per rank. Trivial tiers
+    (p=1, a=1, or g=1) contribute zero — i.e. `dragonfly_all_reduce` with
+    a=g=1 reduces to `ring_all_reduce(M, p, α_r, BW_r)`.
+    """
+    if p * a * g <= 1:
+        return 0.0
+    t = 0.0
+    if p > 1 and bw_r_Bps > 0:
+        t += 2 * (p - 1) * alpha_r_s + 2 * ((p - 1) / p) * (M / bw_r_Bps)
+    if a > 1 and bw_l_Bps > 0:
+        t += 2 * (a - 1) * alpha_l_s + 2 * ((a - 1) / a) * ((M / p) / bw_l_Bps)
+    if g > 1 and bw_g_Bps > 0:
+        l2 = 2 * (g - 1) * alpha_g_s + 2 * ((g - 1) / g) * ((M / (p * a)) / bw_g_Bps)
+        t += 2 * l2 if worst_case else l2
+    return t
+
+
+def dragonfly_all_gather(
+    M: float,
+    p: int, a: int, g: int,
+    alpha_r_s: float, bw_r_Bps: float,
+    alpha_l_s: float, bw_l_Bps: float,
+    alpha_g_s: float, bw_g_Bps: float,
+    worst_case: bool = False,
+) -> float:
+    """Hierarchical 3-level ring AG on a balanced dragonfly — switching.md §9.4.
+
+        t_AG = (p-1)α_r + (p-1) · M/BW_r                 (L0 intra-router)
+             + (a-1)α_l + (a-1) · (p·M)/BW_l             (L1 intra-group)
+             + c·[(g-1)α_g + (g-1) · (p·a·M)/BW_g]       (L2 inter-group)
+
+    Per-rank shard grows by factor p after L0 AG and by factor p·a after L1,
+    so L2 sees (p·a·M) per rank. `c = 2` under worst_case (Valiant L2 BW
+    halving), else `c = 1`. Reduces to `ring_all_gather(M, p, α_r, BW_r)`
+    when a=g=1.
+    """
+    if p * a * g <= 1:
+        return 0.0
+    t = 0.0
+    if p > 1 and bw_r_Bps > 0:
+        t += (p - 1) * alpha_r_s + (p - 1) * (M / bw_r_Bps)
+    if a > 1 and bw_l_Bps > 0:
+        t += (a - 1) * alpha_l_s + (a - 1) * ((p * M) / bw_l_Bps)
+    if g > 1 and bw_g_Bps > 0:
+        l2 = (g - 1) * alpha_g_s + (g - 1) * ((p * a * M) / bw_g_Bps)
+        t += 2 * l2 if worst_case else l2
+    return t
+
+
+def dragonfly_moe_all_to_all(
+    M: float,
+    p: int, a: int, g: int,
+    alpha_r_s: float, bw_r_Bps: float,
+    alpha_l_s: float, bw_l_Bps: float,
+    alpha_g_s: float, bw_g_Bps: float,
+    worst_case: bool = False,
+) -> float:
+    """Hierarchical 3-level MoE A2A on a balanced dragonfly — switching.md §9.4.
+
+    Same three-tier structure as `dragonfly_all_reduce`; each tier runs
+    Dispatch+Combine on the payload arriving at that tier:
+
+        t_A2A = 2(p-1)α_r + 2(p-1)/p · M/BW_r            (L0)
+              + 2(a-1)α_l + 2(a-1)/a · (M/p)/BW_l        (L1)
+              + c·[2(g-1)α_g + 2(g-1)/g · (M/(p·a))/BW_g] (L2)
+
+    L2 typically dominates for MoE A2A because expert routing is often
+    adversarial relative to the dragonfly's uniform-admissible assumption;
+    `worst_case=True` (Valiant doubling) is more frequently justified here
+    than for AR. Mirrors the A2A ≡ AR formula identity already used in
+    `ring_moe_all_to_all` / `ring_all_reduce`.
+    """
+    return dragonfly_all_reduce(
+        M, p, a, g,
+        alpha_r_s, bw_r_Bps,
+        alpha_l_s, bw_l_Bps,
+        alpha_g_s, bw_g_Bps,
+        worst_case=worst_case,
+    )
+
+
 def aggregate_per_stage(
     L: int,
     L_moe: int,
