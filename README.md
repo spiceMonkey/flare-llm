@@ -16,15 +16,31 @@ The diagram above shows the components of an LLM inference cluster that `llm_per
 
 **Prefill Cluster** is the compute-heavy phase that processes the full input prompt in one (or multiple chunked) forward passes. Each device runs the same transformer layers but at sequence-length `S` rather than single-token decode. Prefill FLOPs scale quadratically with `S` in the attention block and linearly in the FFN/projection layers. See [`modeling/prefill.md`](documentation/modeling/prefill.md) and [`core/prefill_model.py`](llm_perf/core/prefill_model.py).
 
-**Decode Cluster** is the memory-bandwidth-bound autoregressive phase. Devices are connected via a scale-up switch that carries TP, EP, and SP collectives; pipeline-parallel (PP) stages communicate via point-to-point sends. Data parallelism (DP) replicates the full pipeline to increase throughput without affecting per-request latency. The roofline model inside each device balances compute time against HBM read time, and the overlap-aware latency model hides communication behind whichever is the bottleneck. See [`modeling/tpot.md`](documentation/modeling/tpot.md) and [`core/latency_model.py`](llm_perf/core/latency_model.py).
+**Decode Cluster** is the memory-bandwidth-bound autoregressive phase. Devices are connected via a scale-up switch that carries TP, EP, and SP collectives; pipeline-parallel (PP) stages communicate via point-to-point sends. Data parallelism (DP) replicates the full pipeline to increase throughput without affecting per-request latency. The roofline model inside each device balances compute time against HBM read time, and the overlap-aware latency model hides communication behind whichever is the bottleneck. See [`modeling/decode.md`](documentation/modeling/decode.md) and [`core/decode_model.py`](llm_perf/core/decode_model.py).
 
 **KV Transfer** interconnect bridges the two clusters in a disaggregated deployment. When prefill and decode run on separate device groups, the KV cache produced during prefill must be shipped to the decode cluster before autoregressive generation can begin. The transfer cost (startup latency α + bulk BW) is modeled in [`modeling/e2e.md`](documentation/modeling/e2e.md) and can dominate TTFT for short prompts or low-bandwidth fabrics.
 
 **Distributed KV Cache** spans HBM, host DRAM, and SSD tiers. `llm_perf` models PagedAttention-style block accounting — block size, per-sequence block count, internal fragmentation, and effective HBM capacity after subtracting weights and activations — to determine the maximum concurrent-sequence batch a given partition can serve. See [`modeling/kv.md`](documentation/modeling/kv.md) and [`core/kv_paging_model.py`](llm_perf/core/kv_paging_model.py).
 
-The **scale-up switch** within each cluster carries collective traffic for tensor parallelism (TP), expert parallelism (EP), and sequence parallelism (SP). The switching model accounts for effective per-port bandwidth under aggregate capacity constraints, latency (α), and the algorithm choice (ring vs. tree). See [`modeling/switching.md`](documentation/modeling/switching.md) and [`core/comm_model.py`](llm_perf/core/comm_model.py).
+The **scale-up switch** within each cluster carries collective traffic for tensor parallelism (TP), expert parallelism (EP), and sequence parallelism (SP). The switching model accounts for effective per-port bandwidth under aggregate capacity constraints, latency (α), and the algorithm choice (ring vs. tree). See [`modeling/switching.md`](documentation/modeling/switching.md) and [`core/primitives/collective_cost.py`](llm_perf/core/primitives/collective_cost.py).
 
 **Hierarchical scale-up.** Each parallelism domain is described by an ordered list of switching tiers (innermost first), each with its own radix `P_i`, per-port bandwidth `BW_i`, and latency `α_i`. A collective over `G` ranks crosses the minimum number of tiers needed to reach all ranks, pays the sum of those tiers' α values, and is bandwidth-limited by the narrowest crossed tier. A single-tier list reproduces the legacy flat `(α_role, BW_role)` model exactly; multi-tier configurations (e.g. NVL72 intra-rack NVSwitch + inter-rack aggregation) are supported via a `"tiers": [...]` JSON form. See [`modeling/switching.md`](documentation/modeling/switching.md) §7 "Multi-tier extension" and the `pareto_vs_scale_up_tier` case study for a worked example. Topology-explicit networks (torus, dragonfly) and scale-out Ethernet/IB fabrics between scale-up domains remain out of scope.
+
+---
+
+## Key Equations
+
+One line per component in the architecture diagram above. Full derivations live in `documentation/modeling/*.md`; this table is a cross-reference, not a second source of truth.
+
+| Component | Key equation(s) | Doc |
+|---|---|---|
+| Serving Framework | $\text{TTFT} \mathrel{+}= t_{\text{sched}} + t_{\text{tok}} + t_{\text{detok}}$; $\text{TPOT} \mathrel{+}= t_{\text{graph}} + t_{\text{sample}}$ — per-request terms land in TTFT, per-step terms land in TPOT | [`framework.md`](documentation/modeling/framework.md) |
+| Prefill Cluster | $t_{\text{prefill}} = \max(t_{\text{compute}}, t_{\text{mem}}) + t_{\text{prefill,comm}} + t_{\text{pipeline,warmup}}$; prefill FLOPs scale as $S$ (FFN/proj) $+ S^2$ (attention), KV traffic scales as $S$ | [`prefill.md`](documentation/modeling/prefill.md) |
+| Decode Cluster | $t_{\text{local}} = \max(t_{\text{compute}}, t_{\text{mem}})$; $t_{\text{comm}} = t_{\text{TP}} + t_{\text{EP}} + t_{\text{SP}} + t_{\text{PP}}$ (per-role collectives summed per pipeline stage, each priced by the scale-up switch row below); $t_{\text{token}} = t_{\text{local}} + \max(0,\, t_{\text{comm}} - \rho \cdot t_{\text{local}})$; $\text{TPOT} = t_{\text{token}} / B$; memory→compute crossover at $B^{\star} = T_{\theta} \cdot R \,/\, (F_{\text{token}} \cdot \text{BW}_{\text{HBM}} - T_{\text{kv}} \cdot R)$ | [`decode.md`](documentation/modeling/decode.md) |
+| Scale-up Switch | $t_{\text{coll}}(M, G) = \alpha_{\text{span}}(G) + \beta(\text{algo}, G) \cdot M \,/\, \text{BW}_{\text{span}}(G)$ with $\beta_{\text{ring-AR}} = 2(G-1)/G$, $\beta_{\text{A2A}} = (G-1)/G$, $\beta_{\text{P2P}} = 1$; $(\alpha_{\text{span}}, \text{BW}_{\text{span}})$ comes from flattening the fabric tier-chain, innermost first | [`switching.md`](documentation/modeling/switching.md) |
+| KV Transfer | $t_{\text{KV}} = \alpha_{\text{disagg}} + M_{\text{KV}} / \text{BW}_{\text{disagg}}$ with $M_{\text{KV}} = (L/\text{PP}) \cdot 2 S \cdot H_{\text{kv}} \cdot b$ (0 for co-located) | [`e2e.md`](documentation/modeling/e2e.md) |
+| Distributed KV Cache | $N_{\text{seq,max}} = \lfloor M_{\text{avail}} \,/\, (N_{\text{blocks}} \cdot M_{\text{block}} \cdot \varphi_{\text{avg}}) \rfloor$ where $M_{\text{avail}} = \text{HBM} - M_{\theta} - M_{\text{act}} - M_{\text{sys}}$ and $\varphi_{\text{avg}} = 1 + B_{\text{blk}} \,/\, (2 S)$ | [`kv.md`](documentation/modeling/kv.md) |
+| E2E Assembly | $\text{E2E}(N_{\text{out}}) = \text{TTFT} + (N_{\text{out}} - 1) \cdot \text{TPOT}$; $\text{throughput/GPU} = \text{TTPS} / N_{\text{GPUs}}$; $\text{interactivity} = 1 / \text{TPOT}$ | [`e2e.md`](documentation/modeling/e2e.md) |
 
 ---
 
@@ -44,7 +60,7 @@ The **scale-up switch** within each cluster carries collective traffic for tenso
 ├── ttft_vs_io.ipynb                  — TTFT × mismatched-partition disagg I/O  (case study)
 ├── ttft_vs_chunk.ipynb               — TTFT × chunk-size sweep (co-lo)         (case study)
 ├── documentation/
-│   ├── modeling/                     — methodology derivations (notation, tpot, prefill, e2e, kv, framework, dram3d)
+│   ├── modeling/                     — methodology derivations (notation, decode, prefill, e2e, kv, framework, dram3d)
 │   └── explaining/                   — design-intent walkthroughs
 ├── scripts/convert_hf_model.py       — HF→llm_perf model converter
 └── llm_perf/
@@ -54,12 +70,10 @@ The **scale-up switch** within each cluster carries collective traffic for tenso
     │   └── e2e_calculator.py         — TTFT/TPOT/throughput assembly
     ├── core/
     │   ├── memory_model.py           — M_θ, M_act, M_kv, fits_in_HBM
-    │   ├── flops_model.py            — F_token, F_prefill
-    │   ├── traffic_model.py          — T_θ, T_act, T_kv
-    │   ├── comm_model.py             — TP/EP/SP/PP collective times
-    │   ├── latency_model.py          — roofline + overlap-aware t_token, TPOT, B*
-    │   ├── prefill_model.py          — prefill stack incl. chunked prefill
-    │   └── kv_paging_model.py        — paged-attention block accounting
+    │   ├── decode_model.py           — decode FLOPs, traffic, comm, roofline + overlap-aware TPOT, B*
+    │   ├── prefill_model.py          — prefill FLOPs, traffic, comm, latency (incl. chunked prefill)
+    │   ├── kv_paging_model.py        — paged-attention block accounting
+    │   └── primitives/               — phase-agnostic physics (weight/KV footprint, linear FLOPs, collective cost)
     ├── database/                     — model / system / partition / tuner JSONs
     ├── specs/                        — LlmModelSpec, SystemSpec, PartitionSpec, TuningSpec, OverheadSpec, DisaggSpec
     ├── io/                           — JSON loaders + list helpers per schema
