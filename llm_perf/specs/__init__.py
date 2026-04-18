@@ -1,6 +1,15 @@
 
 from .model_spec import LlmModelSpec, MoESpec
-from .system_spec import DeviceSpec, FabricSpec, SwitchTierSpec, SystemSpec
+from .system_spec import (
+    CrossbarTier,
+    DeviceSpec,
+    DragonflyTier,
+    FabricSpec,
+    SwitchTierSpec,
+    SystemSpec,
+    TierSpec,
+    TorusTier,
+)
 from .partition_spec import PartitionSpec
 from .tuner_spec import TuningSpec
 from .overhead_spec import OverheadSpec
@@ -12,6 +21,10 @@ __all__ = [
     "DeviceSpec",
     "FabricSpec",
     "SwitchTierSpec",
+    "CrossbarTier",
+    "TorusTier",
+    "DragonflyTier",
+    "TierSpec",
     "SystemSpec",
     "PartitionSpec",
     "TuningSpec",

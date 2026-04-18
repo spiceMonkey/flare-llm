@@ -6,10 +6,14 @@ from typing import Any, Dict, List
 
 from ..specs.system_spec import (
     COLLECTIVES,
+    CrossbarTier,
     DeviceSpec,
+    DragonflyTier,
     FabricSpec,
     SwitchTierSpec,
     SystemSpec,
+    TierSpec,
+    TorusTier,
 )
 from ..utils import (
     validate_positive_int_fields,
@@ -24,28 +28,99 @@ def _load_json(path: str | Path) -> Dict[str, Any]:
         return json.load(f)
 
 
+def _parse_crossbar_tier(prefix: str, name: str, tc: Dict[str, Any]) -> CrossbarTier:
+    validate_positive_int_fields(tc, ["ports"], prefix=prefix)
+    validate_nonnegative_float_fields(tc, ["alpha_us"], prefix=prefix)
+    validate_positive_float_fields(tc, ["bw_per_port_GBps"], prefix=prefix)
+    return CrossbarTier(
+        name=name,
+        ports=int(tc["ports"]),
+        bw_per_port_GBps=float(tc["bw_per_port_GBps"]),
+        alpha_us=float(tc["alpha_us"]),
+    )
+
+
+def _parse_torus_tier(prefix: str, name: str, tc: Dict[str, Any]) -> TorusTier:
+    if "dims" not in tc:
+        raise ValueError(f"{prefix}: torus tier missing 'dims' tuple")
+    dims_cfg = tc["dims"]
+    if not isinstance(dims_cfg, list) or not dims_cfg:
+        raise ValueError(f"{prefix}: 'dims' must be a non-empty list of positive ints")
+    dims: List[int] = []
+    for j, d in enumerate(dims_cfg):
+        if not isinstance(d, int) or d <= 0:
+            raise ValueError(f"{prefix}: dims[{j}] must be a positive int, got {d!r}")
+        dims.append(int(d))
+    validate_nonnegative_float_fields(tc, ["alpha_us"], prefix=prefix)
+    validate_positive_float_fields(tc, ["bw_per_port_GBps"], prefix=prefix)
+    return TorusTier(
+        name=name,
+        dims=tuple(dims),
+        bw_per_port_GBps=float(tc["bw_per_port_GBps"]),
+        alpha_us=float(tc["alpha_us"]),
+    )
+
+
+def _parse_dragonfly_tier(prefix: str, name: str, tc: Dict[str, Any]) -> DragonflyTier:
+    validate_positive_int_fields(
+        tc, ["p_endpoints", "a_routers", "h_global", "g_groups"], prefix=prefix
+    )
+    validate_nonnegative_float_fields(
+        tc, ["alpha_us", "alpha_local_us", "alpha_global_us"], prefix=prefix
+    )
+    validate_positive_float_fields(
+        tc, ["bw_per_port_GBps", "bw_local_GBps", "bw_global_GBps"], prefix=prefix
+    )
+    return DragonflyTier(
+        name=name,
+        p_endpoints=int(tc["p_endpoints"]),
+        a_routers=int(tc["a_routers"]),
+        h_global=int(tc["h_global"]),
+        g_groups=int(tc["g_groups"]),
+        bw_per_port_GBps=float(tc["bw_per_port_GBps"]),
+        alpha_us=float(tc["alpha_us"]),
+        alpha_local_us=float(tc["alpha_local_us"]),
+        alpha_global_us=float(tc["alpha_global_us"]),
+        bw_local_GBps=float(tc["bw_local_GBps"]),
+        bw_global_GBps=float(tc["bw_global_GBps"]),
+    )
+
+
+_TOPOLOGY_PARSERS = {
+    "crossbar": _parse_crossbar_tier,
+    "torus": _parse_torus_tier,
+    "dragonfly": _parse_dragonfly_tier,
+}
+
+
+def _parse_tier(prefix: str, name: str, tc: Dict[str, Any]) -> TierSpec:
+    topology = str(tc.get("topology", "crossbar"))
+    parser = _TOPOLOGY_PARSERS.get(topology)
+    if parser is None:
+        raise ValueError(
+            f"{prefix}: unknown topology {topology!r}; "
+            f"supported: {sorted(_TOPOLOGY_PARSERS)}"
+        )
+    return parser(prefix, name, tc)
+
+
 def _parse_fabric(fabric_name: str, fc: Dict[str, Any]) -> FabricSpec:
-    """Parse one fabric entry. Requires a non-empty 'tiers' list."""
+    """Parse one fabric entry. Requires a non-empty 'tiers' list.
+
+    Each tier may declare `"topology": "crossbar" | "torus" | "dragonfly"`;
+    the field defaults to `"crossbar"` so existing system JSONs parse unchanged.
+    """
     if "tiers" not in fc:
         raise ValueError(f"fabric '{fabric_name}': missing 'tiers' list")
     tiers_cfg = fc["tiers"]
     if not isinstance(tiers_cfg, list) or not tiers_cfg:
         raise ValueError(f"fabric '{fabric_name}': 'tiers' must be a non-empty list")
 
-    tiers: List[SwitchTierSpec] = []
+    tiers: List[TierSpec] = []
     for i, tc in enumerate(tiers_cfg):
         prefix = f"fabric '{fabric_name}' tier[{i}]"
-        validate_positive_int_fields(tc, ["ports"], prefix=prefix)
-        validate_nonnegative_float_fields(tc, ["alpha_us"], prefix=prefix)
-        validate_positive_float_fields(tc, ["bw_per_port_GBps"], prefix=prefix)
-        tiers.append(
-            SwitchTierSpec(
-                name=str(tc.get("name", f"tier{i}")),
-                ports=int(tc["ports"]),
-                bw_per_port_GBps=float(tc["bw_per_port_GBps"]),
-                alpha_us=float(tc["alpha_us"]),
-            )
-        )
+        tier_name = str(tc.get("name", f"tier{i}"))
+        tiers.append(_parse_tier(prefix, tier_name, tc))
     return FabricSpec(name=fabric_name, tiers=tiers)
 
 
