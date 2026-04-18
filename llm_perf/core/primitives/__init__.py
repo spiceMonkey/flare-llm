@@ -15,6 +15,9 @@ from .collective_cost import (
     ring_moe_all_to_all,
     tree_moe_all_to_all,
     ring_all_gather,
+    torus_all_reduce,
+    torus_all_gather,
+    torus_moe_all_to_all,
     aggregate_per_stage,
 )
 from .weight_footprint import (
@@ -33,6 +36,9 @@ __all__ = [
     "ring_moe_all_to_all",
     "tree_moe_all_to_all",
     "ring_all_gather",
+    "torus_all_reduce",
+    "torus_all_gather",
+    "torus_moe_all_to_all",
     "aggregate_per_stage",
     # footprints
     "dense_weight_bytes",

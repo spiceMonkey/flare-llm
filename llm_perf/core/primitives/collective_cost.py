@@ -16,6 +16,7 @@ link bandwidth is non-positive, so callers can skip shape-level guards.
 """
 
 import math
+from typing import Sequence
 
 
 def p2p_hop(M: float, alpha_s: float, bw_Bps: float) -> float:
@@ -86,6 +87,77 @@ def ring_all_gather(M: float, G: int, alpha_s: float, bw_Bps: float) -> float:
     if G <= 1 or bw_Bps <= 0:
         return 0.0
     return (G - 1) * alpha_s + (G - 1) * (M / bw_Bps)
+
+
+def _prod(xs: Sequence[int]) -> int:
+    n = 1
+    for x in xs:
+        n *= x
+    return n
+
+
+def torus_all_reduce(
+    M: float, dims: Sequence[int], alpha_s: float, bw_Bps: float
+) -> float:
+    """k-D torus dim-by-dim ring all-reduce — switching.md §8.3.
+
+        t = 2·Σ(D_i - 1)·α + 2·(N-1)/N · M/BW,    N = ∏ D_i
+
+    Latency term compresses from 2(N-1)α (flat ring) to 2·Σ(D_i-1)α by
+    running RS along each dim then AG in reverse (Patarasuk-Yuan bandwidth
+    term is preserved — bound holds on any tree-connected fabric).
+    Reduces to ring_all_reduce for dims=(N,).
+
+    Best case: dim-aligned group layout under structured admissible traffic.
+    Worst-case group misalignment is surfaced by the dispatch layer, not
+    this primitive — here we cost the ideal dim-by-dim schedule.
+    """
+    N = _prod(dims) if dims else 0
+    if N <= 1 or bw_Bps <= 0:
+        return 0.0
+    hops = sum(d - 1 for d in dims)
+    return 2 * hops * alpha_s + 2 * ((N - 1) / N) * (M / bw_Bps)
+
+
+def torus_all_gather(
+    M: float, dims: Sequence[int], alpha_s: float, bw_Bps: float
+) -> float:
+    """k-D torus dim-by-dim ring all-gather — switching.md §8.4.
+
+        t = Σ(D_i - 1)·α + (N - 1) · M/BW,    N = ∏ D_i
+
+    M is the per-rank shard; the gathered volume at each rank is N·M.
+    Reduces to ring_all_gather for dims=(N,).
+    """
+    N = _prod(dims) if dims else 0
+    if N <= 1 or bw_Bps <= 0:
+        return 0.0
+    hops = sum(d - 1 for d in dims)
+    return hops * alpha_s + (N - 1) * (M / bw_Bps)
+
+
+def torus_moe_all_to_all(
+    M: float, dims: Sequence[int], alpha_s: float, bw_Bps: float
+) -> float:
+    """Bisection-limited all-to-all on a k-D wraparound torus —
+    switching.md §8.5.
+
+        t ≈ diam·α + D_max·M / (4·BW_link)
+        diam = Σ ⌊D_i / 2⌋,    D_max = max(dims)
+
+    Aggregate traffic N·M/2 crosses the min-bisection; wraparound torus
+    bisection is BW_bisect^min = 2·N·BW_link / D_max, so only D_max — not
+    N — scales the bandwidth term. Asymmetric layouts pay disproportionately.
+
+    M is the per-rank total A2A payload (Dispatch+Combine baked in by the
+    caller, matching ring_moe_all_to_all's convention).
+    """
+    N = _prod(dims) if dims else 0
+    if N <= 1 or bw_Bps <= 0:
+        return 0.0
+    diam = sum(d // 2 for d in dims)
+    d_max = max(dims)
+    return diam * alpha_s + d_max * M / (4 * bw_Bps)
 
 
 def aggregate_per_stage(
