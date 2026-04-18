@@ -29,3 +29,10 @@ class TuningSpec:
     B_prefill: int = 1          # number of requests batched in prefill
     chunk_size: int = 0         # chunked prefill C (0 = no chunking)
 
+    # Topology-specific collective algorithms. Inert on crossbar fabrics;
+    # consumed by core/primitives/dispatch.cost_collective.
+    #   torus_algorithm="swing" is reserved; raises NotImplementedError for now.
+    #   collective_worst_case toggles dragonfly Valiant routing in Phase D.
+    torus_algorithm: str = "ring"
+    collective_worst_case: bool = False
+

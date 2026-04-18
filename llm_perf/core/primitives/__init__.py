@@ -27,6 +27,7 @@ from .weight_footprint import (
 )
 from .kv_footprint import kv_bytes_per_seq
 from .linear_flops import linear_flops_per_token
+from .dispatch import cost_collective
 
 __all__ = [
     # collective_cost
@@ -46,4 +47,6 @@ __all__ = [
     "embedding_bytes",
     "kv_bytes_per_seq",
     "linear_flops_per_token",
+    # dispatcher
+    "cost_collective",
 ]

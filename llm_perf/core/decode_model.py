@@ -19,22 +19,17 @@ Public surface (preserved from the pre-refactor four-file split):
 from dataclasses import dataclass
 
 from ..specs.model_spec import LlmModelSpec
-from ..specs.system_spec import SystemSpec, span_tiers
+from ..specs.system_spec import SystemSpec
 from ..specs.partition_spec import PartitionSpec
 from ..specs.tuner_spec import TuningSpec
-from ..utils import GB_TO_BYTES, TB_TO_FLOPS, US_TO_SECONDS
+from ..utils import GB_TO_BYTES, TB_TO_FLOPS
 from .primitives import (
     dense_weight_bytes,
     moe_weight_bytes,
     kv_bytes_per_seq,
     linear_flops_per_token,
-    p2p_hop,
-    ring_all_reduce,
-    tree_all_reduce,
-    ring_moe_all_to_all,
-    tree_moe_all_to_all,
-    ring_all_gather,
     aggregate_per_stage,
+    cost_collective,
 )
 
 
@@ -154,13 +149,6 @@ def compute_traffic(
 # Decode Communication (documentation/modeling/decode.md §5)
 # ────────────────────────────────────────────────────────────
 
-def _fabric_cost(system: SystemSpec, collective: str, group_size: int) -> tuple[float, float]:
-    """Return (alpha_s, bw_bytes_per_s) for `collective` over `group_size` ranks."""
-    tiers = system.get_tier_chain(collective)
-    alpha_us, bw_GBps, _ = span_tiers(tiers, max(1, int(group_size)))
-    return alpha_us * US_TO_SECONDS, bw_GBps * GB_TO_BYTES
-
-
 def compute_comm(
     model: LlmModelSpec,
     system: SystemSpec,
@@ -191,32 +179,30 @@ def compute_comm(
         EP = 1
         k = 1
 
-    a_PP, B_PP = _fabric_cost(system, "PP", 2)
-    a_TP, B_TP = _fabric_cost(system, "TP", TP)
-    a_EP, B_EP = _fabric_cost(system, "EP", EP)
-    a_SP, B_SP = _fabric_cost(system, "SP", SP)
+    tp_algorithm = getattr(tuner, "tp_algorithm", "ring").lower()
+    ep_algorithm = getattr(tuner, "ep_algorithm", "ring").lower()
+    torus_alg = getattr(tuner, "torus_algorithm", "ring").lower()
+    worst_case = getattr(tuner, "collective_worst_case", False)
+
+    def _cost(coll: str, op: str, M: float, G: int, alg: str = "ring") -> float:
+        return cost_collective(
+            system.get_tier_chain(coll), op, M, G,
+            algorithm=alg, torus_algorithm=torus_alg, worst_case=worst_case,
+        )
 
     # PP: shard-preserving hop of B tokens × (H/TP) activation bytes.
     # A single-stage pipeline has no inter-stage forward.
     if PP > 1:
         msg_PP = B * (H / TP) * b
-        t_PP = p2p_hop(msg_PP, a_PP, B_PP)
+        t_PP = _cost("PP", "p2p", msg_PP, 2)
     else:
         msg_PP = 0.0
         t_PP = 0.0
 
-    tp_algorithm = getattr(tuner, "tp_algorithm", "ring").lower()
-    ep_algorithm = getattr(tuner, "ep_algorithm", "ring").lower()
-
     # EP: 2-pass all-to-all (Dispatch + Combine) over k·H activation bytes
     if EP > 1:
         msg_EP = B * k * H * b
-        if ep_algorithm == "ring":
-            t_EP = ring_moe_all_to_all(msg_EP, EP, a_EP, B_EP)
-        elif ep_algorithm == "tree":
-            t_EP = tree_moe_all_to_all(msg_EP, EP, a_EP, B_EP)
-        else:
-            raise ValueError(f"Unsupported ep_algorithm: {ep_algorithm!r}")
+        t_EP = _cost("EP", "moe_a2a", msg_EP, EP, alg=ep_algorithm)
     else:
         t_EP = 0.0
         msg_EP = 0.0
@@ -224,12 +210,7 @@ def compute_comm(
     # TP: 2-pass all-reduce of B·H activation bytes
     if TP > 1:
         msg_TP = B * H * b
-        if tp_algorithm == "ring":
-            t_TP = ring_all_reduce(msg_TP, TP, a_TP, B_TP)
-        elif tp_algorithm == "tree":
-            t_TP = tree_all_reduce(msg_TP, TP, a_TP, B_TP)
-        else:
-            raise ValueError(f"Unsupported tp_algorithm: {tp_algorithm!r}")
+        t_TP = _cost("TP", "all_reduce", msg_TP, TP, alg=tp_algorithm)
     else:
         t_TP = 0.0
         msg_TP = 0.0
@@ -237,7 +218,7 @@ def compute_comm(
     # SP: 1-pass ring all-gather over KV shard
     if SP > 1:
         msg_SP = B * (S / SP) * (2 * H_kv / TP) * b
-        t_SP = ring_all_gather(msg_SP, SP, a_SP, B_SP)
+        t_SP = _cost("SP", "all_gather", msg_SP, SP)
     else:
         t_SP = 0.0
         msg_SP = 0.0

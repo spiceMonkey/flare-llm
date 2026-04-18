@@ -2,22 +2,17 @@
 import math
 from dataclasses import dataclass
 from ..specs.model_spec import LlmModelSpec
-from ..specs.system_spec import SystemSpec, span_tiers
+from ..specs.system_spec import SystemSpec
 from ..specs.partition_spec import PartitionSpec
 from ..specs.tuner_spec import TuningSpec
-from ..utils import GB_TO_BYTES, TB_TO_FLOPS, US_TO_SECONDS
+from ..utils import GB_TO_BYTES, TB_TO_FLOPS
 from .primitives import (
     dense_weight_bytes,
     moe_weight_bytes,
     kv_bytes_per_seq,
     linear_flops_per_token,
-    p2p_hop,
-    ring_all_reduce,
-    tree_all_reduce,
-    ring_moe_all_to_all,
-    tree_moe_all_to_all,
-    ring_all_gather,
     aggregate_per_stage,
+    cost_collective,
 )
 
 
@@ -182,7 +177,7 @@ def compute_prefill_comm(
     n_EP = tuner.n_EP_collectives
     n_SP = tuner.n_SP_collectives
 
-    # Resolve EP group size up front so span_tiers sees the correct radix.
+    # Resolve EP group size up front so the dispatcher sees the correct radix.
     if model.moe is not None:
         N_exp = max(1, model.moe.n_experts)
         EP = min(EP, N_exp)
@@ -191,54 +186,42 @@ def compute_prefill_comm(
         EP = 1
         k_active = 1
 
-    def _cost(collective, group_size):
-        tiers = system.get_tier_chain(collective)
-        alpha_us, bw_GBps, _ = span_tiers(tiers, max(1, int(group_size)))
-        return alpha_us * US_TO_SECONDS, bw_GBps * GB_TO_BYTES
-
-    a_PP, B_PP = _cost("PP", 2)
-    a_TP, B_TP = _cost("TP", TP)
-    a_EP, B_EP = _cost("EP", EP)
-    a_SP, B_SP = _cost("SP", SP)
-
     tp_algorithm = getattr(tuner, "tp_algorithm", "ring").lower()
     ep_algorithm = getattr(tuner, "ep_algorithm", "ring").lower()
+    torus_alg = getattr(tuner, "torus_algorithm", "ring").lower()
+    worst_case = getattr(tuner, "collective_worst_case", False)
+
+    def _cost(coll: str, op: str, M: float, G: int, alg: str = "ring") -> float:
+        return cost_collective(
+            system.get_tier_chain(coll), op, M, G,
+            algorithm=alg, torus_algorithm=torus_alg, worst_case=worst_case,
+        )
 
     # PP: token-scaled activation hop
     if PP > 1:
         msg_PP = (tokens * H / TP) * b
-        t_PP = p2p_hop(msg_PP, a_PP, B_PP)
+        t_PP = _cost("PP", "p2p", msg_PP, 2)
     else:
         t_PP = 0.0
 
     # TP: token-scaled all-reduce
     if TP > 1:
         msg_TP = tokens * H * b
-        if tp_algorithm == "ring":
-            t_TP = ring_all_reduce(msg_TP, TP, a_TP, B_TP)
-        elif tp_algorithm == "tree":
-            t_TP = tree_all_reduce(msg_TP, TP, a_TP, B_TP)
-        else:
-            raise ValueError(f"Unsupported tp_algorithm: {tp_algorithm!r}")
+        t_TP = _cost("TP", "all_reduce", msg_TP, TP, alg=tp_algorithm)
     else:
         t_TP = 0.0
 
     # EP: MoE all-to-all
     if EP > 1:
         msg_EP = k_active * tokens * H * b
-        if ep_algorithm == "ring":
-            t_EP = ring_moe_all_to_all(msg_EP, EP, a_EP, B_EP)
-        elif ep_algorithm == "tree":
-            t_EP = tree_moe_all_to_all(msg_EP, EP, a_EP, B_EP)
-        else:
-            raise ValueError(f"Unsupported ep_algorithm: {ep_algorithm!r}")
+        t_EP = _cost("EP", "moe_a2a", msg_EP, EP, alg=ep_algorithm)
     else:
         t_EP = 0.0
 
     # SP: KV all-gather (token-scaled)
     if SP > 1:
         msg_SP = (tokens / SP) * (2 * H_kv / TP) * b
-        t_SP = ring_all_gather(msg_SP, SP, a_SP, B_SP)
+        t_SP = _cost("SP", "all_gather", msg_SP, SP)
     else:
         t_SP = 0.0
 

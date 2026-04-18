@@ -10,6 +10,7 @@ from ..utils import (
     validate_positive_float_fields,
     TP_ALGORITHMS,
     EP_ALGORITHMS,
+    TORUS_ALGORITHMS,
 )
 
 
@@ -47,11 +48,17 @@ def tuning_spec_from_json_dict(cfg: Dict[str, Any]) -> TuningSpec:
 
     tp_algorithm = str(cfg.get("tp_algorithm", "ring")).lower()
     ep_algorithm = str(cfg.get("ep_algorithm", "ring")).lower()
+    torus_algorithm = str(cfg.get("torus_algorithm", "ring")).lower()
 
     if tp_algorithm not in TP_ALGORITHMS:
         raise ValueError(f"Unsupported tp_algorithm: {tp_algorithm!r}")
     if ep_algorithm not in EP_ALGORITHMS:
         raise ValueError(f"Unsupported ep_algorithm: {ep_algorithm!r}")
+    if torus_algorithm not in TORUS_ALGORITHMS:
+        raise ValueError(
+            f"Unsupported torus_algorithm: {torus_algorithm!r}; "
+            f"allowed: {list(TORUS_ALGORITHMS)}"
+        )
 
     # Positive integer checks
     validate_positive_int_fields(
@@ -94,6 +101,8 @@ def tuning_spec_from_json_dict(cfg: Dict[str, Any]) -> TuningSpec:
         S_input=int(cfg.get("S_input", 0)),
         B_prefill=int(cfg.get("B_prefill", 1)),
         chunk_size=int(cfg.get("chunk_size", 0)),
+        torus_algorithm=torus_algorithm,
+        collective_worst_case=bool(cfg.get("collective_worst_case", False)),
     )
 
 

@@ -17,6 +17,7 @@ from .data_check import (
 from .constants import (
     TP_ALGORITHMS,
     EP_ALGORITHMS,
+    TORUS_ALGORITHMS,
     GB_TO_BYTES,
     MB_TO_BYTES,
     TB_TO_FLOPS,
@@ -36,6 +37,7 @@ __all__ = [
     "validate_positive_float_fields",
     "TP_ALGORITHMS",
     "EP_ALGORITHMS",
+    "TORUS_ALGORITHMS",
     "GB_TO_BYTES",
     "MB_TO_BYTES",
     "TB_TO_FLOPS",
