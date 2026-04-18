@@ -248,6 +248,12 @@ Runs the same partition sweep on both systems. The hierarchical variant pays α 
 
 GPT-1.8T forces the cliff through TP because `n_q=128` gives TP headroom. DeepSeek-R1 flips the asymmetry: `n_kv=5` (MLA) kills TP range, but `n_experts=256` makes EP the natural cliff-crosser. EP=256 is not a diagnostic — it's the canonical DeepSeek deployment shape. Left panel shows the full partition set: frontiers overlap exactly, the optimizer just picks EP ≤ 64 and stays rack-local (phantom cliff, same pattern as GPT). Right panel restricts to EP ∈ {128, 256} — the shapes you actually run if you want to spread the MoE FFN across all experts on one rail — and the hierarchical envelope visibly shifts left on interactivity. On the EP sweep itself (`assets/pareto_vs_scale_up_tier_deepseek_cliff.png`), `t_EP` jumps ~6× at EP=80 where the all-to-all starts crossing tier 1, and `TPOT` inherits a proportional penalty per MoE layer per token. **Sizing rule:** NVL72 is enough for any model whose largest per-role group stays ≤72; for EP=256 MoE, only NVL256+ avoids the cliff.
 
+**Varying the rack radix — when does the cliff hit the main Pareto?**
+
+![Pareto frontier vs tier-0 radix: NVL8, NVL16, NVL32, NVL72, ideal NVL576](assets/pareto_vs_scale_up_tier_radix.png)
+
+Running the same 576-GPU sweep against five scale-up fabrics — ideal-NVL576, NVL72×8, NVL32×18, NVL16×36, NVL8×72 — shows the phantom cliff is robust even under rack-shrink. Left panel (full GQA-legal partition set): all five Pareto frontiers overlap exactly, including NVL8. The tier-1 cost lives at interior points (+430% worst-case on NVL8) but never on the envelope — the optimizer sidesteps the cliff by picking TP ≤ rack-radix (on NVL8 it picks TP ≤ 8, EP = 1). Right panel (partitions forced to cross: TP = 16 OR EP = 16): the frontiers finally separate — NVL8 on the left, NVL16/32/72/ideal clustered on the right. **Practical sizing:** the relevant scale-up unit is *large enough to hold the model's largest per-role group* — for GPT-1.8T decode (TP ≤ 16, EP ≤ 16), NVL16 is enough and NVL72 buys nothing extra. See `documentation/explaining/when_hierarchical_scale_up_matters.md` for the full argument.
+
 ### `ttft_vs_io.ipynb` — mismatched-partition disaggregation: does it pay off?
 
 ![TTFT vs. inter-cluster BW/α under mismatched-partition disagg](assets/ttft_vs_io.png)
@@ -271,17 +277,17 @@ Sweeps inter-cluster BW (50 GB/s → 3.6 TB/s) and α (0.5 μs → 5 ms) as two 
 
 Fixes partition at `PP=8 TP=8 EP=1 SP=1` (co-lo, matched). Sweeps chunk size log-spaced from 128 tokens up to `S_input` across the same 2–32k band.
 
-**Headline:** a universal sweet spot of `C* ≈ 2048` tokens across the entire commercial band.
+**Headline:** a sweet spot of `C* ≈ 2–4k` tokens across the entire commercial band — 2k at 2k prompts, shifting to 4k for 4k+ prompts.
 
 | S_input | Workload | C\* | n_chunks | TTFT\* | vs. single-pass |
 |---|---|---|---|---|---|
 | 2k | chat+hist     | 2048 | 1 | 3.8 ms   | 5.4× |
-| 4k | code/RAG      | 2048 | 2 | 7.5 ms   | 5.6× |
-| 8k | prod+RAG      | 2048 | 4 | 15.1 ms  | 5.9× |
-| 16k | long-doc     | 2048 | 8 | 31.1 ms  | 6.3× |
-| 32k | reason/agent | 2048 | 16 | 66.5 ms | 7.0× |
+| 4k | code/RAG      | 4096 | 1 | 7.6 ms   | 5.5× |
+| 8k | prod+RAG      | 4096 | 2 | 15.4 ms  | 5.7× |
+| 16k | long-doc     | 4096 | 4 | 32.0 ms  | 6.1× |
+| 32k | reason/agent | 4096 | 8 | 68.5 ms | 6.7× |
 
-The U-shape is genuine — small C (128) pays `n_chunks × T_θ` weight re-reads; large C pays quadratic attention; optimum sits near 1–2k tokens. A single hard-coded `C = 1-2k` is within 5–10% of optimal across the full band, so production engines don't need per-request tuning. Most of the headline speedup is from avoiding the PP warmup tax that single-pass prefill pays fully; within the chunked regime itself the win is a more modest ~1–3%.
+The U-shape is genuine — small C (128) pays `n_chunks × T_θ` weight re-reads; large C pays quadratic attention; optimum sits near 2–4k tokens. A single hard-coded `C = 2–4k` is within 5–10% of optimal across the full band, so production engines don't need per-request tuning. Most of the headline speedup is from avoiding the PP warmup tax that single-pass prefill pays fully; within the chunked regime itself the win is a more modest ~1–3%.
 
 ---
 
