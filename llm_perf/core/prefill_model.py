@@ -191,13 +191,22 @@ def compute_prefill_comm(
     system: SystemSpec,
     partition: PartitionSpec,
     tuner: TuningSpec,
+    *,
+    tokens_per_step: int | None = None,
 ) -> PrefillCommResults:
-    """Per-stage communication time for prefill (S_input-scaled messages)."""
+    """Per-stage communication time for prefill (S_input-scaled messages).
+
+    `tokens_per_step` lets callers evaluate the collectives at a token
+    count other than `tuner.S_input`. Defaults to single-request behavior
+    (tokens = S_input). The latency path passes explicit values for
+    batched (B_prefill · S_input) and chunked-per-chunk (C) cases.
+    """
 
     H = model.H
     H_kv = model.H_kv()
     L = model.L
     S = tuner.S_input
+    tokens = S if tokens_per_step is None else max(0, int(tokens_per_step))
     b = model.bytes_per_param
     PP = partition.PP
     TP = partition.TP
@@ -230,13 +239,13 @@ def compute_prefill_comm(
     tp_algorithm = getattr(tuner, "tp_algorithm", "ring").lower()
     ep_algorithm = getattr(tuner, "ep_algorithm", "ring").lower()
 
-    # PP: S_input-scaled activation hop
-    msg_PP = (S * H / TP) * b
+    # PP: token-scaled activation hop
+    msg_PP = (tokens * H / TP) * b
     t_PP = a_PP + msg_PP / B_PP if (PP > 1 and B_PP > 0) else 0.0
 
-    # TP: S_input-scaled all-reduce
+    # TP: token-scaled all-reduce
     if TP > 1:
-        msg_TP = S * H * b
+        msg_TP = tokens * H * b
         if tp_algorithm == "ring":
             t_TP = 2 * (TP - 1) * a_TP + 2 * ((TP - 1) / TP) * (msg_TP / B_TP)
         else:
@@ -246,7 +255,7 @@ def compute_prefill_comm(
 
     # EP
     if EP > 1:
-        msg_EP = k_active * S * H * b
+        msg_EP = k_active * tokens * H * b
         if ep_algorithm == "ring":
             t_EP = 2 * (EP - 1) * a_EP + 2 * (EP - 1) * (msg_EP / (EP * B_EP))
         else:
@@ -254,9 +263,9 @@ def compute_prefill_comm(
     else:
         t_EP = 0.0
 
-    # SP: KV all-gather (S_input-scaled)
+    # SP: KV all-gather (token-scaled)
     if SP > 1:
-        msg_SP = (S / SP) * (2 * H_kv / TP) * b
+        msg_SP = (tokens / SP) * (2 * H_kv / TP) * b
         t_SP = (SP - 1) * a_SP + (SP - 1) * (msg_SP / B_SP)
     else:
         t_SP = 0.0
@@ -337,9 +346,15 @@ def compute_prefill_latency(
         T_batched = traffic.T_theta_device + B_pf * traffic.T_kv_write_device
         t_batched_mem = T_batched / B_eff_mem
         t_batched_local = max(t_batched_compute, t_batched_mem)
+        # Comm scales with the batched token count (B_pf · S), not S alone:
+        # collective messages carry per-step activations whose payload grows
+        # with tokens per step. α is unchanged; β (payload/BW) grows with B_pf.
+        comm_batched = compute_prefill_comm(
+            model, system, partition, tuner, tokens_per_step=B_pf * S,
+        )
         t_prefill_batched = (
             t_batched_local
-            + max(0.0, t_prefill_comm - rho * t_batched_local)
+            + max(0.0, comm_batched.t_prefill_comm - rho * t_batched_local)
             + t_pipeline_warmup
         )
     else:
@@ -367,9 +382,13 @@ def compute_prefill_latency(
         # KV write per chunk: C new entries
         T_kv_write_chunk = (L / PP) * (2 * C * H_kv * model.bytes_per_param) / (TP * SP)
 
-        # Chunk-level comm (approximately constant, S_input → C)
-        # Simplified: scale comm proportionally to C/S
-        t_chunk_comm = comm.t_prefill_comm * (C / S) if S > 0 else 0.0
+        # Chunk-level comm: evaluate collectives at C tokens per step.
+        # α (latency term) is unchanged per chunk; β (payload) scales with C,
+        # not with C/S. Linear C/S scaling underestimates α-dominated small-C.
+        comm_chunk = compute_prefill_comm(
+            model, system, partition, tuner, tokens_per_step=C,
+        )
+        t_chunk_comm = comm_chunk.t_prefill_comm
 
         total_chunked = 0.0
         for k in range(1, n_chunks + 1):
