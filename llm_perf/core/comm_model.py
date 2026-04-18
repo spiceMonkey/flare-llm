@@ -1,11 +1,19 @@
 
-import math
 from dataclasses import dataclass
 from ..specs.model_spec import LlmModelSpec
 from ..specs.system_spec import SystemSpec, span_tiers
 from ..specs.partition_spec import PartitionSpec
 from ..specs.tuner_spec import TuningSpec
 from ..utils import GB_TO_BYTES, US_TO_SECONDS
+from .primitives import (
+    p2p_hop,
+    ring_all_reduce,
+    tree_all_reduce,
+    ring_moe_all_to_all,
+    tree_moe_all_to_all,
+    ring_all_gather,
+    aggregate_per_stage,
+)
 
 
 @dataclass
@@ -77,7 +85,7 @@ def compute_comm(
     # both the reported message and the time when PP == 1.
     if PP > 1:
         msg_PP = B * (H / TP) * b
-        t_PP = a_PP + msg_PP / B_PP if B_PP > 0 else 0.0
+        t_PP = p2p_hop(msg_PP, a_PP, B_PP)
     else:
         msg_PP = 0.0
         t_PP = 0.0
@@ -91,11 +99,9 @@ def compute_comm(
         # B tokens × k active experts × H activation bytes per expert
         msg_EP = B * k * H * b  # bytes per device
         if ep_algorithm == "ring":
-            # 2-pass ring all-to-all (Dispatch + Combine)
-            t_EP = 2 * (EP - 1) * a_EP + 2 * (EP - 1) * (msg_EP / (EP * B_EP))
+            t_EP = ring_moe_all_to_all(msg_EP, EP, a_EP, B_EP)
         elif ep_algorithm == "tree":
-            # Approx: 2-pass log2 tree all-to-all
-            t_EP = 2 * math.ceil(math.log2(EP)) * a_EP + 2 * (msg_EP / B_EP)
+            t_EP = tree_moe_all_to_all(msg_EP, EP, a_EP, B_EP)
         else:
             raise ValueError(f"Unsupported ep_algorithm: {ep_algorithm!r}")
     else:
@@ -106,11 +112,9 @@ def compute_comm(
     if TP > 1:
         msg_TP = B * H * b  # bytes
         if tp_algorithm == "ring":
-            # 2-pass ring all-reduce
-            t_TP = 2 * (TP - 1) * a_TP + 2 * ((TP - 1) / TP) * (msg_TP / B_TP)
+            t_TP = ring_all_reduce(msg_TP, TP, a_TP, B_TP)
         elif tp_algorithm == "tree":
-            # 2-pass tree all-reduce (reduce + broadcast)
-            t_TP = 2 * math.ceil(math.log2(TP)) * a_TP + 2 * (msg_TP / B_TP)
+            t_TP = tree_all_reduce(msg_TP, TP, a_TP, B_TP)
         else:
             raise ValueError(f"Unsupported tp_algorithm: {tp_algorithm!r}")
     else:
@@ -120,7 +124,7 @@ def compute_comm(
     # SP: 1-pass ring for KV shard (All-Gather) over B sequences
     if SP > 1:
         msg_SP = B * (S / SP) * (2 * H_kv / TP) * b
-        t_SP = (SP - 1) * a_SP + (SP - 1) * (msg_SP / B_SP)
+        t_SP = ring_all_gather(msg_SP, SP, a_SP, B_SP)
     else:
         t_SP = 0.0
         msg_SP = 0.0
@@ -131,11 +135,13 @@ def compute_comm(
     else:
         L_moe = 0
 
-    # Per-stage comm: TP and SP apply to all layers, EP only to MoE layers
-    t_comm_stage = (
-        (L / PP) * (n_TP * t_TP + n_SP * t_SP)  # All layers
-        + (L_moe / PP) * (n_EP * t_EP)           # MoE layers only
-        + t_PP
+    # Per-stage comm: TP+SP on every layer, EP only on MoE layers, +PP hop
+    t_comm_stage = aggregate_per_stage(
+        L=L, L_moe=L_moe, PP=PP,
+        n_TP=n_TP, t_TP=t_TP,
+        n_SP=n_SP, t_SP=t_SP,
+        n_EP=n_EP, t_EP=t_EP,
+        t_PP=t_PP,
     )
 
     return CommResults(

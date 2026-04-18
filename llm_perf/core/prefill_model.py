@@ -6,6 +6,19 @@ from ..specs.system_spec import SystemSpec, span_tiers
 from ..specs.partition_spec import PartitionSpec
 from ..specs.tuner_spec import TuningSpec
 from ..utils import GB_TO_BYTES, TB_TO_FLOPS, US_TO_SECONDS
+from .primitives import (
+    dense_weight_bytes,
+    moe_weight_bytes,
+    kv_bytes_per_seq,
+    linear_flops_per_token,
+    p2p_hop,
+    ring_all_reduce,
+    tree_all_reduce,
+    ring_moe_all_to_all,
+    tree_moe_all_to_all,
+    ring_all_gather,
+    aggregate_per_stage,
+)
 
 
 # ────────────────────────────────────────────────────────────
@@ -65,7 +78,12 @@ def compute_prefill_flops(
     partition: PartitionSpec,
     tuner: TuningSpec,
 ) -> PrefillFlopsResults:
-    """Per-device prefill FLOPs. Doc: documentation/modeling/prefill.md §1.5"""
+    """Per-device prefill FLOPs. Doc: documentation/modeling/prefill.md §1.5
+
+    Linear contribution (proj + FFN + router) comes from the shared
+    `linear_flops_per_token` primitive scaled by S_input. Attention is
+    phase-specific (S² scaling) and stays inline.
+    """
 
     L = model.L
     H = model.H
@@ -73,49 +91,22 @@ def compute_prefill_flops(
     S = tuner.S_input
     PP = partition.PP
     TP = partition.TP
-    EP = max(1, partition.EP)
     SP = partition.SP
-
-    # Effective FFN dim (MoE: k_active * I_moe; dense: I_dense)
-    if model.moe is not None:
-        L_moe = model.moe.n_moe_layers if model.moe.n_moe_layers else L
-        L_dense = L - L_moe
-        N_exp = max(1, model.moe.n_experts)
-        EP = min(EP, N_exp)
-        k = model.moe.k_active
-        I_moe = model.moe.I_moe
-    else:
-        L_moe = 0
-        L_dense = L
-        N_exp = 0
-        k = 0
-        I_moe = 0
-
     I_dense = model.I_dense
 
-    # Per-layer unsharded FLOPs
+    # Linear FLOPs for the full pass: per-token contribution × S_input tokens
+    F_linear_device = linear_flops_per_token(model, partition) * S
+
+    # Attention FLOPs: 4·S²·H per layer, sharded by TP·SP
+    F_attn_device = (L / PP) * (4 * S**2 * H) / (TP * SP)
+
+    F_prefill_device = F_linear_device + F_attn_device
+
+    # Unsharded diagnostic values (per layer, representative dense)
     F_proj = (4 * H**2 + 4 * H * H_kv) * S
     F_attn = 4 * S**2 * H
     F_ffn_dense = 6 * H * I_dense * S
-    F_ffn_moe = 6 * H * k * I_moe * S
-    F_router_moe = 2 * H * N_exp * S  # unsharded H → N_exp gate GEMM (prefill.md §1.3.5)
-
-    F_layer_dense = F_proj + F_attn + F_ffn_dense
-    F_layer_moe = F_proj + F_attn + F_ffn_moe + F_router_moe
-
-    # Per-device with parallelism sharding. Router is unsharded (replicated
-    # across TP ranks) — matches the decode convention (see flops_model.py):
-    # H → N_exp is tiny, no point sharding it.
-    F_device_dense = (L_dense / PP) * (
-        F_proj / TP + F_attn / (TP * SP) + F_ffn_dense / TP
-    )
-    F_device_moe = (L_moe / PP) * (
-        F_proj / TP + F_attn / (TP * SP) + F_ffn_moe / (TP * EP) + F_router_moe
-    )
-
-    F_prefill_device = F_device_dense + F_device_moe
-
-    F_layer_prefill = F_layer_dense  # representative (dense) for diagnostics
+    F_layer_prefill = F_proj + F_attn + F_ffn_dense
 
     return PrefillFlopsResults(
         F_proj_prefill=F_proj,
@@ -137,41 +128,15 @@ def compute_prefill_traffic(
 ) -> PrefillTrafficResults:
     """Per-device HBM traffic for prefill pass."""
 
-    L = model.L
-    H = model.H
-    H_kv = model.H_kv()
     S = tuner.S_input
-    b = model.bytes_per_param
-    PP = partition.PP
-    TP = partition.TP
-    EP = max(1, partition.EP)
-    SP = partition.SP
 
-    if model.moe is not None:
-        L_moe = model.moe.n_moe_layers if model.moe.n_moe_layers else L
-        L_dense = L - L_moe
-        N_exp = max(1, model.moe.n_experts)
-        EP = min(EP, N_exp)
-        I_moe = model.moe.I_moe
-    else:
-        L_moe = 0
-        L_dense = L
-        N_exp = 1
-        I_moe = 0
+    # Weight read traffic (same as decode — weights loaded once per pass)
+    T_theta_device = (
+        dense_weight_bytes(model, partition) + moe_weight_bytes(model, partition)
+    )
 
-    I_dense = model.I_dense
-
-    # Weight read traffic (same as decode — weights loaded once)
-    T_theta_dense = (L_dense / PP) * (
-        (2 * H**2 + 2 * H * H_kv) / TP + (3 * H * I_dense) / TP
-    ) * b
-    T_theta_moe = (L_moe / PP) * (
-        (2 * H**2 + 2 * H * H_kv) / TP + (3 * H * I_moe * N_exp) / (TP * EP)
-    ) * b
-    T_theta_device = T_theta_dense + T_theta_moe
-
-    # KV cache write traffic: writing S_input KV entries
-    T_kv_write_device = (L / PP) * (2 * S * H_kv * b) / (TP * SP)
+    # KV cache write traffic: writing S_input KV entries for one sequence
+    T_kv_write_device = kv_bytes_per_seq(model, partition, S)
 
     T_prefill_device = T_theta_device + T_kv_write_device
 
@@ -240,43 +205,52 @@ def compute_prefill_comm(
     ep_algorithm = getattr(tuner, "ep_algorithm", "ring").lower()
 
     # PP: token-scaled activation hop
-    msg_PP = (tokens * H / TP) * b
-    t_PP = a_PP + msg_PP / B_PP if (PP > 1 and B_PP > 0) else 0.0
+    if PP > 1:
+        msg_PP = (tokens * H / TP) * b
+        t_PP = p2p_hop(msg_PP, a_PP, B_PP)
+    else:
+        t_PP = 0.0
 
     # TP: token-scaled all-reduce
     if TP > 1:
         msg_TP = tokens * H * b
         if tp_algorithm == "ring":
-            t_TP = 2 * (TP - 1) * a_TP + 2 * ((TP - 1) / TP) * (msg_TP / B_TP)
+            t_TP = ring_all_reduce(msg_TP, TP, a_TP, B_TP)
+        elif tp_algorithm == "tree":
+            t_TP = tree_all_reduce(msg_TP, TP, a_TP, B_TP)
         else:
-            t_TP = 2 * math.ceil(math.log2(TP)) * a_TP + 2 * (msg_TP / B_TP)
+            raise ValueError(f"Unsupported tp_algorithm: {tp_algorithm!r}")
     else:
         t_TP = 0.0
 
-    # EP
+    # EP: MoE all-to-all
     if EP > 1:
         msg_EP = k_active * tokens * H * b
         if ep_algorithm == "ring":
-            t_EP = 2 * (EP - 1) * a_EP + 2 * (EP - 1) * (msg_EP / (EP * B_EP))
+            t_EP = ring_moe_all_to_all(msg_EP, EP, a_EP, B_EP)
+        elif ep_algorithm == "tree":
+            t_EP = tree_moe_all_to_all(msg_EP, EP, a_EP, B_EP)
         else:
-            t_EP = 2 * math.ceil(math.log2(EP)) * a_EP + 2 * (msg_EP / B_EP)
+            raise ValueError(f"Unsupported ep_algorithm: {ep_algorithm!r}")
     else:
         t_EP = 0.0
 
     # SP: KV all-gather (token-scaled)
     if SP > 1:
         msg_SP = (tokens / SP) * (2 * H_kv / TP) * b
-        t_SP = (SP - 1) * a_SP + (SP - 1) * (msg_SP / B_SP)
+        t_SP = ring_all_gather(msg_SP, SP, a_SP, B_SP)
     else:
         t_SP = 0.0
 
     # MoE layer count
     L_moe = model.moe.n_moe_layers if (model.moe and model.moe.n_moe_layers) else (L if model.moe else 0)
 
-    t_prefill_comm = (
-        (L / PP) * (n_TP * t_TP + n_SP * t_SP)
-        + (L_moe / PP) * (n_EP * t_EP)
-        + t_PP
+    t_prefill_comm = aggregate_per_stage(
+        L=L, L_moe=L_moe, PP=PP,
+        n_TP=n_TP, t_TP=t_TP,
+        n_SP=n_SP, t_SP=t_SP,
+        n_EP=n_EP, t_EP=t_EP,
+        t_PP=t_PP,
     )
 
     return PrefillCommResults(

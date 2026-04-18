@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from ..specs.model_spec import LlmModelSpec
 from ..specs.partition_spec import PartitionSpec
 from ..specs.tuner_spec import TuningSpec
+from .primitives import dense_weight_bytes, moe_weight_bytes, kv_bytes_per_seq
 
 
 @dataclass
@@ -18,50 +19,21 @@ def compute_traffic(
     partition: PartitionSpec,
     tuner: TuningSpec,
 ) -> TrafficResults:
-    """Compute per-token memory traffic per device (bytes)."""
+    """Compute per-token memory traffic per device (bytes).
 
-    L = model.L
-    H = model.H
-    H_kv = model.H_kv()
-    PP = partition.PP
-    TP = partition.TP
-    EP = max(1, partition.EP)
-    SP = partition.SP
+    Weight traffic matches M_theta (dense + MoE layers; embedding is
+    outside the forward path and excluded by convention). KV traffic
+    scales with the decode context length S and the batch B.
+    """
+
     S = tuner.S_decode
-    b = model.bytes_per_param
-
-    # Determine layer split (MoE vs dense)
-    if model.moe is not None:
-        L_moe = model.moe.n_moe_layers if model.moe.n_moe_layers else L
-        L_dense = L - L_moe
-        N_exp = max(1, model.moe.n_experts)
-        EP = min(EP, N_exp)
-        I_moe = model.moe.I_moe
-    else:
-        L_moe = 0
-        L_dense = L
-        N_exp = 1
-        EP = 1
-        I_moe = 0
-
-    I_dense = model.I_dense
-
-    # Parameter traffic - dense layers
-    T_theta_dense = (L_dense / PP) * (
-        (2 * H**2 + 2 * H * H_kv) / TP + (3 * H * I_dense) / TP
-    ) * b
-
-    # Parameter traffic - MoE layers
-    T_theta_moe = (L_moe / PP) * (
-        (2 * H**2 + 2 * H * H_kv) / TP + (3 * H * I_moe * N_exp) / (TP * EP)
-    ) * b
-
-    T_theta = T_theta_dense + T_theta_moe
-
-    # KV traffic
-    T_kv = (L / PP) * (2 * S * H_kv * b) / (TP * SP)
-
     B = tuner.B_decode
+
+    # Parameter traffic = dense + MoE weight bytes (no embedding in fwd path).
+    T_theta = dense_weight_bytes(model, partition) + moe_weight_bytes(model, partition)
+
+    # KV traffic for one sequence of S tokens.
+    T_kv = kv_bytes_per_seq(model, partition, S)
 
     T_token_eff = T_theta + T_kv
 
