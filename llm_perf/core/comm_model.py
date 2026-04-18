@@ -72,9 +72,15 @@ def compute_comm(
     a_EP, B_EP = _fabric_cost(system, "EP", EP)
     a_SP, B_SP = _fabric_cost(system, "SP", SP)
 
-    # PP: shard-preserving hop of B tokens × (H/TP) activation bytes
-    msg_PP = B * (H / TP) * b
-    t_PP = a_PP + msg_PP / B_PP if B_PP > 0 else 0.0
+    # PP: shard-preserving hop of B tokens × (H/TP) activation bytes.
+    # A single-stage pipeline has no inter-stage forward, so zero out
+    # both the reported message and the time when PP == 1.
+    if PP > 1:
+        msg_PP = B * (H / TP) * b
+        t_PP = a_PP + msg_PP / B_PP if B_PP > 0 else 0.0
+    else:
+        msg_PP = 0.0
+        t_PP = 0.0
 
     # Algorithm choices (default to "ring" if fields are missing)
     tp_algorithm = getattr(tuner, "tp_algorithm", "ring").lower()
