@@ -53,6 +53,7 @@ One line per component in the architecture diagram above. Full derivations live 
 ├── pareto_basic.ipynb                — full (partition, B) exploration space  (case study)
 ├── pareto_vs_cluster_size.ipynb      — decode Pareto × cluster size (N)        (case study)
 ├── pareto_tpu_vs_gb200.ipynb         — TPU v5p pod vs GB200 NVL72 × collective algorithm (case study)
+├── pareto_collective_algorithms.ipynb — worst-case vs optimized SW vs INC      (case study)
 ├── pareto_vs_io.ipynb                — decode Pareto × scale-up I/O sweep      (case study)
 ├── pareto_vs_mem.ipynb               — decode Pareto × HBM-BW sweep            (case study)
 ├── pareto_vs_flops.ipynb             — decode Pareto × peak-FLOPS sweep        (case study)
@@ -194,6 +195,36 @@ DeepSeek-R1 has a very different lever profile on paper: `L=61` is prime (so PP 
 Four frontiers on one figure for GPT-1.8T MoE @ FP4, `S_decode=8192`: **TPU v5p pod** (4096 devices, 16³ torus) with stock flat-ring fallback vs. optimizer-driven dispatch (greedy dim-align + `auto`); **GB200 NVL72** (72 devices, single-tier NVLink crossbar) with manual worst-case ring vs. optimizer-driven dispatch (`auto` resolves per-cell to DBT at this G/M regime). The optimizer is `core/collective_algo_opt.optimize_collective_algorithms` — runs once per `(partition, B)`, calls `enumerate_options` per (phase × collective), picks `min(cost)`. Per-system sweeps enumerate every valid `(PP, TP, EP, SP)` partition and `B ∈ [1, 256]`, extract the upper-right envelope, and overlay all four frontiers. The device-count asymmetry (4096 vs 72) is intentional — the y-axis (throughput/**GPU**) and x-axis (interactivity = 1/TPOT) are per-device/per-user, so the comparison is about what each fabric squeezes out of a single device, not about aggregate pod capacity.
 
 **Headline:** **GB200 wins peak throughput/GPU ~3× (1324 vs 434 tok/s/GPU)** — reflecting both per-device FLOPS (9000 vs 459 TF) and HBM bandwidth (8 TB/s vs 2.8 TB/s). **TPU wins peak interactivity by ~3.7× (749 vs 203 tok/s)** — not for fabric reasons but because a 4096-device pod admits much wider weight sharding (`PP·TP·EP` up to 32 at the interactivity corner), whereas NVL72's 72-way factorization caps replica at 60 for this model with the wider partition range, leaving each device with ~15 GB of weights to stream per token. The decode interactivity corner is HBM-BW-bound, and at B=1 the corner TPOT ~ `M_θ / (replica · BW_HBM)` — the pod's sharding headroom dominates. **The optimizer barely moves either frontier at the peak corners** (within 1% of the manual baselines): GB200's optimized frontier matches DBT (the optimizer correctly picks `tree` over `ring` at G ≤ 16 where α dominates, then merges with ring once BW dominates at large M); TPU's optimized frontier matches dim-ring with greedy align (torus has only one shipped algorithm, so the optimizer's job is just to confirm `torus-dim-ring`). The visible gap is on non-prefix-aligned partitions (TPU flat-ring fallback) and ring's α-cost on GB200 at small B. The lesson: collective-algorithm choice moves a frontier only when the regime is α-bound *and* the group size exposes the scaling-order difference; at either memory-bound corner it's the fabric's *size headroom* — how wide you can shard — that decides interactivity.
+
+### `pareto_collective_algorithms.ipynb` — worst-case vs optimized SW vs INC on the same hardware
+
+![decode Pareto: 3 collective-algorithm modes on GB200 NVL576 (NVLS + Quantum SHARP)](assets/pareto_collective_algorithms.png)
+
+*Question: how much does the choice of collective algorithm move the decode Pareto frontier on a fixed cluster?*
+
+Three frontiers, same model + system, only the `TuningSpec` algorithm fields and `inc_enabled` flag differ:
+
+1. **Worst-case SW** — pin every collective to ring; `inc_enabled=False`. The do-nothing baseline (red).
+2. **Optimized SW** — `tp/ep_algorithm_*='auto'` + `optimize_collective_algorithms` resolves per (phase × collective × M); `inc_enabled=False`. Picks DBT vs ring per cell (orange).
+3. **INC** — `auto` fields + `inc_enabled=True`. Optimizer short-circuits to NVLS / Quantum SHARP for AR / AG where the fabric supports it (EP A2A still on SW pairwise — sharp_class doesn't accelerate A2A; would need a `hw_a2a` tier) (green).
+
+System: `gb200.nvl576.hierarchical.inc` (576 GPUs, NVLink5 + IB, NVLS + Quantum SHARP declared on both tiers).
+
+**Headline at the corners** (interactivity-corner, mid-frontier, throughput-corner):
+
+| Corner | Mode | Partition | B | TPOT (ms) | tput/GPU |
+|---|---|---|---|---|---|
+| high interactivity | worst | `PP=60 TP=8 EP=1 SP=1` | 64 | 0.31 | 358 |
+| | sw_opt | `PP=30 TP=16 EP=1 SP=1` | 32 | 0.29 | 189 |
+| | inc | `PP=30 TP=16 EP=1 SP=1` | 32 | 0.26 | 212 |
+| mid frontier | worst | `PP=24 TP=8 EP=1 SP=1` | 1024 | 2.54 | 2099 |
+| | sw_opt | `PP=24 TP=8 EP=1 SP=1` | 1024 | 2.50 | 2133 |
+| | inc | `PP=24 TP=8 EP=1 SP=1` | 1089 | 2.50 | 2267 |
+| high throughput | worst | `PP=24 TP=4 EP=1 SP=1` | 6889 | 24.97 | 2873 |
+| | sw_opt | `PP=24 TP=4 EP=1 SP=1` | 6889 | 24.96 | 2875 |
+| | inc | `PP=24 TP=4 EP=1 SP=1` | 6889 | 24.56 | 2922 |
+
+The cheaper AR cost lets `sw_opt` and `inc` afford a wider TP=16 at the high-interactivity corner (sacrificing throughput for lower TPOT — 0.26 ms vs 0.31 ms for `worst`). Mid- and high-throughput corners converge as compute starts dominating comm at large B. With this model's group-size constraints (TP, EP ≤ 16), every collective stays inside the 72-port NVLink5 inner tier — multi-tier hierarchical AR / AG never fires, and INC's main lift is the `n_α` collapse + BW-eff doubling on the AR phase. On a model with `EP > 72` (e.g. DeepSeek-R1 at EP=128/256), the gap between `worst` and `sw_opt` widens further because the optimizer additionally swaps in the hierarchical RS → sub-AR → AG composition with payload telescoping.
 
 ### `pareto_vs_io.ipynb` — decode Pareto under scale-up I/O provisioning
 
