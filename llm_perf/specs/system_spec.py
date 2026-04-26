@@ -21,6 +21,24 @@ class CrossbarTier:
     the number of ranks reachable within this tier from any single rank.
     Cumulative reach at tier k is the product of ports over tiers 0..k.
     See documentation/modeling/switching.md §2-6.
+
+    Contention coefficients `eta_alpha` (≥ 1, inflates α) and `eta_beta`
+    (∈ (0, 1], deflates BW) coarsen dynamic contention into the α–β model
+    per documentation/modeling/contention.md. Defaults are 1.0 (ideal).
+
+    `inc` flags in-network collective support on this tier's switch ASIC:
+    "none" (software collectives only), "sharp_class" (NVLink SHARP / NVLS,
+    Quantum SHARP, Spectrum-X SHARP — switch ALU + multicast crossbar;
+    accelerates AR / AG / RS), or "hw_a2a" (Tomahawk Ultra / Rubin-class
+    crossbar scatter-gather; accelerates AR / AG / RS *and* A2A). The
+    legacy values "nvls" and "sharp" are accepted by the loader and mapped
+    to "sharp_class" for backwards compatibility. When set, `inc_alpha_us`
+    optionally overrides the switch-cut-through α used on the INC path —
+    0.0 means "reuse alpha_us" (i.e., model assumes the tier's α already
+    captures cut-through latency).
+
+    See documentation/modeling/collectives.md §3.4, §4.4, §5.4 and
+    documentation/explaining/collectives/04_in_network_collectives.md.
     """
 
     name: str
@@ -28,6 +46,11 @@ class CrossbarTier:
     bw_per_port_GBps: float        # effective per-port bandwidth (GB/s)
     alpha_us: float                # per-traversal latency (microseconds)
     topology: str = "crossbar"
+    eta_alpha: float = 1.0         # contention α-inflator (≥ 1; ideal = 1)
+    eta_beta: float = 1.0          # contention BW-deflator (∈ (0, 1]; ideal = 1)
+    inc: str = "none"              # "none" | "sharp_class" | "hw_a2a"
+    inc_alpha_us: float = 0.0      # switch-cut-through α on INC path; 0 = reuse alpha_us
+    oversubscription: float = 1.0  # tier oversubscription ratio s ≥ 1; caps eta_beta at 1/s
 
 
 @dataclass
@@ -38,6 +61,9 @@ class TorusTier:
     links; `bw_per_port_GBps` is the per-link single-direction bandwidth.
     Diameter = sum(floor(D_i/2)); bisection cut binds the largest dim.
     See documentation/modeling/switching.md §8.
+
+    Contention coefficients `eta_alpha`, `eta_beta` as in `CrossbarTier`;
+    see documentation/modeling/contention.md.
     """
 
     name: str
@@ -45,6 +71,8 @@ class TorusTier:
     bw_per_port_GBps: float        # per-link single-direction BW (GB/s)
     alpha_us: float                # per-hop latency (μs)
     topology: str = "torus"
+    eta_alpha: float = 1.0         # contention α-inflator
+    eta_beta: float = 1.0          # contention BW-deflator
 
     @property
     def ports(self) -> int:
@@ -55,38 +83,6 @@ class TorusTier:
         return n
 
 
-@dataclass
-class DragonflyTier:
-    """One dragonfly tier with (p, a, h, g) parameters per Kim et al. 2008.
-
-    Three internal sub-levels with independent (alpha, BW) pairs:
-      L0 intra-router: alpha_us, bw_per_port_GBps
-      L1 intra-group (router-to-router): alpha_local_us, bw_local_GBps
-      L2 inter-group (global link): alpha_global_us, bw_global_GBps
-
-    Canonical balanced dragonfly: g = a*h + 1. Diameter 3 (minimal
-    adaptive) / 5 (Valiant). See documentation/modeling/switching.md §9.
-    """
-
-    name: str
-    p_endpoints: int               # endpoints per router
-    a_routers: int                 # routers per group
-    h_global: int                  # global links per router
-    g_groups: int                  # number of groups
-    bw_per_port_GBps: float        # L0 intra-router BW
-    alpha_us: float                # L0 intra-router alpha
-    alpha_local_us: float          # L1 intra-group alpha
-    alpha_global_us: float         # L2 inter-group alpha
-    bw_local_GBps: float           # L1 intra-group BW
-    bw_global_GBps: float          # L2 inter-group BW
-    topology: str = "dragonfly"
-
-    @property
-    def ports(self) -> int:
-        """Reach = p*a*g. Exposed for compatibility with span_tiers."""
-        return self.p_endpoints * self.a_routers * self.g_groups
-
-
 # Back-compat alias: existing imports `from ...system_spec import SwitchTierSpec`
 # keep working. SwitchTierSpec IS CrossbarTier at runtime, so isinstance checks
 # and positional construction `SwitchTierSpec(name, ports, bw, alpha)` are
@@ -95,7 +91,7 @@ SwitchTierSpec = CrossbarTier
 
 # Discriminated-union type alias for static checkers. At runtime, use
 # `tier.topology` to branch.
-TierSpec = Union[CrossbarTier, TorusTier, DragonflyTier]
+TierSpec = Union[CrossbarTier, TorusTier]
 
 
 @dataclass
@@ -123,8 +119,8 @@ def span_tiers(
     If `group_size` exceeds total reach, returns the outermost configuration.
 
     Crossbar-only helper: the α-sum / BW-min flatten pattern is exact for
-    crossbar tiers but approximate for torus/dragonfly. Topology-aware
-    dispatch lives in `core/primitives/dispatch.py` (Phase C).
+    crossbar tiers but approximate for torus. Topology-aware dispatch lives
+    in `core/primitives/dispatch.py`.
     """
     if group_size <= 1 or not tiers:
         return 0.0, 0.0, 0

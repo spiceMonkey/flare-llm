@@ -8,7 +8,6 @@ from ..specs.system_spec import (
     COLLECTIVES,
     CrossbarTier,
     DeviceSpec,
-    DragonflyTier,
     FabricSpec,
     SwitchTierSpec,
     SystemSpec,
@@ -28,15 +27,117 @@ def _load_json(path: str | Path) -> Dict[str, Any]:
         return json.load(f)
 
 
+def _eta_alpha(prefix: str, tc: Dict[str, Any], key: str = "eta_alpha") -> float:
+    """Parse an optional eta_alpha field (contention α-inflator, ≥ 1, default 1.0)."""
+    if key not in tc:
+        return 1.0
+    val = tc[key]
+    if not isinstance(val, (int, float)) or val < 1.0:
+        raise ValueError(
+            f"{prefix}: '{key}' must be a float ≥ 1.0 (α-inflator), got {val!r}"
+        )
+    return float(val)
+
+
+def _eta_beta(prefix: str, tc: Dict[str, Any], key: str = "eta_beta") -> float:
+    """Parse an optional eta_beta field (contention BW-deflator, ∈ (0, 1], default 1.0)."""
+    if key not in tc:
+        return 1.0
+    val = tc[key]
+    if not isinstance(val, (int, float)) or val <= 0.0 or val > 1.0:
+        raise ValueError(
+            f"{prefix}: '{key}' must be a float in (0, 1] (BW-deflator), got {val!r}"
+        )
+    return float(val)
+
+
+_INC_MODES = ("none", "sharp_class", "hw_a2a")
+# Legacy values mapped to the new enum on load. `nvls` (NVLink SHARP) and
+# `sharp` (Quantum / Spectrum-X SHARP) both map to `sharp_class` because they
+# share the same modeling form (switch ALU + multicast crossbar; AR / AG / RS
+# routing). HW A2A is a separate, newer capability with no legacy alias.
+_INC_LEGACY_ALIASES = {"nvls": "sharp_class", "sharp": "sharp_class"}
+
+
+def _parse_inc(prefix: str, tc: Dict[str, Any]) -> str:
+    """Parse the optional `inc` field (in-network collective flavor).
+
+    Accepts both the new `{none, sharp_class, hw_a2a}` enum and the legacy
+    `{none, nvls, sharp}` values (mapped to `sharp_class` for back-compat
+    with existing system JSON files).
+    """
+    if "inc" not in tc:
+        return "none"
+    val = tc["inc"]
+    if not isinstance(val, str):
+        raise ValueError(
+            f"{prefix}: 'inc' must be a string, got {val!r}"
+        )
+    canonical = _INC_LEGACY_ALIASES.get(val.lower(), val.lower())
+    if canonical not in _INC_MODES:
+        raise ValueError(
+            f"{prefix}: 'inc' must be one of {list(_INC_MODES)} "
+            f"(or legacy {sorted(_INC_LEGACY_ALIASES)}), got {val!r}"
+        )
+    return canonical
+
+
+def _parse_inc_alpha_us(prefix: str, tc: Dict[str, Any]) -> float:
+    """Parse the optional `inc_alpha_us` override. 0.0 sentinel = reuse alpha_us."""
+    if "inc_alpha_us" not in tc:
+        return 0.0
+    val = tc["inc_alpha_us"]
+    if not isinstance(val, (int, float)) or val < 0.0:
+        raise ValueError(
+            f"{prefix}: 'inc_alpha_us' must be a nonneg float, got {val!r}"
+        )
+    return float(val)
+
+
+def _parse_oversubscription(prefix: str, tc: Dict[str, Any]) -> float:
+    """Parse the optional `oversubscription` field (ratio s ≥ 1; default 1.0)."""
+    if "oversubscription" not in tc:
+        return 1.0
+    val = tc["oversubscription"]
+    if not isinstance(val, (int, float)) or val < 1.0:
+        raise ValueError(
+            f"{prefix}: 'oversubscription' must be a float ≥ 1.0, got {val!r}"
+        )
+    return float(val)
+
+
+def _apply_oversubscription_cap(
+    eta_beta: float, oversubscription: float
+) -> float:
+    """Apply the §7.2 oversubscription cap: realized eta_beta = min(provided, 1/s).
+
+    Per collectives.md §7.2: a tier oversubscribed at ratio s ≥ 1 has aggregate
+    upper-tier BW = (1/s) of aggregate downlink demand. The realized eta_beta
+    is the minimum of the operator-supplied hardware-floor heuristic and the
+    structural 1/s cap. Both inputs are model parameters, not error states —
+    the operator supplies the hardware floor, the loader applies the structural
+    cap on top, and the effective value is just min(...).
+    """
+    return min(eta_beta, 1.0 / oversubscription)
+
+
 def _parse_crossbar_tier(prefix: str, name: str, tc: Dict[str, Any]) -> CrossbarTier:
     validate_positive_int_fields(tc, ["ports"], prefix=prefix)
     validate_nonnegative_float_fields(tc, ["alpha_us"], prefix=prefix)
     validate_positive_float_fields(tc, ["bw_per_port_GBps"], prefix=prefix)
+    eta_beta_raw = _eta_beta(prefix, tc)
+    oversub = _parse_oversubscription(prefix, tc)
+    eta_beta = _apply_oversubscription_cap(eta_beta_raw, oversub)
     return CrossbarTier(
         name=name,
         ports=int(tc["ports"]),
         bw_per_port_GBps=float(tc["bw_per_port_GBps"]),
         alpha_us=float(tc["alpha_us"]),
+        eta_alpha=_eta_alpha(prefix, tc),
+        eta_beta=eta_beta,
+        inc=_parse_inc(prefix, tc),
+        inc_alpha_us=_parse_inc_alpha_us(prefix, tc),
+        oversubscription=oversub,
     )
 
 
@@ -58,38 +159,14 @@ def _parse_torus_tier(prefix: str, name: str, tc: Dict[str, Any]) -> TorusTier:
         dims=tuple(dims),
         bw_per_port_GBps=float(tc["bw_per_port_GBps"]),
         alpha_us=float(tc["alpha_us"]),
-    )
-
-
-def _parse_dragonfly_tier(prefix: str, name: str, tc: Dict[str, Any]) -> DragonflyTier:
-    validate_positive_int_fields(
-        tc, ["p_endpoints", "a_routers", "h_global", "g_groups"], prefix=prefix
-    )
-    validate_nonnegative_float_fields(
-        tc, ["alpha_us", "alpha_local_us", "alpha_global_us"], prefix=prefix
-    )
-    validate_positive_float_fields(
-        tc, ["bw_per_port_GBps", "bw_local_GBps", "bw_global_GBps"], prefix=prefix
-    )
-    return DragonflyTier(
-        name=name,
-        p_endpoints=int(tc["p_endpoints"]),
-        a_routers=int(tc["a_routers"]),
-        h_global=int(tc["h_global"]),
-        g_groups=int(tc["g_groups"]),
-        bw_per_port_GBps=float(tc["bw_per_port_GBps"]),
-        alpha_us=float(tc["alpha_us"]),
-        alpha_local_us=float(tc["alpha_local_us"]),
-        alpha_global_us=float(tc["alpha_global_us"]),
-        bw_local_GBps=float(tc["bw_local_GBps"]),
-        bw_global_GBps=float(tc["bw_global_GBps"]),
+        eta_alpha=_eta_alpha(prefix, tc),
+        eta_beta=_eta_beta(prefix, tc),
     )
 
 
 _TOPOLOGY_PARSERS = {
     "crossbar": _parse_crossbar_tier,
     "torus": _parse_torus_tier,
-    "dragonfly": _parse_dragonfly_tier,
 }
 
 
@@ -107,8 +184,8 @@ def _parse_tier(prefix: str, name: str, tc: Dict[str, Any]) -> TierSpec:
 def _parse_fabric(fabric_name: str, fc: Dict[str, Any]) -> FabricSpec:
     """Parse one fabric entry. Requires a non-empty 'tiers' list.
 
-    Each tier may declare `"topology": "crossbar" | "torus" | "dragonfly"`;
-    the field defaults to `"crossbar"` so existing system JSONs parse unchanged.
+    Each tier may declare `"topology": "crossbar" | "torus"`; the field
+    defaults to `"crossbar"` so existing system JSONs parse unchanged.
     """
     if "tiers" not in fc:
         raise ValueError(f"fabric '{fabric_name}': missing 'tiers' list")

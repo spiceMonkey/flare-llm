@@ -16,12 +16,9 @@ function returns *exactly* the same float as the pre-refactor pattern
 below reproduces that flatten step verbatim — no rounding, no
 intermediate arithmetic reshuffling.
 
-Torus and dragonfly tiers route into their respective primitives.
-Pure-dragonfly tier sets (a single DragonflyTier, matching the canonical
-balanced dragonfly parameterization) dispatch to `dragonfly_*`; multi-
-dragonfly chains and genuinely mixed crossbar/torus/dragonfly chains
-still fall back to the crossbar-flatten bound with a `UserWarning`
-(Phase E expands coverage to explicit hybrid compositions).
+Torus tiers route into their torus primitives. Genuinely mixed
+crossbar/torus chains fall back to the crossbar-flatten bound with a
+`UserWarning` (explicit hybrid compositions are a follow-up).
 """
 
 from __future__ import annotations
@@ -32,13 +29,13 @@ from typing import List, Tuple
 from ...specs.system_spec import TierSpec, span_tiers
 from ...utils import GB_TO_BYTES, US_TO_SECONDS
 from .collective_cost import (
-    dragonfly_all_gather,
-    dragonfly_all_reduce,
-    dragonfly_moe_all_to_all,
+    inc_a2a,
+    inc_all_gather,
+    inc_all_reduce,
     p2p_hop,
+    pairwise_a2a,
     ring_all_gather,
     ring_all_reduce,
-    ring_moe_all_to_all,
     torus_all_gather,
     torus_all_reduce,
     torus_moe_all_to_all,
@@ -50,6 +47,33 @@ from .collective_cost import (
 _OPS = ("all_reduce", "all_gather", "moe_a2a", "p2p")
 
 
+def _span_tiers_scaled(
+    tiers: List[TierSpec], G: int
+) -> Tuple[float, float, int]:
+    """Like `span_tiers` but applies per-tier contention coefficients.
+
+    Each tier contributes `alpha_us * tier.eta_alpha` to the α-sum and
+    `bw_per_port_GBps * tier.eta_beta` to the BW-min. With the defaults
+    `eta_alpha = eta_beta = 1.0` this is bit-identical to `span_tiers`
+    (IEEE-754 `x * 1.0 == x` for all finite x). See
+    documentation/modeling/contention.md §4.
+    """
+    if G <= 1 or not tiers:
+        return 0.0, 0.0, 0
+    alpha_total = 0.0
+    bw_min = float("inf")
+    reach = 1
+    crossed = 0
+    for tier in tiers:
+        reach *= max(1, tier.ports)
+        alpha_total += tier.alpha_us * tier.eta_alpha
+        bw_min = min(bw_min, tier.bw_per_port_GBps * tier.eta_beta)
+        crossed += 1
+        if reach >= G:
+            return alpha_total, bw_min, crossed
+    return alpha_total, bw_min, crossed
+
+
 def cost_collective(
     tiers: List[TierSpec],
     op: str,
@@ -57,7 +81,7 @@ def cost_collective(
     G: int,
     algorithm: str = "ring",
     torus_algorithm: str = "ring",
-    worst_case: bool = False,
+    inc_enabled: bool = True,
 ) -> float:
     """Cost a collective of group size `G` bytes `M` over `tiers`, in seconds.
 
@@ -71,8 +95,10 @@ def cost_collective(
         on torus tiers (see `torus_algorithm`).
       torus_algorithm: "ring" (dim-by-dim) or "swing". "swing" raises
         `NotImplementedError` — reserved for switching.md §8.7 follow-up.
-      worst_case: dragonfly Valiant-routing flag (Phase D); currently
-        ignored since dragonfly tiers fall back to crossbar-flatten.
+      inc_enabled: when True, route AR/AG over a crossbar chain whose every
+        crossed tier declares `inc != "none"` to the INC primitives
+        (n_α collapse + BW-eff doubling for AR). When False, force software
+        ring/tree on the same chain. Inert on torus and on mixed chains.
 
     Returns:
       Collective time in seconds. Returns 0.0 for G <= 1 or empty tier list.
@@ -94,12 +120,25 @@ def cost_collective(
 
     topologies = {t.topology for t in crossed}
 
-    # Pure crossbar: delegate to span_tiers so the α-sum / BW-min
+    # Pure crossbar: delegate to _span_tiers_scaled so the α-sum / BW-min
     # accumulation order is byte-identical to the pre-refactor path
     # (span_tiers uses `+=` / iterative `min`; a Python `sum()` / `min()`
-    # call here drifts by 1-2 ULP on randomized float inputs).
+    # call here drifts by 1-2 ULP on randomized float inputs). With the
+    # default η = 1.0 for every crossed tier, the scaled helper is
+    # bit-identical to span_tiers (IEEE-754 `x * 1.0 == x`).
     if topologies == {"crossbar"}:
-        alpha_us, bw_GBps, _ = span_tiers(tiers, G)
+        # INC eligibility: every crossed tier must declare inc != "none"
+        # AND the caller must not have opted out. AR / AG / RS route via the
+        # SHARP-class switch ALU + multicast crossbar (collectives.md §3.4,
+        # §4.4) — needs `inc != "none"` on every tier. A2A routes via HW
+        # crossbar scatter-gather (§5.4) — needs `inc == "hw_a2a"` on every
+        # tier (NOT covered by sharp_class). p2p is a single hop, no INC.
+        if inc_enabled and all(_is_inc(t) for t in crossed):
+            if op in ("all_reduce", "all_gather"):
+                return _inc_crossbar_cost(op, M, G, crossed)
+            if op == "moe_a2a" and all(_is_hw_a2a(t) for t in crossed):
+                return _inc_crossbar_cost(op, M, G, crossed)
+        alpha_us, bw_GBps, _ = _span_tiers_scaled(tiers, G)
         return _crossbar_cost(
             op, M, G, alpha_us * US_TO_SECONDS, bw_GBps * GB_TO_BYTES, algorithm
         )
@@ -117,24 +156,16 @@ def cost_collective(
             )
         return _torus_cost(op, M, G, crossed)
 
-    # Pure dragonfly, single tier: dispatch to dragonfly primitives (Phase D).
-    # Multi-dragonfly chains fall through to the mixed-topology fallback —
-    # their hierarchical composition isn't in §3.4 and is reserved for a
-    # future pass.
-    if topologies == {"dragonfly"} and len(crossed) == 1:
-        return _dragonfly_cost(op, M, G, crossed[0], algorithm, worst_case)
-
-    # Anything else (multi-dragonfly, or genuinely mixed): Phase D does not
-    # cost these precisely. Fall back to crossbar-flatten so the interface is
-    # live and numerically bounded; emit a warning so callers notice.
+    # Genuinely mixed crossbar/torus: fall back to crossbar-flatten so the
+    # interface stays live and numerically bounded; emit a warning so callers
+    # notice. Explicit hybrid compositions are a follow-up.
     warnings.warn(
         f"cost_collective: topology mix {sorted(topologies)} not yet "
-        f"modeled; falling back to crossbar-flatten bound. "
-        f"See switching.md §10 (Phase D adds dragonfly primitives).",
+        f"modeled; falling back to crossbar-flatten bound.",
         UserWarning,
         stacklevel=2,
     )
-    alpha_us, bw_GBps, _ = span_tiers(tiers, G)
+    alpha_us, bw_GBps, _ = _span_tiers_scaled(tiers, G)
     return _crossbar_cost(
         op, M, G, alpha_us * US_TO_SECONDS, bw_GBps * GB_TO_BYTES, algorithm
     )
@@ -143,6 +174,16 @@ def cost_collective(
 # ────────────────────────────────────────────────────────────
 # Crossbar path (bit-identical to pre-refactor span_tiers flatten)
 # ────────────────────────────────────────────────────────────
+
+def _is_inc(tier: TierSpec) -> bool:
+    """Tier supports any INC capability (sharp_class or hw_a2a)."""
+    return getattr(tier, "inc", "none") != "none"
+
+
+def _is_hw_a2a(tier: TierSpec) -> bool:
+    """Tier supports HW A2A specifically (Tomahawk Ultra / Rubin)."""
+    return getattr(tier, "inc", "none") == "hw_a2a"
+
 
 def _crossbar_cost(
     op: str, M: float, G: int, alpha_s: float, bw_Bps: float, algorithm: str
@@ -159,11 +200,59 @@ def _crossbar_cost(
         raise ValueError(f"Unsupported algorithm for all_reduce: {algorithm!r}")
     if op == "moe_a2a":
         if algorithm == "ring":
-            return ring_moe_all_to_all(M, G, alpha_s, bw_Bps)
+            return pairwise_a2a(M, G, alpha_s, bw_Bps)
         if algorithm == "tree":
             return tree_moe_all_to_all(M, G, alpha_s, bw_Bps)
         raise ValueError(f"Unsupported algorithm for moe_a2a: {algorithm!r}")
     raise AssertionError(f"unreachable op={op!r}")  # caller validated
+
+
+# ────────────────────────────────────────────────────────────
+# INC path — crossbar tiers with switch-hosted reduction
+# ────────────────────────────────────────────────────────────
+
+def _inc_crossbar_cost(
+    op: str, M: float, G: int, crossed: List[TierSpec]
+) -> float:
+    """Route AR/AG/A2A on an INC-enabled crossbar chain through the INC primitives.
+
+    α aggregation: sum `inc_alpha_us` (or `alpha_us` when the override is 0)
+    across every crossed tier, scaled by each tier's `eta_alpha`. This maps
+    to the k-tier scale-out depth: one α contribution per tier level, with
+    the round-trip factor applied inside the primitive.
+
+    BW: narrowest link among crossed tiers, scaled by each tier's `eta_beta`.
+    Matches the crossbar α/BW reduction and lets contention modeling
+    (collectives.md §7) flow through identically.
+
+    Routing per op (collectives.md §3.4 / §4.4 / §5.4):
+      - AR: switch ALU + multicast crossbar; both n_α collapse AND BW-eff
+        doubling. Routes through `inc_all_reduce`.
+      - AG / RS: multicast or ALU+scatter; α-only collapse, BW unchanged
+        (software ring already hits BW_eff = BW). Routes through
+        `inc_all_gather` / `inc_reduce_scatter`.
+      - A2A: HW crossbar scatter-gather; α-only collapse, BW stays at the
+        bisection bound. Routes through `inc_a2a`. Caller (eligibility
+        check in cost_collective) is responsible for verifying every tier
+        is `hw_a2a` — this branch only fires when the gating allows it.
+    """
+    alpha_us_total = 0.0
+    bw_GBps_min = float("inf")
+    for t in crossed:
+        per_tier_alpha_us = t.inc_alpha_us if t.inc_alpha_us > 0.0 else t.alpha_us
+        alpha_us_total += per_tier_alpha_us * t.eta_alpha
+        bw_GBps_min = min(bw_GBps_min, t.bw_per_port_GBps * t.eta_beta)
+
+    alpha_s = alpha_us_total * US_TO_SECONDS
+    bw_Bps = bw_GBps_min * GB_TO_BYTES
+
+    if op == "all_reduce":
+        return inc_all_reduce(M, alpha_s, bw_Bps)
+    if op == "all_gather":
+        return inc_all_gather(M, G, alpha_s, bw_Bps)
+    if op == "moe_a2a":
+        return inc_a2a(M, G, alpha_s, bw_Bps)
+    raise AssertionError(f"INC path reached with unsupported op={op!r}")
 
 
 # ────────────────────────────────────────────────────────────
@@ -182,9 +271,11 @@ def _torus_cost(op: str, M: float, G: int, crossed: List[TierSpec]) -> float:
         d for t in crossed for d in t.dims  # type: ignore[attr-defined]
     )
     # α / BW aggregation for multi-tier torus: sum α (every tier-boundary
-    # adds a hop), take min BW (narrowest tier binds). Delegate to
-    # span_tiers for identical accumulation order to the crossbar path.
-    alpha_us, bw_GBps, _ = span_tiers(crossed, G)
+    # adds a hop), take min BW (narrowest tier binds). Delegate to the
+    # scaled helper for identical accumulation order to the crossbar path
+    # and to pick up any per-tier contention coefficients (η=1 default
+    # preserves bit-identity with the pre-contention path).
+    alpha_us, bw_GBps, _ = _span_tiers_scaled(crossed, G)
     alpha_s = alpha_us * US_TO_SECONDS
     bw_Bps = bw_GBps * GB_TO_BYTES
 
@@ -209,89 +300,6 @@ def _torus_cost(op: str, M: float, G: int, crossed: List[TierSpec]) -> float:
         return torus_all_gather(M, subdims, alpha_s, bw_Bps)
     if op == "moe_a2a":
         return torus_moe_all_to_all(M, subdims, alpha_s, bw_Bps)
-    raise AssertionError(f"unreachable op={op!r}")  # caller validated
-
-
-# ────────────────────────────────────────────────────────────
-# Dragonfly path (Phase D primitives)
-# ────────────────────────────────────────────────────────────
-
-def _dragonfly_cost(
-    op: str, M: float, G: int, tier, algorithm: str, worst_case: bool
-) -> float:
-    """Cost a collective on a single DragonflyTier using the three-tier
-    hierarchical decomposition (switching.md §9.4).
-
-    The full tier reach is `p·a·g`; for `G < reach` we truncate the tier
-    triple to the innermost levels that cover `G`. A group of size `G ≤ p`
-    stays inside one router; `p < G ≤ p·a` fills one group; larger `G` uses
-    the full (p, a, g_eff) triple. This keeps dispatcher semantics aligned
-    with span_tiers: `G` is the authoritative group size, and the cost
-    formula only includes tiers the collective actually crosses.
-    """
-    p = tier.p_endpoints
-    a = tier.a_routers
-    g = tier.g_groups
-    if G <= p:
-        p_eff, a_eff, g_eff = G, 1, 1
-    elif G <= p * a:
-        # G covers at most one group — L1 rings the subset of routers needed.
-        # Integer alignment (G multiple of p) gives exact; misaligned G is
-        # conservatively rounded up (one extra router participates).
-        p_eff = p
-        a_eff = (G + p - 1) // p
-        g_eff = 1
-    else:
-        p_eff = p
-        a_eff = a
-        g_eff = (G + p * a - 1) // (p * a)
-        if g_eff > g:
-            g_eff = g
-
-    alpha_r_s = tier.alpha_us * US_TO_SECONDS
-    bw_r_Bps = tier.bw_per_port_GBps * GB_TO_BYTES
-    alpha_l_s = tier.alpha_local_us * US_TO_SECONDS
-    bw_l_Bps = tier.bw_local_GBps * GB_TO_BYTES
-    alpha_g_s = tier.alpha_global_us * US_TO_SECONDS
-    bw_g_Bps = tier.bw_global_GBps * GB_TO_BYTES
-
-    if op == "p2p":
-        # Conservative single-hop: use the slowest tier crossed.
-        if g_eff > 1:
-            return p2p_hop(M, alpha_g_s, bw_g_Bps)
-        if a_eff > 1:
-            return p2p_hop(M, alpha_l_s, bw_l_Bps)
-        return p2p_hop(M, alpha_r_s, bw_r_Bps)
-    if op == "all_reduce":
-        if algorithm not in ("ring", "tree"):
-            raise ValueError(f"Unsupported algorithm for all_reduce: {algorithm!r}")
-        # Tree variant is not modeled per-tier on dragonfly in this pass;
-        # fall back to the hierarchical ring (conservative vs tree on large g).
-        return dragonfly_all_reduce(
-            M, p_eff, a_eff, g_eff,
-            alpha_r_s, bw_r_Bps,
-            alpha_l_s, bw_l_Bps,
-            alpha_g_s, bw_g_Bps,
-            worst_case=worst_case,
-        )
-    if op == "all_gather":
-        return dragonfly_all_gather(
-            M, p_eff, a_eff, g_eff,
-            alpha_r_s, bw_r_Bps,
-            alpha_l_s, bw_l_Bps,
-            alpha_g_s, bw_g_Bps,
-            worst_case=worst_case,
-        )
-    if op == "moe_a2a":
-        if algorithm not in ("ring", "tree"):
-            raise ValueError(f"Unsupported algorithm for moe_a2a: {algorithm!r}")
-        return dragonfly_moe_all_to_all(
-            M, p_eff, a_eff, g_eff,
-            alpha_r_s, bw_r_Bps,
-            alpha_l_s, bw_l_Bps,
-            alpha_g_s, bw_g_Bps,
-            worst_case=worst_case,
-        )
     raise AssertionError(f"unreachable op={op!r}")  # caller validated
 
 

@@ -43,42 +43,76 @@ def ring_all_reduce(M: float, G: int, alpha_s: float, bw_Bps: float) -> float:
 
 
 def tree_all_reduce(M: float, G: int, alpha_s: float, bw_Bps: float) -> float:
-    """Tree (recursive-halving/doubling) all-reduce — decode.md §5.3.2.
+    """Double binary tree (pipelined BW-optimal) all-reduce — collectives.md §4.1.
 
-        t ≈ 2·⌈log₂ G⌉·α + 2·M/BW
+        t = 2·⌈log₂ G⌉·α + 2(G-1)/G · M/BW
+
+    Pipelined DBT matches ring's bandwidth term (per [SST09]) while cutting the
+    α-term from 2(G-1) to 2·⌈log₂ G⌉. Empirically NCCL crosses over ring→DBT at
+    small M [DEMYST-NCCL].
     """
     if G <= 1 or bw_Bps <= 0:
         return 0.0
-    return 2 * math.ceil(math.log2(G)) * alpha_s + 2 * (M / bw_Bps)
+    return 2 * math.ceil(math.log2(G)) * alpha_s + 2 * ((G - 1) / G) * (M / bw_Bps)
 
 
-def ring_moe_all_to_all(M: float, G: int, alpha_s: float, bw_Bps: float) -> float:
-    """Ring MoE all-to-all with Dispatch+Combine round-trip — decode.md §5.2.1.
+def pairwise_a2a(M: float, G: int, alpha_s: float, bw_Bps: float) -> float:
+    """Pairwise direct-send all-to-all with Dispatch+Combine round-trip
+    — collectives.md §5.1 / decode.md §5.2.1.
 
         t = 2(G-1)·α + 2(G-1) · M/(G·BW)
 
     The factor of 2 bakes in the bidirectional nature of MoE routing
     (each token traverses the fabric once on Dispatch and once on
     Combine). M is the one-way per-device payload (typically k·H·b per
-    token, summed across the step's tokens).
+    token, summed across the step's tokens). Per-rank wire-side bytes
+    are (G-1)/G · M (each rank ships its (G-1)/G fraction); the doubled
+    α and BW terms reflect the round-trip.
+
+    Underlying NCCL primitive is pairwise direct-send (every rank exchanges
+    with every other in parallel through the switch). Bruck / log-hop A2A
+    is reference-only and not shipped on any production stack covered here
+    — see `documentation/explaining/collectives/01_collective_algorithms.md`
+    Appendix B.5.
     """
     if G <= 1 or bw_Bps <= 0:
         return 0.0
     return 2 * (G - 1) * alpha_s + 2 * (G - 1) * (M / (G * bw_Bps))
 
 
-def tree_moe_all_to_all(M: float, G: int, alpha_s: float, bw_Bps: float) -> float:
-    """Tree MoE all-to-all with Dispatch+Combine round-trip — decode.md §5.2.2.
+# Back-compat alias: existing imports `from ...collective_cost import
+# ring_moe_all_to_all` keep working. The "ring" name is misleading per the
+# new collectives.md §5.1 (the underlying primitive is pairwise direct-send,
+# not a ring). New code should prefer `pairwise_a2a`.
+ring_moe_all_to_all = pairwise_a2a
 
-        t ≈ 2·⌈log₂ G⌉·α + 2·M/BW
+
+def tree_moe_all_to_all(M: float, G: int, alpha_s: float, bw_Bps: float) -> float:
+    """**Deprecated.** Double binary tree MoE A2A is reference-only and not
+    shipped on any production stack covered here — see collectives.md §5.1
+    and `01_collective_algorithms.md` App. B.5. Use `pairwise_a2a` for the
+    star A2A cost; `inc_a2a` for HW A2A on Tomahawk Ultra / Rubin.
+
+        t = 2·⌈log₂ G⌉·α + 2(G-1)/G · M/BW
+
+    Emits a `DeprecationWarning` on call. Slated for removal once all
+    `ep_algorithm='tree'` call sites have been migrated.
     """
+    import warnings
+    warnings.warn(
+        "tree_moe_all_to_all is deprecated: tree A2A is reference-only and "
+        "not shipped on any production stack (collectives.md §5.1). Use "
+        "pairwise_a2a or inc_a2a instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     if G <= 1 or bw_Bps <= 0:
         return 0.0
-    return 2 * math.ceil(math.log2(G)) * alpha_s + 2 * (M / bw_Bps)
+    return 2 * math.ceil(math.log2(G)) * alpha_s + 2 * ((G - 1) / G) * (M / bw_Bps)
 
 
 def ring_all_gather(M: float, G: int, alpha_s: float, bw_Bps: float) -> float:
-    """Ring all-gather — decode.md §5.4.
+    """Ring all-gather — decode.md §5.4 / collectives.md §4.1.
 
         t = (G-1)·α + (G-1) · M/BW
 
@@ -87,6 +121,94 @@ def ring_all_gather(M: float, G: int, alpha_s: float, bw_Bps: float) -> float:
     if G <= 1 or bw_Bps <= 0:
         return 0.0
     return (G - 1) * alpha_s + (G - 1) * (M / bw_Bps)
+
+
+def ring_reduce_scatter(M: float, G: int, alpha_s: float, bw_Bps: float) -> float:
+    """Ring reduce-scatter — collectives.md §4.1 (RS is the time-reverse of AG).
+
+        t = (G-1)·α + (G-1) · M/BW
+
+    M is the per-rank shard. Used as the inner phase of hierarchical AR
+    (§3.3 RS → sub-AR → AG composition); not called directly from the
+    decode/prefill pipelines today.
+    """
+    if G <= 1 or bw_Bps <= 0:
+        return 0.0
+    return (G - 1) * alpha_s + (G - 1) * (M / bw_Bps)
+
+
+def inc_all_reduce(M: float, alpha_s: float, bw_Bps: float) -> float:
+    """In-network all-reduce — collectives/03_in_network_collectives.md §1.2-1.3.
+
+        t = 2·α_switch + M / BW
+
+    The switch ALU reduces N inputs in-fabric and multicasts back. Endpoint
+    pushes M once upstream, receives M once downstream — no peer forwarding —
+    so the BW term matches the raw link rate (BW_eff = BW, halving ring's
+    2·M/BW). `alpha_s` is the **summed** per-tier switch cut-through α on
+    the INC aggregation tree (one direction); the factor of 2 covers the
+    reduce-up + multicast-down round trip. For a single-switch star pass
+    alpha_s = α_switch; for a k-tier scale-out tree pass alpha_s = Σ α_tier.
+    """
+    if bw_Bps <= 0:
+        return 0.0
+    return 2 * alpha_s + M / bw_Bps
+
+
+def inc_all_gather(M: float, G: int, alpha_s: float, bw_Bps: float) -> float:
+    """In-network all-gather — collectives.md §4.4.
+
+        t = 2·α_switch + (G-1) · M / BW
+
+    INC collapses only the α-term for AG: software ring AG already runs at
+    BW_eff = BW on a full-duplex star, so the BW term is unchanged from
+    ring. The α-term collapses from (G-1)·α_endpoint to 2·α_switch.
+    `alpha_s` is the summed per-tier switch α on the INC path.
+    """
+    if G <= 1 or bw_Bps <= 0:
+        return 0.0
+    return 2 * alpha_s + (G - 1) * (M / bw_Bps)
+
+
+def inc_reduce_scatter(M: float, G: int, alpha_s: float, bw_Bps: float) -> float:
+    """In-network reduce-scatter — collectives.md §4.4 (mirrors inc_all_gather).
+
+        t = 2·α_switch + (G-1) · M / BW
+
+    α-only collapse. Like AG, RS already runs at BW_eff = BW under software
+    ring on a full-duplex star, so the switch ALU's contribution is purely
+    on the α-term. Used as the inner phase of hierarchical AR when the
+    inner tier is INC-enabled.
+    """
+    if G <= 1 or bw_Bps <= 0:
+        return 0.0
+    return 2 * alpha_s + (G - 1) * (M / bw_Bps)
+
+
+def inc_a2a(M: float, G: int, alpha_s: float, bw_Bps: float) -> float:
+    """Hardware all-to-all (crossbar scatter-gather) — collectives.md §5.4.
+
+        t = α_switch + (G-1)/G · M / BW
+
+    Tomahawk Ultra (Ethernet, shipped 2025) and planned Rubin-generation
+    NVSwitches collapse software A2A's (G-1) endpoint-driven scheduling
+    rounds into one switch-driven transaction (per-chunk descriptor parsing
+    + parallel routing within the crossbar). Per-rank wire-side bytes are
+    unchanged from software pairwise — the switch routes verbatim, no
+    aggregation or replication — so the BW term stays at the bisection
+    bound. The α-only efficiency win comes from descriptor batching at
+    the rank, not from algorithmic-tree collapse.
+
+    `alpha_s` is α_switch (single switch transaction); not 2·α_switch as
+    AR/AG/RS use, because A2A is a single descriptor + single routing pass
+    (no reduce-up + multicast-down round trip).
+
+    Not on shipping NVSwitch Gen4 (NVL72) or Quantum-X800; only routes here
+    when every crossed tier declares inc == "hw_a2a".
+    """
+    if G <= 1 or bw_Bps <= 0:
+        return 0.0
+    return alpha_s + ((G - 1) / G) * (M / bw_Bps)
 
 
 def _prod(xs: Sequence[int]) -> int:
@@ -122,7 +244,7 @@ def torus_all_reduce(
 def torus_all_gather(
     M: float, dims: Sequence[int], alpha_s: float, bw_Bps: float
 ) -> float:
-    """k-D torus dim-by-dim ring all-gather — switching.md §8.4.
+    """k-D torus dim-by-dim ring all-gather — switching.md §8.4 / collectives.md §4.2.
 
         t = Σ(D_i - 1)·α + (N - 1) · M/BW,    N = ∏ D_i
 
@@ -136,128 +258,50 @@ def torus_all_gather(
     return hops * alpha_s + (N - 1) * (M / bw_Bps)
 
 
+def torus_reduce_scatter(
+    M: float, dims: Sequence[int], alpha_s: float, bw_Bps: float
+) -> float:
+    """k-D torus dim-by-dim ring reduce-scatter — collectives.md §4.2 (RS = AG time-reverse).
+
+        t = Σ(D_i - 1)·α + (N - 1) · M/BW,    N = ∏ D_i
+
+    M is the per-rank shard. Used as the inner phase of hierarchical AR
+    when the inner tier is a torus; not called directly from the
+    decode/prefill pipelines today.
+    """
+    N = _prod(dims) if dims else 0
+    if N <= 1 or bw_Bps <= 0:
+        return 0.0
+    hops = sum(d - 1 for d in dims)
+    return hops * alpha_s + (N - 1) * (M / bw_Bps)
+
+
 def torus_moe_all_to_all(
     M: float, dims: Sequence[int], alpha_s: float, bw_Bps: float
 ) -> float:
     """Bisection-limited all-to-all on a k-D wraparound torus —
-    switching.md §8.5.
+    switching.md §8.5 / collectives.md §5.2.
 
-        t ≈ diam·α + D_max·M / (4·BW_link)
+        t ≈ diam·α + D_max·M / (8·BW_link)
         diam = Σ ⌊D_i / 2⌋,    D_max = max(dims)
 
-    Aggregate traffic N·M/2 crosses the min-bisection; wraparound torus
-    bisection is BW_bisect^min = 2·N·BW_link / D_max, so only D_max — not
-    N — scales the bandwidth term. Asymmetric layouts pay disproportionately.
+    Per-link bytes in one direction: L→R cross-cut traffic is
+    (N/2)·(N/2)·(M/N) = N·M/4. The min-bisection severs 2·N/D_max links
+    on a wraparound torus, so each cut link carries (N·M/4)/(2·N/D_max) =
+    D_max·M/8 bytes in one direction. Dividing by per-link single-direction
+    BW gives the formula. Only D_max — not N — scales the bandwidth term;
+    asymmetric layouts pay disproportionately. At cubic D_i = N^(1/k),
+    the BW term equals M/BW_link — torus matches star pairwise.
 
     M is the per-rank total A2A payload (Dispatch+Combine baked in by the
-    caller, matching ring_moe_all_to_all's convention).
+    caller, matching pairwise_a2a's convention).
     """
     N = _prod(dims) if dims else 0
     if N <= 1 or bw_Bps <= 0:
         return 0.0
     diam = sum(d // 2 for d in dims)
     d_max = max(dims)
-    return diam * alpha_s + d_max * M / (4 * bw_Bps)
-
-
-def dragonfly_all_reduce(
-    M: float,
-    p: int, a: int, g: int,
-    alpha_r_s: float, bw_r_Bps: float,
-    alpha_l_s: float, bw_l_Bps: float,
-    alpha_g_s: float, bw_g_Bps: float,
-    worst_case: bool = False,
-) -> float:
-    """Hierarchical 3-level ring AR on a balanced dragonfly — switching.md §9.4.
-
-        t_AR = 2(p-1)α_r + 2(p-1)/p · M/BW_r           (L0 intra-router)
-             + 2(a-1)α_l + 2(a-1)/a · (M/p)/BW_l       (L1 intra-group)
-             + c·[2(g-1)α_g + 2(g-1)/g · (M/(p·a))/BW_g]   (L2 inter-group)
-
-    where `c = 2` under `worst_case=True` (Valiant routing: L2 α-hops and
-    effective BW both double) and `c = 1` otherwise (adaptive minimal
-    routing under structured admissible traffic, [KDSA08 §3-4, JAIN22 §4]).
-
-    Payload shrinks down the tiers as L0 RS → L1 RS: by factor p after L0,
-    then by factor a after L1, so L2 sees M/(p·a) per rank. Trivial tiers
-    (p=1, a=1, or g=1) contribute zero — i.e. `dragonfly_all_reduce` with
-    a=g=1 reduces to `ring_all_reduce(M, p, α_r, BW_r)`.
-    """
-    if p * a * g <= 1:
-        return 0.0
-    t = 0.0
-    if p > 1 and bw_r_Bps > 0:
-        t += 2 * (p - 1) * alpha_r_s + 2 * ((p - 1) / p) * (M / bw_r_Bps)
-    if a > 1 and bw_l_Bps > 0:
-        t += 2 * (a - 1) * alpha_l_s + 2 * ((a - 1) / a) * ((M / p) / bw_l_Bps)
-    if g > 1 and bw_g_Bps > 0:
-        l2 = 2 * (g - 1) * alpha_g_s + 2 * ((g - 1) / g) * ((M / (p * a)) / bw_g_Bps)
-        t += 2 * l2 if worst_case else l2
-    return t
-
-
-def dragonfly_all_gather(
-    M: float,
-    p: int, a: int, g: int,
-    alpha_r_s: float, bw_r_Bps: float,
-    alpha_l_s: float, bw_l_Bps: float,
-    alpha_g_s: float, bw_g_Bps: float,
-    worst_case: bool = False,
-) -> float:
-    """Hierarchical 3-level ring AG on a balanced dragonfly — switching.md §9.4.
-
-        t_AG = (p-1)α_r + (p-1) · M/BW_r                 (L0 intra-router)
-             + (a-1)α_l + (a-1) · (p·M)/BW_l             (L1 intra-group)
-             + c·[(g-1)α_g + (g-1) · (p·a·M)/BW_g]       (L2 inter-group)
-
-    Per-rank shard grows by factor p after L0 AG and by factor p·a after L1,
-    so L2 sees (p·a·M) per rank. `c = 2` under worst_case (Valiant L2 BW
-    halving), else `c = 1`. Reduces to `ring_all_gather(M, p, α_r, BW_r)`
-    when a=g=1.
-    """
-    if p * a * g <= 1:
-        return 0.0
-    t = 0.0
-    if p > 1 and bw_r_Bps > 0:
-        t += (p - 1) * alpha_r_s + (p - 1) * (M / bw_r_Bps)
-    if a > 1 and bw_l_Bps > 0:
-        t += (a - 1) * alpha_l_s + (a - 1) * ((p * M) / bw_l_Bps)
-    if g > 1 and bw_g_Bps > 0:
-        l2 = (g - 1) * alpha_g_s + (g - 1) * ((p * a * M) / bw_g_Bps)
-        t += 2 * l2 if worst_case else l2
-    return t
-
-
-def dragonfly_moe_all_to_all(
-    M: float,
-    p: int, a: int, g: int,
-    alpha_r_s: float, bw_r_Bps: float,
-    alpha_l_s: float, bw_l_Bps: float,
-    alpha_g_s: float, bw_g_Bps: float,
-    worst_case: bool = False,
-) -> float:
-    """Hierarchical 3-level MoE A2A on a balanced dragonfly — switching.md §9.4.
-
-    Same three-tier structure as `dragonfly_all_reduce`; each tier runs
-    Dispatch+Combine on the payload arriving at that tier:
-
-        t_A2A = 2(p-1)α_r + 2(p-1)/p · M/BW_r            (L0)
-              + 2(a-1)α_l + 2(a-1)/a · (M/p)/BW_l        (L1)
-              + c·[2(g-1)α_g + 2(g-1)/g · (M/(p·a))/BW_g] (L2)
-
-    L2 typically dominates for MoE A2A because expert routing is often
-    adversarial relative to the dragonfly's uniform-admissible assumption;
-    `worst_case=True` (Valiant doubling) is more frequently justified here
-    than for AR. Mirrors the A2A ≡ AR formula identity already used in
-    `ring_moe_all_to_all` / `ring_all_reduce`.
-    """
-    return dragonfly_all_reduce(
-        M, p, a, g,
-        alpha_r_s, bw_r_Bps,
-        alpha_l_s, bw_l_Bps,
-        alpha_g_s, bw_g_Bps,
-        worst_case=worst_case,
-    )
+    return diam * alpha_s + d_max * M / (8 * bw_Bps)
 
 
 def aggregate_per_stage(
