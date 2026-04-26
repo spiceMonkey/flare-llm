@@ -46,14 +46,32 @@ def tuning_spec_from_json_dict(cfg: Dict[str, Any]) -> TuningSpec:
     if not schema.startswith("llm_perf.tuner"):
         raise ValueError(f"Unsupported tuner schema: {schema}")
 
+    # Legacy single-knob fields (deprecated; preserved for back-compat).
     tp_algorithm = str(cfg.get("tp_algorithm", "ring")).lower()
     ep_algorithm = str(cfg.get("ep_algorithm", "ring")).lower()
     torus_algorithm = str(cfg.get("torus_algorithm", "ring")).lower()
 
-    if tp_algorithm not in TP_ALGORITHMS:
-        raise ValueError(f"Unsupported tp_algorithm: {tp_algorithm!r}")
-    if ep_algorithm not in EP_ALGORITHMS:
-        raise ValueError(f"Unsupported ep_algorithm: {ep_algorithm!r}")
+    # Per-phase × per-collective fields (new in PR2.4). When omitted, fall
+    # back to the legacy single-knob value.
+    tp_algorithm_decode = str(cfg.get("tp_algorithm_decode", tp_algorithm)).lower()
+    tp_algorithm_prefill = str(cfg.get("tp_algorithm_prefill", tp_algorithm)).lower()
+    ep_algorithm_decode = str(cfg.get("ep_algorithm_decode", ep_algorithm)).lower()
+    ep_algorithm_prefill = str(cfg.get("ep_algorithm_prefill", ep_algorithm)).lower()
+
+    for name, val in [
+        ("tp_algorithm", tp_algorithm),
+        ("tp_algorithm_decode", tp_algorithm_decode),
+        ("tp_algorithm_prefill", tp_algorithm_prefill),
+    ]:
+        if val not in TP_ALGORITHMS:
+            raise ValueError(f"Unsupported {name}: {val!r}; allowed: {list(TP_ALGORITHMS)}")
+    for name, val in [
+        ("ep_algorithm", ep_algorithm),
+        ("ep_algorithm_decode", ep_algorithm_decode),
+        ("ep_algorithm_prefill", ep_algorithm_prefill),
+    ]:
+        if val not in EP_ALGORITHMS:
+            raise ValueError(f"Unsupported {name}: {val!r}; allowed: {list(EP_ALGORITHMS)}")
     if torus_algorithm not in TORUS_ALGORITHMS:
         raise ValueError(
             f"Unsupported torus_algorithm: {torus_algorithm!r}; "
@@ -97,12 +115,16 @@ def tuning_spec_from_json_dict(cfg: Dict[str, Any]) -> TuningSpec:
         S_decode=int(cfg.get("S_decode", 2048)),
         tp_algorithm=tp_algorithm,
         ep_algorithm=ep_algorithm,
+        tp_algorithm_decode=tp_algorithm_decode,
+        tp_algorithm_prefill=tp_algorithm_prefill,
+        ep_algorithm_decode=ep_algorithm_decode,
+        ep_algorithm_prefill=ep_algorithm_prefill,
         B_decode=int(cfg.get("B_decode", 1)),
         S_input=int(cfg.get("S_input", 0)),
         B_prefill=int(cfg.get("B_prefill", 1)),
         chunk_size=int(cfg.get("chunk_size", 0)),
         torus_algorithm=torus_algorithm,
-        collective_worst_case=bool(cfg.get("collective_worst_case", False)),
+        inc_enabled=bool(cfg.get("inc_enabled", True)),
     )
 
 

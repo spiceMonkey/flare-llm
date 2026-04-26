@@ -4,9 +4,12 @@ This module centralizes small, reusable constants so they can be
 imported instead of hardcoding magic values across the codebase.
 """
 
-# Algorithm choices for tensor/experts parallel collectives
-TP_ALGORITHMS = ("ring", "tree")
-EP_ALGORITHMS = ("ring", "tree")
+# Algorithm choices for tensor/experts parallel collectives.
+# "auto" is a placeholder — TuningSpec fields can declare it, but the
+# post-partition optimizer (`core/collective_algo_opt.py`) must resolve
+# it to a concrete name before InferenceCalculator.run().
+TP_ALGORITHMS = ("ring", "tree", "auto")
+EP_ALGORITHMS = ("ring", "tree", "auto")
 # Torus-native AR algorithms: "ring" = dim-by-dim ring AR; "swing" is
 # reserved for a future Swing-AR primitive and raises NotImplementedError.
 TORUS_ALGORITHMS = ("ring", "swing")

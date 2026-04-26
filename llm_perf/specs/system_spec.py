@@ -89,9 +89,55 @@ class TorusTier:
 # preserved. New code should prefer CrossbarTier.
 SwitchTierSpec = CrossbarTier
 
+
+@dataclass
+class MeshTier:
+    """One mesh tier — handles both full mesh and k-D mesh via the `full` flag.
+
+    `full=True`: full mesh — every node connects directly to every other node
+    (single hop, full bisection). $\\binom{N}{2}$ edges. Examples: chiplet UCIe
+    interposer, DGX-1/DGX-2 hybrid cube-mesh (legacy). Cost formulas match a
+    single-tier crossbar exactly (single hop, full bisection); the dispatcher
+    routes a full-mesh tier through the crossbar primitives. `dims` is
+    expected to be a 1-tuple `(N,)` here.
+
+    `full=False`: k-D mesh — torus without wraparound edges. Open-line bucket
+    brigade along each axis. AR/AG/RS cost formulas match torus exactly
+    (open-line still telescopes BW-optimally); A2A pays a 2× BW penalty
+    versus torus because the bisection cut is halved (missing wraparound
+    edges) — $D_\\mathrm{max}/4$ instead of $D_\\mathrm{max}/8$. The
+    dispatcher routes a k-D-mesh tier through the torus primitives with
+    `wraparound=False`.
+
+    No `inc` field — mesh has no switch ASIC; INC is structurally absent.
+
+    See documentation/modeling/collectives.md §1 (mesh notes) and the
+    explainer `02_topology_mapping.md §4` for full vs k-D mesh derivations.
+    """
+
+    name: str
+    dims: Tuple[int, ...]          # full=True: (N,); full=False: per-axis extents
+    bw_per_port_GBps: float        # per-link single-direction BW (GB/s)
+    alpha_us: float                # per-link / per-hop latency (μs)
+    full: bool = False             # True for full mesh, False for k-D mesh
+    topology: str = "mesh"
+    eta_alpha: float = 1.0         # contention α-inflator
+    eta_beta: float = 1.0          # contention BW-deflator
+
+    @property
+    def ports(self) -> int:
+        """Reach = prod(dims). For full mesh dims=(N,) so ports=N; for k-D mesh
+        ports = ∏ dim_i = N (total node count). Exposed for compatibility with
+        span_tiers and the dispatcher's tier walk."""
+        n = 1
+        for d in self.dims:
+            n *= d
+        return n
+
+
 # Discriminated-union type alias for static checkers. At runtime, use
-# `tier.topology` to branch.
-TierSpec = Union[CrossbarTier, TorusTier]
+# `tier.topology` (and for mesh, `tier.full`) to branch.
+TierSpec = Union[CrossbarTier, TorusTier, MeshTier]
 
 
 @dataclass

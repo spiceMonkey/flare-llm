@@ -1,0 +1,39 @@
+{
+  "schema": "llm_perf.system",
+  "name": "dmatrix_squadrack",
+  "num_devices": 512,
+  "device": {
+    "name": "d-Matrix-Corsair-Chiplet",
+    "hbm_capacity_GB": 32.0,
+    "hbm_bandwidth_GBps": 51.2,
+    "peak_flops_TF": 300.0
+  },
+  "fabrics": {
+    "pair_mesh": {
+      "tiers": [
+        {"name": "dmx-link-pair-of-cards", "topology": "mesh",
+         "dims": [16], "full": true,
+         "bw_per_port_GBps": 64.0, "alpha_us": 0.115}
+      ]
+    },
+    "pcie_server": {
+      "tiers": [
+        {"name": "pcie5-server-switch", "ports": 4,
+         "bw_per_port_GBps": 64.0, "alpha_us": 0.65}
+      ]
+    },
+    "ethernet_rack": {
+      "tiers": [
+        {"name": "jetstream-eth-rack", "ports": 8,
+         "bw_per_port_GBps": 100.0, "alpha_us": 2.0}
+      ]
+    }
+  },
+  "collective_fabrics": {
+    "TP": ["pair_mesh", "pcie_server", "ethernet_rack"],
+    "EP": ["pair_mesh", "pcie_server", "ethernet_rack"],
+    "SP": ["pair_mesh", "pcie_server", "ethernet_rack"],
+    "PP": ["pair_mesh", "pcie_server", "ethernet_rack"]
+  },
+  "_comment": "d-Matrix SquadRack full-rack reference, modeled at chiplet granularity (8 servers × 8 cards × 8 chiplets = 512 chiplets). Per chiplet: 32 GB LPDDR5 capacity memory at 51.2 GB/s (= 2 channels × 25.6 GB/s per Fig 5 of the d-Matrix Corsair whitepaper Nov 2024); 300 TFLOPS MXINT8 dense (= 2400/8 per card; 1200 TFLOPS MXINT4 per chiplet). The 2 GB on-card SRAM 'performance memory' (~256 MB per chiplet, ~18.75 TB/s aggregate) is not modeled as device memory — it acts as a weights-staging cache; LPDDR5 is the per-token streaming bottleneck. Fabric chain: (1) `pair_mesh` — 16-chiplet all-to-all domain spanning a paired pair of Corsair cards (DMX Link D2D within each package + DMX Bridge across the two cards, per whitepaper Figs 6/9), modeled as a full mesh; per-chiplet outbound 64 GB/s (DMX Bridge 512 GB/s shared across 8 chiplets per card; 1 TB/s D2D within package is faster but the cross-card share dominates for collective-style traffic), 0.115 μs D2D latency. (2) `pcie_server` — 4 pair-domains per 8-card server connected via 2× 144-port PCIe Gen5 switches (whitepaper Fig 10); 64 GB/s per chiplet (PCIe Gen5 x16 single-direction), 0.65 μs PCIe switch latency. (3) `ethernet_rack` — 8 servers per rack via 2× JetStream NICs per server + standard TOR ethernet switches (1 JetStream per PCIe switch, JetStream brief Sept 2025 Fig 2). Each JetStream is 400 Gbps = 50 GB/s single-direction, PCIe Gen5 x16 host (overprovisioned vs the 50 GB/s wire); per-server aggregate = 100 GB/s. The 'rank' at this tier is the whole server (8 ports = 8 servers per rack), so per-port BW = 100 GB/s — the dispatcher's hierarchical decomposition handles the per-chiplet chunking via payload telescoping (M·L/N on outer phase). 2.0 μs transparent-NIC latency (Hot Chips 2025). INC structurally absent on the entire chain (no SHARP-class hardware on JetStream/standard TOR path, mesh has no switch ASIC). Inter-rack scale-out fabric not modeled. Sources: d-Matrix Corsair Technical Whitepaper (Nov 2024), JetStream Product Brief (Sept 2025), Hot Chips 2025 coverage."
+}

@@ -8,7 +8,24 @@ class TuningSpec:
     # Scenario sequence length
     S_decode: int = 2048
 
-    # Collective algorithms: "ring" or "tree"
+    # Per-phase × per-collective algorithm choice.
+    #   Admissible values: "ring", "tree", "auto".
+    #   "auto" is a placeholder — must be resolved by
+    #   `core/collective_algo_opt.optimize_collective_algorithms(...)` before
+    #   passing the tuner to `InferenceCalculator.run()`. Reaching the
+    #   dispatcher with "auto" raises ValueError.
+    #   SP is always ring AG (no knob — only shipped option per
+    #   collectives.md §4.5).
+    #   The legacy fields `tp_algorithm` / `ep_algorithm` are deprecated
+    #   single-knob aliases; the loader copies them into both _decode and
+    #   _prefill when the per-phase fields are unspecified.
+    tp_algorithm_decode: str = "ring"
+    tp_algorithm_prefill: str = "ring"
+    ep_algorithm_decode: str = "ring"
+    ep_algorithm_prefill: str = "ring"
+
+    # Legacy single-knob fields (deprecated; loader-only fallbacks). New code
+    # should set the per-phase fields directly.
     tp_algorithm: str = "ring"
     ep_algorithm: str = "ring"
 
@@ -32,7 +49,13 @@ class TuningSpec:
     # Topology-specific collective algorithms. Inert on crossbar fabrics;
     # consumed by core/primitives/dispatch.cost_collective.
     #   torus_algorithm="swing" is reserved; raises NotImplementedError for now.
-    #   collective_worst_case toggles dragonfly Valiant routing in Phase D.
     torus_algorithm: str = "ring"
-    collective_worst_case: bool = False
+
+    # In-network collectives opt-out. When True (default), dispatcher routes
+    # AR/AG over any crossbar tier chain whose every tier declares inc != "none"
+    # to the INC primitives (n_α collapse + BW-eff doubling for AR).
+    # Set False to force software ring/tree fallback — useful for A/B
+    # measurements and for hardware where SHARP is disabled at runtime.
+    # Inert on tier chains where any crossed tier has inc == "none".
+    inc_enabled: bool = True
 

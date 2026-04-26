@@ -9,6 +9,7 @@ from ..specs.system_spec import (
     CrossbarTier,
     DeviceSpec,
     FabricSpec,
+    MeshTier,
     SwitchTierSpec,
     SystemSpec,
     TierSpec,
@@ -164,9 +165,39 @@ def _parse_torus_tier(prefix: str, name: str, tc: Dict[str, Any]) -> TorusTier:
     )
 
 
+def _parse_mesh_tier(prefix: str, name: str, tc: Dict[str, Any]) -> MeshTier:
+    if "dims" not in tc:
+        raise ValueError(f"{prefix}: mesh tier missing 'dims' tuple")
+    dims_cfg = tc["dims"]
+    if not isinstance(dims_cfg, list) or not dims_cfg:
+        raise ValueError(f"{prefix}: 'dims' must be a non-empty list of positive ints")
+    dims: List[int] = []
+    for j, d in enumerate(dims_cfg):
+        if not isinstance(d, int) or d <= 0:
+            raise ValueError(f"{prefix}: dims[{j}] must be a positive int, got {d!r}")
+        dims.append(int(d))
+    full = bool(tc.get("full", False))
+    if full and len(dims) != 1:
+        raise ValueError(
+            f"{prefix}: full mesh expects dims to be a 1-tuple (N,), got {dims!r}"
+        )
+    validate_nonnegative_float_fields(tc, ["alpha_us"], prefix=prefix)
+    validate_positive_float_fields(tc, ["bw_per_port_GBps"], prefix=prefix)
+    return MeshTier(
+        name=name,
+        dims=tuple(dims),
+        bw_per_port_GBps=float(tc["bw_per_port_GBps"]),
+        alpha_us=float(tc["alpha_us"]),
+        full=full,
+        eta_alpha=_eta_alpha(prefix, tc),
+        eta_beta=_eta_beta(prefix, tc),
+    )
+
+
 _TOPOLOGY_PARSERS = {
     "crossbar": _parse_crossbar_tier,
     "torus": _parse_torus_tier,
+    "mesh": _parse_mesh_tier,
 }
 
 

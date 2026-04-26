@@ -186,15 +186,26 @@ def compute_prefill_comm(
         EP = 1
         k_active = 1
 
-    tp_algorithm = getattr(tuner, "tp_algorithm", "ring").lower()
-    ep_algorithm = getattr(tuner, "ep_algorithm", "ring").lower()
+    # Prefill reads the per-phase fields; falls back to legacy single-knob.
+    tp_algorithm = getattr(tuner, "tp_algorithm_prefill",
+                           getattr(tuner, "tp_algorithm", "ring")).lower()
+    ep_algorithm = getattr(tuner, "ep_algorithm_prefill",
+                           getattr(tuner, "ep_algorithm", "ring")).lower()
     torus_alg = getattr(tuner, "torus_algorithm", "ring").lower()
-    worst_case = getattr(tuner, "collective_worst_case", False)
+    inc_enabled = bool(getattr(tuner, "inc_enabled", True))
+
+    if tp_algorithm == "auto" or ep_algorithm == "auto":
+        raise ValueError(
+            "TuningSpec has algorithm='auto' for prefill; resolve via "
+            "core.collective_algo_opt.optimize_collective_algorithms(...) "
+            "before InferenceCalculator.run()."
+        )
 
     def _cost(coll: str, op: str, M: float, G: int, alg: str = "ring") -> float:
         return cost_collective(
             system.get_tier_chain(coll), op, M, G,
-            algorithm=alg, torus_algorithm=torus_alg, worst_case=worst_case,
+            algorithm=alg, torus_algorithm=torus_alg,
+            inc_enabled=inc_enabled,
         )
 
     # PP: token-scaled activation hop

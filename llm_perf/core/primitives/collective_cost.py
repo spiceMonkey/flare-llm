@@ -277,20 +277,33 @@ def torus_reduce_scatter(
 
 
 def torus_moe_all_to_all(
-    M: float, dims: Sequence[int], alpha_s: float, bw_Bps: float
+    M: float, dims: Sequence[int], alpha_s: float, bw_Bps: float,
+    wraparound: bool = True,
 ) -> float:
-    """Bisection-limited all-to-all on a k-D wraparound torus — collectives.md §5.2.
+    """Bisection-limited all-to-all on a k-D torus or k-D mesh — collectives.md §5.2.
 
-        t ≈ diam·α + D_max·M / (8·BW_link)
-        diam = Σ ⌊D_i / 2⌋,    D_max = max(dims)
+    Wraparound torus (default, `wraparound=True`):
+
+        t ≈ diam·α + D_max·M / (8·BW_link),    diam = Σ ⌊D_i / 2⌋
 
     Per-link bytes in one direction: L→R cross-cut traffic is
     (N/2)·(N/2)·(M/N) = N·M/4. The min-bisection severs 2·N/D_max links
     on a wraparound torus, so each cut link carries (N·M/4)/(2·N/D_max) =
-    D_max·M/8 bytes in one direction. Dividing by per-link single-direction
-    BW gives the formula. Only D_max — not N — scales the bandwidth term;
-    asymmetric layouts pay disproportionately. At cubic D_i = N^(1/k),
-    the BW term equals M/BW_link — torus matches star pairwise.
+    D_max·M/8 bytes in one direction.
+
+    k-D mesh (`wraparound=False`): same diameter formula but the bisection
+    cut is **halved** (no wraparound edges severed), so each cut link carries
+    twice the bytes:
+
+        t ≈ diam·α + D_max·M / (4·BW_link)
+
+    A2A on k-D mesh is exactly 2× worse than same-shape torus on the BW term;
+    AR / AG / RS are unaffected (open-line bucket brigade still telescopes
+    BW-optimally — see `torus_all_reduce` / `torus_all_gather`).
+
+    Only D_max — not N — scales the bandwidth term; asymmetric layouts pay
+    disproportionately. At cubic D_i = N^(1/k) and `wraparound=True`, the BW
+    term equals M/BW_link — torus matches star pairwise.
 
     M is the per-rank total A2A payload (Dispatch+Combine baked in by the
     caller, matching pairwise_a2a's convention).
@@ -300,7 +313,8 @@ def torus_moe_all_to_all(
         return 0.0
     diam = sum(d // 2 for d in dims)
     d_max = max(dims)
-    return diam * alpha_s + d_max * M / (8 * bw_Bps)
+    denom = 8.0 if wraparound else 4.0
+    return diam * alpha_s + d_max * M / (denom * bw_Bps)
 
 
 def aggregate_per_stage(

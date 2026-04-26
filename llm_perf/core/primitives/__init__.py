@@ -34,7 +34,7 @@ from .weight_footprint import (
 )
 from .kv_footprint import kv_bytes_per_seq
 from .linear_flops import linear_flops_per_token
-from .dispatch import cost_collective
+from .dispatch import cost_collective, enumerate_options
 
 __all__ = [
     # collective_cost
@@ -63,4 +63,5 @@ __all__ = [
     "linear_flops_per_token",
     # dispatcher
     "cost_collective",
+    "enumerate_options",
 ]
