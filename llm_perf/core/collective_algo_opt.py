@@ -2,14 +2,26 @@
 
 Standalone pure function that resolves `auto` placeholders in `TuningSpec` to
 concrete algorithm names per (phase × collective). Runs once after the
-partition is fixed; iterates over `enumerate_options(...)` for each cell and
-picks `min(cost)`.
+partition is fixed.
 
-INC selection is honored via `tuner.inc_enabled` — when True, INC is one of the
-enumerated options and naturally wins on cost when available; when False, only
-SW options (ring / tree) are enumerated. Per the user's design intent, INC
-selection is orthogonal to SW algorithm choice; the optimizer doesn't override
-the user's `inc_enabled` flag.
+Resolution policy:
+  - If `tuner.inc_enabled` is True AND INC is available for this op on this
+    tier chain (i.e. `enumerate_options` returns an "inc" entry): pick
+    `"inc"` directly. INC is a hardware deployment decision — when the
+    fabric supports it, it's exploited unconditionally. We don't compare
+    INC's cost against SW alternatives, since a deployment decision doesn't
+    flip on a tuning-grade cost difference (a high η_β on the INC tier
+    would only mean the η is mis-calibrated, not that INC should be
+    bypassed).
+  - Otherwise (INC unavailable for this op, or `inc_enabled=False`):
+    enumerate the SW alternatives and pick `min(cost)`. This is the
+    SW-only optimizer path — used when INC is structurally absent
+    (e.g. EP A2A on a sharp_class tier — sharp_class doesn't accelerate
+    A2A) or operator-disabled.
+
+So INC selection is *prioritized over* SW choice, not strictly orthogonal:
+when both apply, INC wins by policy. When INC doesn't apply, SW choice is
+optimized independently.
 
 Resolution scope:
   - tp_algorithm_decode  / tp_algorithm_prefill   (TP all-reduce)
@@ -114,12 +126,17 @@ def _resolve(
     G: int,
     inc_enabled: bool,
 ) -> str:
-    """Pick the min-cost algorithm name from `enumerate_options`.
+    """Pick the algorithm per the policy in this module's docstring.
 
-    Empty option set (G ≤ 1 or empty chain) → "ring" sentinel (no work).
+    1. If "inc" is among the enumerated options → return "inc" directly
+       (hardware-deployment priority; SW costs not compared).
+    2. Else if SW options exist → return `min(cost)` among them.
+    3. Else (empty option set, e.g. G ≤ 1 or empty chain) → "ring" sentinel.
     """
     options = enumerate_options(tier_chain, op, M, G, inc_enabled=inc_enabled)
     if not options:
         return "ring"
+    if any(name == "inc" for name, _ in options):
+        return "inc"
     name, _ = min(options, key=lambda no_pair: no_pair[1])
     return name
