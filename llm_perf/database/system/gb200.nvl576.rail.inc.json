@@ -1,0 +1,32 @@
+{
+  "schema": "llm_perf.system",
+  "name": "gb200_nvl576_rail_inc",
+  "num_devices": 576,
+  "device": {
+    "name": "GB200-NVL576-rail-INC",
+    "hbm_capacity_GB": 192.0,
+    "hbm_bandwidth_GBps": 8000.0,
+    "peak_flops_TF": 9000.0
+  },
+  "fabrics": {
+    "nvlink5": {
+      "tiers": [
+        {"name": "intra-rack-nvswitch", "ports": 72, "bw_per_port_GBps": 900.0, "alpha_us": 0.5,
+         "inc": "nvls", "inc_alpha_us": 0.2}
+      ]
+    },
+    "ib_rail": {
+      "tiers": [
+        {"name": "rail-leaf-quantum-ib", "ports": 8, "bw_per_port_GBps": 400.0, "alpha_us": 2.0,
+         "inc": "sharp", "inc_alpha_us": 0.4}
+      ]
+    }
+  },
+  "collective_fabrics": {
+    "TP": ["nvlink5", "ib_rail"],
+    "EP": ["nvlink5", "ib_rail"],
+    "SP": ["nvlink5", "ib_rail"],
+    "PP": ["nvlink5", "ib_rail"]
+  },
+  "_comment": "GB200 NVL576 rail-optimized 2-tier scale-up: 8 NVL72 pods on rail-aligned IB leaves (Quantum SHARP). Rail-optimized layout means each GPU's 8 NICs land on 8 distinct rail-leaves, and pods sharing the same rail-leaves see only single-leaf hops on cross-pod traffic — α_outer = α_leaf ≈ 2 μs (vs ~8 μs full spine traversal). For our 8-pod SuperPOD with rail-radix ≥ 8, all 8 pods share rail-leaves and the spine is never crossed for inter-pod collectives. Tier 0 = NVLink5 NVSwitch (72-port, 900 GB/s, 0.5 μs, NVLS sharp_class with 0.2 μs cut-through). Tier 1 = rail-leaf IB (8 ports, 400 GB/s per pod, 2.0 μs, Quantum SHARP with 0.4 μs cut-through). For collective groups ≤72 ranks the entire collective stays in tier 0; for groups 73–576 the dispatcher's hierarchical RS → sub-AR → AG composition uses the rail-leaf as the outer tier, with INC capability on both tiers when tuner.inc_enabled. See documentation/explaining/collectives/03_hierarchical_topologies.md Appendix A for the worked rail-optimized SuperPOD topology."
+}
