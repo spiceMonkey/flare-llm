@@ -5,7 +5,8 @@ from ..specs.model_spec import LlmModelSpec
 from ..specs.system_spec import SystemSpec
 from ..specs.partition_spec import PartitionSpec
 from ..specs.tuner_spec import TuningSpec
-from ..utils import GB_TO_BYTES, TB_TO_FLOPS
+from ..utils import TB_TO_FLOPS
+from .memory_placement import resolve_placement, t_mem_from_placement
 from .primitives import (
     dense_weight_bytes,
     moe_weight_bytes,
@@ -48,7 +49,7 @@ class PrefillCommResults:
 @dataclass
 class PrefillLatencyResults:
     t_prefill_compute: float        # F_prefill_device / R_GPU
-    t_prefill_mem: float            # T_prefill_device / B_eff_mem
+    t_prefill_mem: float            # multi-tier sum, sram.md §2.1
     t_prefill_local: float          # max(compute, mem)
     t_prefill_comm: float
     t_pipeline_warmup: float        # (PP-1) * t_stage
@@ -272,7 +273,7 @@ def compute_prefill_latency(
     """Hardware prefill latency: single-request, batched, and chunked."""
 
     R_gpu = system.device.peak_flops_TF * TB_TO_FLOPS
-    B_eff_mem = system.device.hbm_bandwidth_GBps * GB_TO_BYTES
+    tiers = system.device.get_tiers()
 
     PP = partition.PP
     TP = partition.TP
@@ -288,10 +289,24 @@ def compute_prefill_latency(
     H_kv = model.H_kv()
     L = model.L
 
+    # Per-tier memory time helper. T_kv_write_device is per-request; the
+    # placement layer treats it the same as decode's T_KV (sram.md §1.3
+    # "T_KV,i is per-request bytes"). For chunked / batched prefill the same
+    # helper is reused with B = batch count and the chunk's KV term.
+    def _t_mem(T_theta_total: float, T_kv_per_req: float, B: int) -> float:
+        plc = resolve_placement(
+            T_theta_device=T_theta_total,
+            T_kv_per_request_device=T_kv_per_req,
+            B=max(1, B),
+            tiers=tiers,
+            placement=tuner.placement,
+        )
+        return t_mem_from_placement(plc, B=max(1, B), tiers=tiers)
+
     # ── Single-request prefill (§3) ──────────────────────
 
     t_prefill_compute = flops.F_prefill_device / R_gpu
-    t_prefill_mem = traffic.T_prefill_device / B_eff_mem
+    t_prefill_mem = _t_mem(traffic.T_theta_device, traffic.T_kv_write_device, B=1)
     t_prefill_local = max(t_prefill_compute, t_prefill_mem)
     t_prefill_comm = comm.t_prefill_comm
 
@@ -310,9 +325,11 @@ def compute_prefill_latency(
     if B_pf > 1:
         # FLOPs scale linearly with B_prefill
         t_batched_compute = B_pf * flops.F_prefill_device / R_gpu
-        # Traffic: weights loaded once + B_pf * KV writes
-        T_batched = traffic.T_theta_device + B_pf * traffic.T_kv_write_device
-        t_batched_mem = T_batched / B_eff_mem
+        # Traffic: weights loaded once + B_pf * KV writes per request
+        # (multi-tier sum; placement re-resolved at this B).
+        t_batched_mem = _t_mem(
+            traffic.T_theta_device, traffic.T_kv_write_device, B=B_pf,
+        )
         t_batched_local = max(t_batched_compute, t_batched_mem)
         # Comm scales with the batched token count (B_pf · S), not S alone:
         # collective messages carry per-step activations whose payload grows
@@ -366,10 +383,12 @@ def compute_prefill_latency(
 
             t_chunk_compute_k = F_chunk_k / R_gpu
 
-            # Memory: weights + KV write + KV read (kC entries for attention)
+            # Memory: weights + KV write + KV read (kC entries for attention).
+            # Per-tier sum (sram.md §2.1): KV-write + KV-read folded into a
+            # single per-request KV term for placement purposes.
             T_kv_read_k = (L / PP) * (2 * k * C * H_kv * model.bytes_per_param) / (TP * SP)
-            T_chunk_k = T_theta_chunk + T_kv_write_chunk + T_kv_read_k
-            t_chunk_mem_k = T_chunk_k / B_eff_mem
+            T_kv_chunk_k = T_kv_write_chunk + T_kv_read_k
+            t_chunk_mem_k = _t_mem(T_theta_chunk, T_kv_chunk_k, B=1)
 
             t_chunk_local_k = max(t_chunk_compute_k, t_chunk_mem_k)
             t_chunk_k = t_chunk_local_k + max(0.0, t_chunk_comm - rho * t_chunk_local_k)

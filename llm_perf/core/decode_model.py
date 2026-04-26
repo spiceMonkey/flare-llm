@@ -23,6 +23,7 @@ from ..specs.system_spec import SystemSpec
 from ..specs.partition_spec import PartitionSpec
 from ..specs.tuner_spec import TuningSpec
 from ..utils import GB_TO_BYTES, TB_TO_FLOPS
+from .memory_placement import resolve_placement, t_mem_from_placement
 from .primitives import (
     dense_weight_bytes,
     moe_weight_bytes,
@@ -284,11 +285,23 @@ def compute_latency(
     PP = partition.PP
 
     R_gpu = system.device.peak_flops_TF * TB_TO_FLOPS
-    B_eff_mem = system.device.hbm_bandwidth_GBps * GB_TO_BYTES
 
     # Step-level roofline: B tokens computed, weights loaded once.
+    # `t_mem` opens the legacy single-bandwidth term over device memory tiers
+    # per sram.md §2.1: t_mem(B) = Σ_i (T_θ,i + B·T_KV,i) / BW_eff,i.
+    # Resolves placement (greedy "auto" or operator-pinned) before summing.
+    # On a single-tier device with eta_beta=1.0 (PR1 legacy shim), this
+    # collapses to T_step_eff / BW_mem — bitwise identical to pre-PR2.
+    tiers = system.device.get_tiers()
+    placement = resolve_placement(
+        T_theta_device=traffic.T_theta,
+        T_kv_per_request_device=traffic.T_kv,
+        B=max(1, B),
+        tiers=tiers,
+        placement=tuner.placement,
+    )
     t_compute = flops.F_step_device / R_gpu
-    t_mem = traffic.T_step_eff / B_eff_mem
+    t_mem = t_mem_from_placement(placement, B=max(1, B), tiers=tiers)
     t_local = max(t_compute, t_mem)
 
     t_comm = comm.t_comm_stage
@@ -306,8 +319,12 @@ def compute_latency(
     TTPS = DP * TPS_single
 
     # B* crossover: batch size where the system transitions from
-    # memory-bound to compute-bound.
-    denom = flops.F_token_device * B_eff_mem - traffic.T_kv * R_gpu
+    # memory-bound to compute-bound. For multi-tier devices this uses tier 0's
+    # effective bandwidth as a representative fast-tier proxy (sram.md §2.2
+    # gives the exact two-tier form when weights and KV live on separate
+    # tiers; the single-tier formula here matches that special case W=K=tier-0).
+    BW_top = tiers[0].bandwidth_GBps * tiers[0].eta_beta * GB_TO_BYTES
+    denom = flops.F_token_device * BW_top - traffic.T_kv * R_gpu
     B_star = (traffic.T_theta * R_gpu / denom) if denom > 0 else float("inf")
 
     return LatencyResults(

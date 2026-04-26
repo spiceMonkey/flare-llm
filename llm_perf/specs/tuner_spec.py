@@ -1,4 +1,25 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+
+@dataclass
+class MemoryPlacementSpec:
+    """Per-data-class memory tier placement (sram.md §1.3).
+
+    Each field selects the tier that holds the corresponding data class:
+      - "auto": greedy fastest-first — fill faster tiers first, spill to
+        slower tiers when capacity is exhausted (sram.md §1.3 first policy).
+      - "<tier_name>": pin this data class to the named tier (must match a
+        `MemoryTierSpec.name` on the device); CapacityError if it doesn't fit
+        (sram.md §1.3 second policy — d-Matrix Aviator-style mode toggle).
+
+    Defaults are "auto" / "auto", which on a single-tier device collapses to
+    the legacy "everything on HBM" behavior — bitwise identical to pre-PR2
+    `t_mem = T_step / BW_mem`.
+    """
+
+    weights_tier: str = "auto"   # tier name or "auto"
+    kv_tier: str = "auto"        # tier name or "auto"
+
 
 @dataclass
 class TuningSpec:
@@ -58,4 +79,11 @@ class TuningSpec:
     # measurements and for hardware where SHARP is disabled at runtime.
     # Inert on tier chains where any crossed tier has inc == "none".
     inc_enabled: bool = True
+
+    # Per-data-class memory tier placement (sram.md §1.3). Defaults are
+    # "auto"/"auto" — greedy fastest-first, which collapses to legacy
+    # behavior on single-tier devices. New multi-tier devices may pin
+    # weights or KV to a named tier (e.g. d-Matrix Capacity Mode pins
+    # weights to "lpddr5" to free SRAM for larger batch / context).
+    placement: MemoryPlacementSpec = field(default_factory=MemoryPlacementSpec)
 
