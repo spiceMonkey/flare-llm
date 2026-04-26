@@ -1,24 +1,22 @@
-"""Topology-aware collective cost dispatcher — switching.md §10.
+"""Topology-aware collective cost dispatcher — collectives.md §3–§6.
 
-Replaces the old `span_tiers(...) -> (α_sum, BW_min)` flatten-then-apply
-pattern with a tier walk that picks each tier's contribution based on its
-`.topology` discriminator. The walker's semantics match `span_tiers`
-exactly: tiers are traversed innermost-first, and the collective is said
-to "cross" a tier once the cumulative reach $\\prod \\mathrm{ports}$ is
-below the group size. `G` is never clamped — primitives consume the
-caller's `G` regardless of cumulative reach (preserves span_tiers
-behavior for small out-of-bounds cases).
+Walks a fabric chain innermost-first, picking each tier's contribution
+based on its `.topology` discriminator. Crossbar tiers flatten to a single
+$(\\alpha_\\mathrm{sum}, \\mathrm{BW}_\\min)$ pair consumed by the star
+primitives in `collective_cost.py`. Torus tiers route into the dim-decomposed
+primitives. Tiers are traversed innermost-first; a collective is said to
+"cross" a tier once cumulative reach $\\prod \\mathrm{ports}$ is below the
+group size. `G` is never clamped — primitives consume the caller's `G`
+regardless of cumulative reach.
 
-**Bit-identity guarantee (Phase C, see scratch/switching_upgrade.md §10.4):**
-For a tier chain where every crossed tier is a `CrossbarTier`, this
-function returns *exactly* the same float as the pre-refactor pattern
-`ring_or_tree(M, G, *span_tiers(tiers, G)[:2])`. The crossbar branch
-below reproduces that flatten step verbatim — no rounding, no
+**Bit-identity guarantee.** For a tier chain where every crossed tier is a
+`CrossbarTier`, this function returns *exactly* the same float as the
+pattern `ring_or_tree(M, G, *span_tiers(tiers, G)[:2])`. The crossbar
+branch below reproduces that flatten step verbatim — no rounding, no
 intermediate arithmetic reshuffling.
 
-Torus tiers route into their torus primitives. Genuinely mixed
-crossbar/torus chains fall back to the crossbar-flatten bound with a
-`UserWarning` (explicit hybrid compositions are a follow-up).
+Genuinely mixed crossbar/torus chains fall back to the crossbar-flatten
+bound with a `UserWarning` (explicit hybrid compositions are a follow-up).
 """
 
 from __future__ import annotations
@@ -94,7 +92,7 @@ def cost_collective(
         Ignored for `all_gather` (always ring) and `p2p` (single hop), and
         on torus tiers (see `torus_algorithm`).
       torus_algorithm: "ring" (dim-by-dim) or "swing". "swing" raises
-        `NotImplementedError` — reserved for switching.md §8.7 follow-up.
+        `NotImplementedError` — reserved for a future Swing-AR primitive.
       inc_enabled: when True, route AR/AG over a crossbar chain whose every
         crossed tier declares `inc != "none"` to the INC primitives
         (n_α collapse + BW-eff doubling for AR). When False, force software
@@ -147,8 +145,7 @@ def cost_collective(
     if topologies == {"torus"}:
         if torus_algorithm == "swing":
             raise NotImplementedError(
-                "torus_algorithm='swing' not yet implemented; "
-                "see switching.md §8.7."
+                "torus_algorithm='swing' not yet implemented."
             )
         if torus_algorithm != "ring":
             raise ValueError(
@@ -284,7 +281,7 @@ def _torus_cost(op: str, M: float, G: int, crossed: List[TierSpec]) -> float:
         warnings.warn(
             f"Torus collective G={G} misaligned with dims={full_dims}; "
             f"using conservative flat-ring bound. "
-            f"See switching.md §8.3 for dim-aligned layouts.",
+            f"See collectives.md §3.2 for dim-aligned layouts.",
             UserWarning,
             stacklevel=3,
         )

@@ -221,7 +221,7 @@ def _prod(xs: Sequence[int]) -> int:
 def torus_all_reduce(
     M: float, dims: Sequence[int], alpha_s: float, bw_Bps: float
 ) -> float:
-    """k-D torus dim-by-dim ring all-reduce — switching.md §8.3.
+    """k-D torus dim-by-dim ring all-reduce — collectives.md §3.2.
 
         t = 2·Σ(D_i - 1)·α + 2·(N-1)/N · M/BW,    N = ∏ D_i
 
@@ -244,7 +244,7 @@ def torus_all_reduce(
 def torus_all_gather(
     M: float, dims: Sequence[int], alpha_s: float, bw_Bps: float
 ) -> float:
-    """k-D torus dim-by-dim ring all-gather — switching.md §8.4 / collectives.md §4.2.
+    """k-D torus dim-by-dim ring all-gather — collectives.md §4.2.
 
         t = Σ(D_i - 1)·α + (N - 1) · M/BW,    N = ∏ D_i
 
@@ -279,8 +279,7 @@ def torus_reduce_scatter(
 def torus_moe_all_to_all(
     M: float, dims: Sequence[int], alpha_s: float, bw_Bps: float
 ) -> float:
-    """Bisection-limited all-to-all on a k-D wraparound torus —
-    switching.md §8.5 / collectives.md §5.2.
+    """Bisection-limited all-to-all on a k-D wraparound torus — collectives.md §5.2.
 
         t ≈ diam·α + D_max·M / (8·BW_link)
         diam = Σ ⌊D_i / 2⌋,    D_max = max(dims)

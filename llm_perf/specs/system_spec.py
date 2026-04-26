@@ -20,7 +20,7 @@ class CrossbarTier:
     Default topology for all existing system JSONs. `ports` is the radix —
     the number of ranks reachable within this tier from any single rank.
     Cumulative reach at tier k is the product of ports over tiers 0..k.
-    See documentation/modeling/switching.md §2-6.
+    See documentation/modeling/collectives.md §3.1 / §3.4 for the cost forms consumed by each tier kind.
 
     Contention coefficients `eta_alpha` (≥ 1, inflates α) and `eta_beta`
     (∈ (0, 1], deflates BW) coarsen dynamic contention into the α–β model
@@ -60,7 +60,7 @@ class TorusTier:
     `dims` is (D_1, ..., D_k); reach is prod(dims). Each node has 2k neighbor
     links; `bw_per_port_GBps` is the per-link single-direction bandwidth.
     Diameter = sum(floor(D_i/2)); bisection cut binds the largest dim.
-    See documentation/modeling/switching.md §8.
+    See documentation/modeling/collectives.md §3.2 / §4.2 / §5.2 for the dim-decomposed primitive cost forms.
 
     Contention coefficients `eta_alpha`, `eta_beta` as in `CrossbarTier`;
     see documentation/modeling/contention.md.

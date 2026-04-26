@@ -8,7 +8,7 @@ imported instead of hardcoding magic values across the codebase.
 TP_ALGORITHMS = ("ring", "tree")
 EP_ALGORITHMS = ("ring", "tree")
 # Torus-native AR algorithms: "ring" = dim-by-dim ring AR; "swing" is
-# reserved (switching.md §8.7) and raises NotImplementedError.
+# reserved for a future Swing-AR primitive and raises NotImplementedError.
 TORUS_ALGORITHMS = ("ring", "swing")
 
 # Unit scaling factors
