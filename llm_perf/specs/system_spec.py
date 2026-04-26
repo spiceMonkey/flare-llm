@@ -1,6 +1,6 @@
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 
 @dataclass
@@ -30,34 +30,64 @@ class MemoryTierSpec:
 class DeviceSpec:
     """Single device (GPU/NPU) specs.
 
-    The legacy fields `hbm_capacity_GB` / `hbm_bandwidth_GBps` model a
-    single-tier HBM device and remain required for back-compatibility. The
-    new `tiers` field (sram.md §1.1) carries an ordered list of memory
-    tiers; it is optional, defaulting to an empty list. Downstream code
-    should call `get_tiers()` rather than reading the legacy fields directly:
-    `get_tiers()` returns `tiers` if non-empty, else materializes a one-tier
-    list from the legacy fields (with `eta_beta = 1.0` to preserve existing
-    regression numbers exactly — sram.md §1.2 default of 0.92 only applies
-    to explicit multi-tier devices).
+    The legacy fields `hbm_capacity_GB` / `hbm_bandwidth_GBps` model the
+    device's main DRAM-like tier and remain required for back-compat. Two
+    additive paths to multi-tier:
+
+      1. **Top-level `sram_capacity_MB` / `sram_bandwidth_TBps`** (PR3): a
+         fast on-die SRAM cache layered on top of the main DRAM tier.
+         Shipped naming convention for SRAM-augmented devices like d-Matrix
+         Corsair (SRAM + LPDDR5 represented as SRAM + "hbm" slot). Units
+         chosen to match natural magnitudes: MB and TB/s.
+
+      2. **Explicit `tiers: List[MemoryTierSpec]`** (PR1): an ordered list
+         for arbitrary multi-tier topologies. Use this when the field-name
+         conventions of (1) don't fit (e.g., a 3+ tier device, or non-HBM
+         main memory where you want an accurate `name` like "lpddr5").
+
+    Downstream code should call `get_tiers()` instead of reading any of these
+    fields directly. The shim materializes:
+
+      - `tiers` if non-empty (path 2)
+      - `[SRAM tier, HBM tier]` if `sram_*` is set (path 1, sram.md §1.1)
+      - `[HBM tier]` otherwise (legacy single-tier; preserves regression)
+
+    Auto-materialized tiers use `eta_beta = 1.0` to keep `t_mem` numerically
+    identical to the legacy `T_step / BW_mem` formula. New devices wanting
+    the sram.md §1.2 defaults (HBM=0.92, LPDDR5=0.85) should use path 2.
     """
 
     name: str
     hbm_capacity_GB: float        # capacity per device (GB, decimal)
     hbm_bandwidth_GBps: float      # effective memory bandwidth (GB/s)
     peak_flops_TF: float           # peak compute throughput (TFLOPs)
+    sram_capacity_MB: Optional[float] = None   # optional fast SRAM tier (MB)
+    sram_bandwidth_TBps: Optional[float] = None  # optional fast SRAM BW (TB/s)
     tiers: List["MemoryTierSpec"] = field(default_factory=list)
 
     def get_tiers(self) -> List["MemoryTierSpec"]:
-        """Return the device's memory tier list, materializing the legacy
-        single-tier shim if `tiers` is empty.
+        """Return the device's memory tier list, materializing a shim from
+        the legacy / sram_* fields when `tiers` is empty.
 
-        The shim uses `eta_beta = 1.0` to keep `t_mem` numerically identical
-        to the legacy single-tier formula `T_step / BW_mem`. New multi-tier
-        devices should populate `tiers` explicitly with sram.md §1.2 defaults.
+        Materialization order (sram.md §1.1, fastest first):
+          - explicit `tiers` (if non-empty)
+          - `[SRAM tier, HBM tier]` if `sram_*` set (PR3 convention)
+          - `[HBM tier]` (legacy single-tier path)
         """
         if self.tiers:
             return self.tiers
-        return [
+        materialized: List["MemoryTierSpec"] = []
+        if self.sram_capacity_MB is not None and self.sram_bandwidth_TBps is not None:
+            materialized.append(
+                MemoryTierSpec(
+                    name="sram",
+                    capacity_GB=self.sram_capacity_MB / 1000.0,  # MB → GB (decimal)
+                    bandwidth_GBps=self.sram_bandwidth_TBps * 1000.0,  # TB/s → GB/s
+                    alpha_us=0.0,
+                    eta_beta=1.0,
+                )
+            )
+        materialized.append(
             MemoryTierSpec(
                 name="hbm",
                 capacity_GB=self.hbm_capacity_GB,
@@ -65,7 +95,8 @@ class DeviceSpec:
                 alpha_us=0.0,
                 eta_beta=1.0,
             )
-        ]
+        )
+        return materialized
 
 
 @dataclass

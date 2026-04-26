@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict
 
-from ..specs.tuner_spec import TuningSpec
+from ..specs.tuner_spec import MemoryPlacementSpec, TuningSpec
 from ..utils import (
     validate_positive_int_fields,
     validate_nonnegative_int_fields,
@@ -107,6 +107,19 @@ def tuning_spec_from_json_dict(cfg: Dict[str, Any]) -> TuningSpec:
     if float(cfg.get("overlap_factor", 0.0)) > 1.0:
         raise ValueError(f"overlap_factor must be <= 1.0, got {cfg['overlap_factor']}")
 
+    # MemoryPlacementSpec block (sram.md §1.3 Operator-Specified policy).
+    # JSON shape:  "placement": {"weights_tier": "sram", "kv_tier": "auto"}
+    # Both fields default to "auto" → greedy fastest-first.
+    placement_cfg = cfg.get("placement", {})
+    if not isinstance(placement_cfg, dict):
+        raise ValueError(
+            f"tuning configuration: 'placement' must be an object, got {placement_cfg!r}"
+        )
+    placement = MemoryPlacementSpec(
+        weights_tier=str(placement_cfg.get("weights_tier", "auto")),
+        kv_tier=str(placement_cfg.get("kv_tier", "auto")),
+    )
+
     return TuningSpec(
         n_TP_collectives=int(cfg.get("n_TP_collectives", 2)),
         n_EP_collectives=int(cfg.get("n_EP_collectives", 1)),
@@ -125,6 +138,7 @@ def tuning_spec_from_json_dict(cfg: Dict[str, Any]) -> TuningSpec:
         chunk_size=int(cfg.get("chunk_size", 0)),
         torus_algorithm=torus_algorithm,
         inc_enabled=bool(cfg.get("inc_enabled", True)),
+        placement=placement,
     )
 
 

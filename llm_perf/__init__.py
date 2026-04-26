@@ -13,7 +13,7 @@ from .specs.system_spec import (
     TorusTier,
 )
 from .specs.partition_spec import PartitionSpec
-from .specs.tuner_spec import TuningSpec
+from .specs.tuner_spec import MemoryPlacementSpec, TuningSpec
 from .specs.overhead_spec import OverheadSpec
 from .specs.disagg_spec import DisaggSpec
 
@@ -33,6 +33,7 @@ __all__ = [
     "SystemSpec",
     "PartitionSpec",
     "TuningSpec",
+    "MemoryPlacementSpec",
     "OverheadSpec",
     "DisaggSpec",
     # Calculators

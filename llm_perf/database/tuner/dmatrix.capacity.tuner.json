@@ -1,0 +1,22 @@
+{
+  "schema": "llm_perf.tuner",
+  "name": "dmatrix_capacity_mode",
+
+  "S_decode": 8192,
+  "B_decode": 16,
+
+  "tp_algorithm": "ring",
+  "ep_algorithm": "ring",
+
+  "n_TP_collectives": 2,
+  "n_EP_collectives": 1,
+  "n_SP_collectives": 1,
+  "overlap_factor": 0.0,
+
+  "placement": {
+    "weights_tier": "hbm",
+    "kv_tier": "sram"
+  },
+
+  "_comment": "d-Matrix Corsair Capacity Mode (sram.md §3.3): pin weights to LPDDR5 (the 'hbm' tier slot in the auto-materialized hierarchy from sram_*+hbm_* fields), freeing SRAM for KV cache and a larger batch / longer context. Used for models too large to fit aggregate SRAM (e.g., Llama-3-70B at MXINT8 ≈ 70 GB > 32 GB across 16 cards). Trades per-user TPOT for aggregate throughput / capacity, matching d-Matrix Aviator runtime's mode toggle."
+}

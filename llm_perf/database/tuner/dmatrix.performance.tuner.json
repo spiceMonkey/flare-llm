@@ -1,0 +1,22 @@
+{
+  "schema": "llm_perf.tuner",
+  "name": "dmatrix_performance_mode",
+
+  "S_decode": 8192,
+  "B_decode": 16,
+
+  "tp_algorithm": "ring",
+  "ep_algorithm": "ring",
+
+  "n_TP_collectives": 2,
+  "n_EP_collectives": 1,
+  "n_SP_collectives": 1,
+  "overlap_factor": 0.0,
+
+  "placement": {
+    "weights_tier": "auto",
+    "kv_tier": "auto"
+  },
+
+  "_comment": "d-Matrix Corsair Performance Mode (sram.md §3.2): greedy fastest-first. Weights and KV both target SRAM; spillover to LPDDR5 only when SRAM saturates. Suitable for small-to-medium models (e.g., Llama-3-8B) that fit aggregate SRAM with margin."
+}

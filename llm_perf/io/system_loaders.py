@@ -366,11 +366,29 @@ def system_spec_from_json_dict(cfg: Dict[str, Any]) -> SystemSpec:
             _parse_memory_tier(f"device configuration tier[{idx}]", tc)
             for idx, tc in enumerate(raw_tiers)
         ]
+    sram_capacity_MB = None
+    sram_bandwidth_TBps = None
+    has_sram_cap = "sram_capacity_MB" in dev_cfg
+    has_sram_bw = "sram_bandwidth_TBps" in dev_cfg
+    if has_sram_cap != has_sram_bw:
+        raise ValueError(
+            "device configuration: 'sram_capacity_MB' and 'sram_bandwidth_TBps' "
+            "must be set together (or both omitted)"
+        )
+    if has_sram_cap:
+        validate_positive_float_fields(
+            dev_cfg, ["sram_capacity_MB", "sram_bandwidth_TBps"],
+            prefix="device configuration",
+        )
+        sram_capacity_MB = float(dev_cfg["sram_capacity_MB"])
+        sram_bandwidth_TBps = float(dev_cfg["sram_bandwidth_TBps"])
     device = DeviceSpec(
         name=str(dev_cfg["name"]),
         hbm_capacity_GB=float(dev_cfg["hbm_capacity_GB"]),
         hbm_bandwidth_GBps=float(dev_cfg["hbm_bandwidth_GBps"]),
         peak_flops_TF=float(dev_cfg["peak_flops_TF"]),
+        sram_capacity_MB=sram_capacity_MB,
+        sram_bandwidth_TBps=sram_bandwidth_TBps,
         tiers=tiers,
     )
 

@@ -1,0 +1,29 @@
+{
+  "schema": "llm_perf.system",
+  "name": "groq_lpu_576",
+  "num_devices": 576,
+  "device": {
+    "name": "Groq-LPU",
+    "hbm_capacity_GB": 0.23,
+    "hbm_bandwidth_GBps": 80000.0,
+    "peak_flops_TF": 188.0,
+    "tiers": [
+      {"name": "sram", "capacity_GB": 0.23, "bandwidth_GBps": 80000.0, "eta_beta": 1.0}
+    ]
+  },
+  "fabrics": {
+    "lpu-network": {
+      "tiers": [
+        {"name": "lpu-mesh", "ports": 576, "bw_per_port_GBps": 100.0, "alpha_us": 0.5}
+      ]
+    }
+  },
+  "collective_fabrics": {
+    "TP": "lpu-network",
+    "EP": "lpu-network",
+    "SP": "lpu-network",
+    "PP": "lpu-network"
+  },
+
+  "_comment": "Groq LPU: SRAM-only inference accelerator. 230 MB on-die SRAM @ 80 TB/s per chip; 188 TFLOPS FP16 (750 TOPS INT8). 576-chip topology referenced for Llama-2-70B INT8 inference (sram.md §3.4). Uses the explicit `tiers` block (path 2) rather than sram_*+hbm_* (path 1) because there is no DRAM tier — only SRAM. The hbm_* fields are filled with the SRAM values to satisfy the back-compat-required loader fields, but get_tiers() returns only the explicit `tiers` list. See [GROQ-LPU, GROQ-DEEPDIVE]."
+}

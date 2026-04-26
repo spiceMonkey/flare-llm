@@ -1,0 +1,8 @@
+{
+  "schema": "llm_perf.partition",
+  "name": "groq_lpu_TP576",
+  "PP": 1,
+  "TP": 576,
+  "EP": 1,
+  "SP": 1
+}
