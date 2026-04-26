@@ -4,14 +4,14 @@ from .system_spec import (
     CrossbarTier,
     DeviceSpec,
     FabricSpec,
+    MemoryTierSpec,
     MeshTier,
-    SwitchTierSpec,
     SystemSpec,
     TierSpec,
     TorusTier,
 )
 from .partition_spec import PartitionSpec
-from .tuner_spec import TuningSpec
+from .tuner_spec import MemoryPlacementSpec, TuningSpec
 from .overhead_spec import OverheadSpec
 from .disagg_spec import DisaggSpec
 
@@ -20,14 +20,15 @@ __all__ = [
     "MoESpec",
     "DeviceSpec",
     "FabricSpec",
-    "SwitchTierSpec",
     "CrossbarTier",
     "TorusTier",
     "MeshTier",
+    "MemoryTierSpec",
     "TierSpec",
     "SystemSpec",
     "PartitionSpec",
     "TuningSpec",
+    "MemoryPlacementSpec",
     "OverheadSpec",
     "DisaggSpec",
 ]

@@ -11,7 +11,6 @@ from ..specs.system_spec import (
     FabricSpec,
     MemoryTierSpec,
     MeshTier,
-    SwitchTierSpec,
     SystemSpec,
     TierSpec,
     TorusTier,

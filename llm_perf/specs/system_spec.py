@@ -169,13 +169,6 @@ class TorusTier:
         return n
 
 
-# Back-compat alias: existing imports `from ...system_spec import SwitchTierSpec`
-# keep working. SwitchTierSpec IS CrossbarTier at runtime, so isinstance checks
-# and positional construction `SwitchTierSpec(name, ports, bw, alpha)` are
-# preserved. New code should prefer CrossbarTier.
-SwitchTierSpec = CrossbarTier
-
-
 @dataclass
 class MeshTier:
     """One mesh tier — handles both full mesh and k-D mesh via the `full` flag.
