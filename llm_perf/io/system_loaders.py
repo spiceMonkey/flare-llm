@@ -9,6 +9,7 @@ from ..specs.system_spec import (
     CrossbarTier,
     DeviceSpec,
     FabricSpec,
+    MemoryTierSpec,
     MeshTier,
     SwitchTierSpec,
     SystemSpec,
@@ -58,6 +59,52 @@ _INC_MODES = ("none", "sharp_class", "hw_a2a")
 # share the same modeling form (switch ALU + multicast crossbar; AR / AG / RS
 # routing). HW A2A is a separate, newer capability with no legacy alias.
 _INC_LEGACY_ALIASES = {"nvls": "sharp_class", "sharp": "sharp_class"}
+
+
+# Default eta_beta per tier name (sram.md §1.2). When a JSON memory-tier
+# entry omits eta_beta, the loader fills it in based on the tier's name (case
+# insensitive). Names not in this table fall back to 1.0 (calibrated peak).
+_MEMORY_TIER_DEFAULT_ETA_BETA = {
+    "sram": 1.0,
+    "hbm": 0.92,
+    "lpddr5": 0.85,
+    "lpddr": 0.85,
+}
+
+
+def _parse_memory_tier(prefix: str, tc: Dict[str, Any]) -> MemoryTierSpec:
+    """Parse one entry of `device.tiers[]`.
+
+    Required: name (str), capacity_GB (positive float), bandwidth_GBps
+    (positive float). Optional: alpha_us (≥ 0, default 0.0), eta_beta
+    (∈ (0, 1], default looked up from `_MEMORY_TIER_DEFAULT_ETA_BETA` by
+    tier name or 1.0 if unknown). See sram.md §1.1 / §1.2.
+    """
+    if not isinstance(tc, dict):
+        raise ValueError(f"{prefix}: memory tier entry must be an object, got {tc!r}")
+    if "name" not in tc or not isinstance(tc["name"], str):
+        raise ValueError(f"{prefix}: memory tier entry missing string 'name'")
+    name = str(tc["name"])
+    inner_prefix = f"{prefix} tier '{name}'"
+    validate_positive_float_fields(
+        tc, ["capacity_GB", "bandwidth_GBps"], prefix=inner_prefix
+    )
+    if "alpha_us" in tc:
+        validate_nonnegative_float_fields(tc, ["alpha_us"], prefix=inner_prefix)
+        alpha_us = float(tc["alpha_us"])
+    else:
+        alpha_us = 0.0
+    if "eta_beta" in tc:
+        eta_beta = _eta_beta(inner_prefix, tc, key="eta_beta")
+    else:
+        eta_beta = _MEMORY_TIER_DEFAULT_ETA_BETA.get(name.lower(), 1.0)
+    return MemoryTierSpec(
+        name=name,
+        capacity_GB=float(tc["capacity_GB"]),
+        bandwidth_GBps=float(tc["bandwidth_GBps"]),
+        alpha_us=alpha_us,
+        eta_beta=eta_beta,
+    )
 
 
 def _parse_inc(prefix: str, tc: Dict[str, Any]) -> str:
@@ -308,11 +355,23 @@ def system_spec_from_json_dict(cfg: Dict[str, Any]) -> SystemSpec:
         ["hbm_capacity_GB", "hbm_bandwidth_GBps", "peak_flops_TF"],
         prefix="device configuration",
     )
+    tiers: List[MemoryTierSpec] = []
+    if "tiers" in dev_cfg:
+        raw_tiers = dev_cfg["tiers"]
+        if not isinstance(raw_tiers, list) or not raw_tiers:
+            raise ValueError(
+                "device configuration: 'tiers' must be a non-empty list of memory tiers"
+            )
+        tiers = [
+            _parse_memory_tier(f"device configuration tier[{idx}]", tc)
+            for idx, tc in enumerate(raw_tiers)
+        ]
     device = DeviceSpec(
         name=str(dev_cfg["name"]),
         hbm_capacity_GB=float(dev_cfg["hbm_capacity_GB"]),
         hbm_bandwidth_GBps=float(dev_cfg["hbm_bandwidth_GBps"]),
         peak_flops_TF=float(dev_cfg["peak_flops_TF"]),
+        tiers=tiers,
     )
 
     if "fabrics" not in cfg:

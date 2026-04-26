@@ -4,13 +4,68 @@ from typing import Dict, List, Tuple, Union
 
 
 @dataclass
+class MemoryTierSpec:
+    """One memory tier exposed by a device.
+
+    Per `documentation/modeling/sram.md §1.1`, devices expose an ordered list
+    of memory tiers, fastest first. Each tier carries a capacity, an effective
+    peak read bandwidth, an optional first-byte latency, and an optional
+    sustained-bandwidth deflator. The `eta_beta` deflator follows the same
+    convention as collective contention (`collectives.md §7`): 1.0 = peak,
+    < 1 = sustained-throughput losses (HBM refresh + bank conflicts ≈ 0.92,
+    LPDDR5 ≈ 0.85, SRAM ≈ 1.0; sram.md §1.2). The `alpha_us` first-byte cost
+    is structurally negligible for steady-state decode (see sram.md §2.1) and
+    is dropped by the device-level roofline; it is kept on the spec for
+    small-read regimes (paged-attention block fetch, flash-style spill).
+    """
+
+    name: str                      # e.g. "hbm", "sram", "lpddr5"
+    capacity_GB: float             # per-device capacity (GB, decimal)
+    bandwidth_GBps: float          # peak read bandwidth (GB/s)
+    alpha_us: float = 0.0          # first-byte latency (μs); decode roofline drops it
+    eta_beta: float = 1.0          # sustained-BW deflator ∈ (0, 1]; 1.0 = peak
+
+
+@dataclass
 class DeviceSpec:
-    """Single device (GPU/NPU) specs."""
+    """Single device (GPU/NPU) specs.
+
+    The legacy fields `hbm_capacity_GB` / `hbm_bandwidth_GBps` model a
+    single-tier HBM device and remain required for back-compatibility. The
+    new `tiers` field (sram.md §1.1) carries an ordered list of memory
+    tiers; it is optional, defaulting to an empty list. Downstream code
+    should call `get_tiers()` rather than reading the legacy fields directly:
+    `get_tiers()` returns `tiers` if non-empty, else materializes a one-tier
+    list from the legacy fields (with `eta_beta = 1.0` to preserve existing
+    regression numbers exactly — sram.md §1.2 default of 0.92 only applies
+    to explicit multi-tier devices).
+    """
 
     name: str
     hbm_capacity_GB: float        # capacity per device (GB, decimal)
     hbm_bandwidth_GBps: float      # effective memory bandwidth (GB/s)
     peak_flops_TF: float           # peak compute throughput (TFLOPs)
+    tiers: List["MemoryTierSpec"] = field(default_factory=list)
+
+    def get_tiers(self) -> List["MemoryTierSpec"]:
+        """Return the device's memory tier list, materializing the legacy
+        single-tier shim if `tiers` is empty.
+
+        The shim uses `eta_beta = 1.0` to keep `t_mem` numerically identical
+        to the legacy single-tier formula `T_step / BW_mem`. New multi-tier
+        devices should populate `tiers` explicitly with sram.md §1.2 defaults.
+        """
+        if self.tiers:
+            return self.tiers
+        return [
+            MemoryTierSpec(
+                name="hbm",
+                capacity_GB=self.hbm_capacity_GB,
+                bandwidth_GBps=self.hbm_bandwidth_GBps,
+                alpha_us=0.0,
+                eta_beta=1.0,
+            )
+        ]
 
 
 @dataclass

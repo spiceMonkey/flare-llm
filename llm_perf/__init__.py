@@ -5,8 +5,8 @@ from .specs.model_spec import LlmModelSpec, MoESpec
 from .specs.system_spec import (
     CrossbarTier,
     DeviceSpec,
-    DragonflyTier,
     FabricSpec,
+    MemoryTierSpec,
     SwitchTierSpec,
     SystemSpec,
     TierSpec,
@@ -28,7 +28,7 @@ __all__ = [
     "SwitchTierSpec",
     "CrossbarTier",
     "TorusTier",
-    "DragonflyTier",
+    "MemoryTierSpec",
     "TierSpec",
     "SystemSpec",
     "PartitionSpec",
