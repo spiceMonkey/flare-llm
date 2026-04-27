@@ -15,8 +15,8 @@
 
   "placement": {
     "weights_tier": "hbm",
-    "kv_tier": "sram"
+    "kv_tier": "auto"
   },
 
-  "_comment": "d-Matrix Corsair Capacity Mode (sram.md §3.3): pin weights to LPDDR5 (the 'hbm' tier slot in the auto-materialized hierarchy from sram_*+hbm_* fields), freeing SRAM for KV cache and a larger batch / longer context. Used for models too large to fit aggregate SRAM (e.g., Llama-3-70B at MXINT8 ≈ 70 GB > 32 GB across 16 cards). Trades per-user TPOT for aggregate throughput / capacity, matching d-Matrix Aviator runtime's mode toggle."
+  "_comment": "d-Matrix Corsair Capacity Mode (sram.md §3.3): pin weights to LPDDR5 (the 'hbm' tier slot in the auto-materialized hierarchy from sram_*+hbm_* fields), freeing SRAM for KV cache and a larger batch / longer context. KV stays on auto-greedy so it lands on SRAM by default and only spills to LPDDR5 when the SRAM tier saturates — making this tuner a pure weights-tier toggle that works across partition shapes. Used for models too large to fit aggregate SRAM. Trades per-user TPOT for aggregate throughput / capacity, matching d-Matrix Aviator runtime's mode toggle."
 }

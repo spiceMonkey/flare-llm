@@ -1,0 +1,8 @@
+{
+  "schema": "llm_perf.partition",
+  "name": "dmatrix_server_TP64",
+  "PP": 1,
+  "TP": 64,
+  "EP": 1,
+  "SP": 1
+}

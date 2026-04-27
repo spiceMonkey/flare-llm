@@ -1,8 +1,8 @@
 {
   "schema": "llm_perf.partition",
-  "name": "dmatrix_16card_TP16",
+  "name": "dmatrix_squadrack_TP512",
   "PP": 1,
-  "TP": 16,
+  "TP": 512,
   "EP": 1,
   "SP": 1
 }

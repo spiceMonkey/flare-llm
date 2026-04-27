@@ -1,0 +1,35 @@
+{
+  "schema": "llm_perf.system",
+  "name": "dmatrix_server",
+  "num_devices": 64,
+  "device": {
+    "name": "d-Matrix-Corsair-Chiplet",
+    "hbm_capacity_GB": 32.0,
+    "hbm_bandwidth_GBps": 51.2,
+    "sram_capacity_MB": 256.0,
+    "sram_bandwidth_TBps": 18.75,
+    "peak_flops_TF": 300.0
+  },
+  "fabrics": {
+    "pair_mesh": {
+      "tiers": [
+        {"name": "dmx-link-pair-of-cards", "topology": "mesh",
+         "dims": [16], "full": true,
+         "bw_per_port_GBps": 64.0, "alpha_us": 0.115}
+      ]
+    },
+    "pcie_server": {
+      "tiers": [
+        {"name": "pcie5-server-switch", "ports": 4,
+         "bw_per_port_GBps": 64.0, "alpha_us": 0.65}
+      ]
+    }
+  },
+  "collective_fabrics": {
+    "TP": ["pair_mesh", "pcie_server"],
+    "EP": ["pair_mesh", "pcie_server"],
+    "SP": ["pair_mesh", "pcie_server"],
+    "PP": ["pair_mesh", "pcie_server"]
+  },
+  "_comment": "d-Matrix single-server reference (8 cards × 8 chiplets = 64 chiplets), modeled at chiplet granularity. Identical per-chiplet device spec as `dmatrix.squadrack` (32 GB LPDDR5 @ 51.2 GB/s, 256 MB SRAM @ 18.75 TB/s, 300 TFLOPS MXINT8). Fabric chain stops at the 2-tier PCIe domain — no `ethernet_rack` tier — so collectives that fit within a server are bounded by the in-package mesh (tier 1) and the PCIe Gen5 server switch (tier 2) only. Use this system for workloads that fit in a single 8-card server (e.g., Llama-3-8B in Performance Mode per sram.md §3.2: 8 GB weights ≪ 16 GB aggregate SRAM across 64 chiplets, plenty of room for KV at small batch). For full-rack scale (Llama-3-70B), use `dmatrix.squadrack` which adds the JetStream/Ethernet tier 3 across servers."
+}
