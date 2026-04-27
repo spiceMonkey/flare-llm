@@ -30,6 +30,21 @@ The **scale-up/out network** within and between clusters carries collective traf
 
 ---
 
+## Collective & Network Modeling — Upstream Anchor
+
+The collective-communication and network primitives that price every TP/EP/SP/PP collective in this framework — the Hockney α–β cost model, ring/tree/DBT/INC algorithms, hierarchical and torus composition, contention coefficients — are anchored to a dedicated upstream repository: [`spiceMonkey/collective-comm`](https://github.com/spiceMonkey/collective-comm). That repo is the single source of truth for the cost-model derivations and the primitive library; this repo carries read-only mirrors so the inference modeling here stays in lockstep with upstream changes.
+
+Two paths in this repo are auto-synced from upstream:
+
+- [`llm_perf/core/primitives/collective_cost.py`](llm_perf/core/primitives/collective_cost.py) ← `code/core/collective_cost.py` (the α–β primitive library)
+- [`documentation/explaining/collectives/`](documentation/explaining/collectives/) ← `documentation/modeling/` (workload-agnostic explainers + cheatsheet)
+
+Both are kept in sync by [`.github/workflows/sync-collectives.yml`](.github/workflows/sync-collectives.yml) (Mondays 06:00 UTC + manual dispatch). Each run lands the upstream snapshot as a PR; the synced code file carries an `AUTO-SYNCED — DO NOT EDIT LOCALLY` banner that the workflow re-prepends on every run. **Refer to the upstream repo for derivations, additional algorithms, contention calibration, and any further reading on the cost model itself.**
+
+llm_perf-specific glue around the synced primitives lives in sibling modules under `llm_perf/core/primitives/` (the per-stage TP/SP/EP/PP aggregator in `stage_aggregator.py`; the topology-aware dispatcher and MoE Dispatch+Combine 2× wrap in `dispatch.py`) and evolves locally — only the upstream-synced primitives are read-only.
+
+---
+
 ## Key Modeling Equations
 
 One line per component in the architecture diagram above. Full derivations live in `documentation/modeling/*.md`; this table is a cross-reference, not a second source of truth.
