@@ -37,27 +37,29 @@ jobs:
           # 2) Mirror collective_cost.py with AUTO-SYNCED banner prepended.
           # Banner is re-injected on every sync so the file always carries
           # the DO-NOT-EDIT marker even though the body is upstream-verbatim.
+          # NOTE: We use printf rather than a heredoc so every line stays
+          # within the YAML literal-block indent — a column-1 heredoc body
+          # silently ends the YAML block and corrupts the workflow.
           mkdir -p "$(dirname "$CODE_DEST")"
           {
-          cat <<'BANNER'
-# ─────────────────────────────────────────────────────────────────────
-# AUTO-SYNCED FROM UPSTREAM — DO NOT EDIT LOCALLY
-# Source of truth: https://github.com/spiceMonkey/collective-comm
-# Path:            code/core/collective_cost.py
-# Sync workflow:   .github/workflows/sync-collectives.yml
-#
-# Edits made directly to this file will be overwritten on the next sync.
-# To change behaviour, open a PR against the upstream repo, then re-run
-# the sync (or wait for the Monday cron). Local-only adapters belong in
-# sibling modules (see e.g. stage_aggregator.py).
-#
-# Doc-path note: docstrings here reference upstream
-# `documentation/modeling/`; that subtree lands locally at
-# `documentation/explaining/collectives/`.
-# ─────────────────────────────────────────────────────────────────────
-
-BANNER
-          cat "$TMP/$CODE_SRC"
+            printf '%s\n' \
+              '# ─────────────────────────────────────────────────────────────────────' \
+              '# AUTO-SYNCED FROM UPSTREAM — DO NOT EDIT LOCALLY' \
+              '# Source of truth: https://github.com/spiceMonkey/collective-comm' \
+              '# Path:            code/core/collective_cost.py' \
+              '# Sync workflow:   .github/workflows/sync-collectives.yml' \
+              '#' \
+              '# Edits made directly to this file will be overwritten on the next sync.' \
+              '# To change behaviour, open a PR against the upstream repo, then re-run' \
+              '# the sync (or wait for the Monday cron). Local-only adapters belong in' \
+              '# sibling modules (see e.g. stage_aggregator.py).' \
+              '#' \
+              '# Doc-path note: docstrings here reference upstream' \
+              '# `documentation/modeling/`; that subtree lands locally at' \
+              '# `documentation/explaining/collectives/`.' \
+              '# ─────────────────────────────────────────────────────────────────────' \
+              ''
+            cat "$TMP/$CODE_SRC"
           } > "$CODE_DEST"
 
           rm -rf "$TMP"
