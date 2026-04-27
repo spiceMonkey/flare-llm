@@ -94,6 +94,11 @@ def resolve_placement(
     """
     if not tiers:
         raise ValueError("resolve_placement: empty tier list")
+    if placement.auto_priority not in ("weights", "kv"):
+        raise ValueError(
+            f"MemoryPlacementSpec.auto_priority must be 'weights' or 'kv', "
+            f"got {placement.auto_priority!r}"
+        )
     n = len(tiers)
     weights_per_tier: List[float] = [0.0] * n
     kv_per_tier: List[float] = [0.0] * n
@@ -133,12 +138,17 @@ def resolve_placement(
         kv_per_req_left = 0.0
 
     # ── Greedy step: "auto" data classes flow into remaining capacity ──
-    # On overflow, "auto" placement is permissive — leftover bytes accumulate
-    # on the last (slowest) tier without raising. This preserves the legacy
-    # behavior that t_mem was always computable (the unfit state was surfaced
-    # via memory_model.fits_in_HBM, not by aborting the latency path).
+    # Order is set by `placement.auto_priority`: "weights" (default) fills
+    # weights into the fastest tier first, then KV gets remaining capacity;
+    # "kv" flips the order, useful for KV-bound workloads where SRAM-resident
+    # KV matters more than SRAM-resident weights. On overflow, "auto"
+    # placement is permissive — leftover bytes accumulate on the last
+    # (slowest) tier without raising. This preserves the legacy behavior
+    # that t_mem was always computable (the unfit state was surfaced via
+    # memory_model.fits_in_HBM, not by aborting the latency path).
     # `placement_fits()` below is the canonical fit predicate.
-    if weights_left > 0:
+    def _fill_weights():
+        nonlocal weights_left
         for i in range(n):
             if weights_left <= 0:
                 break
@@ -149,8 +159,12 @@ def resolve_placement(
         if weights_left > 0:
             weights_per_tier[-1] += weights_left
             remaining[-1] -= weights_left
+            weights_left = 0.0
 
-    if kv_per_req_left > 0 and B > 0:
+    def _fill_kv():
+        nonlocal kv_per_req_left
+        if B <= 0:
+            return
         kv_total_left = B * kv_per_req_left
         for i in range(n):
             if kv_total_left <= 0:
@@ -162,6 +176,18 @@ def resolve_placement(
         if kv_total_left > 0:
             kv_per_tier[-1] += kv_total_left / B
             remaining[-1] -= kv_total_left
+        kv_per_req_left = 0.0
+
+    if placement.auto_priority == "weights":
+        if weights_left > 0:
+            _fill_weights()
+        if kv_per_req_left > 0:
+            _fill_kv()
+    else:  # "kv" — already validated above
+        if kv_per_req_left > 0:
+            _fill_kv()
+        if weights_left > 0:
+            _fill_weights()
 
     return PlacementResult(
         weights_per_tier=weights_per_tier,

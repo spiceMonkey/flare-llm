@@ -12,13 +12,22 @@ class MemoryPlacementSpec:
         `MemoryTierSpec.name` on the device); CapacityError if it doesn't fit
         (sram.md §1.3 second policy — d-Matrix Aviator-style mode toggle).
 
-    Defaults are "auto" / "auto", which on a single-tier device collapses to
-    the legacy "everything on HBM" behavior — bitwise identical to pre-PR2
-    `t_mem = T_step / BW_mem`.
+    `auto_priority` controls the greedy tiebreaker when **both** fields are
+    "auto": which class claims the fastest tier first. Default "weights"
+    matches the convention that weights are a stable size for a given
+    deployment and should pin to the fast tier. Set "kv" to flip the order
+    when KV-bound workloads (long context, large batch) want SRAM-resident
+    KV at the cost of spilling weights. Inert when either class is
+    explicitly pinned.
+
+    Defaults are "auto" / "auto" / "weights", which on a single-tier device
+    collapses to the legacy "everything on HBM" behavior — bitwise identical
+    to pre-PR2 `t_mem = T_step / BW_mem`.
     """
 
     weights_tier: str = "auto"   # tier name or "auto"
     kv_tier: str = "auto"        # tier name or "auto"
+    auto_priority: str = "weights"  # "weights" or "kv"
 
 
 @dataclass

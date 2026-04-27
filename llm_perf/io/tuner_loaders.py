@@ -118,6 +118,7 @@ def tuning_spec_from_json_dict(cfg: Dict[str, Any]) -> TuningSpec:
     placement = MemoryPlacementSpec(
         weights_tier=str(placement_cfg.get("weights_tier", "auto")),
         kv_tier=str(placement_cfg.get("kv_tier", "auto")),
+        auto_priority=str(placement_cfg.get("auto_priority", "weights")),
     )
 
     return TuningSpec(
