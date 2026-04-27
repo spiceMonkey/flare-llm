@@ -228,9 +228,10 @@ def compute_comm(
         t_TP = 0.0
         msg_TP = 0.0
 
-    # SP: 1-pass ring all-gather over KV shard
+    # SP: 1-pass ring all-gather over the full KV (per-rank gathered
+    # output convention — collective_cost.py §6 calls this "M = G·shard").
     if SP > 1:
-        msg_SP = B * (S / SP) * (2 * H_kv / TP) * b
+        msg_SP = B * S * (2 * H_kv / TP) * b
         t_SP = _cost("SP", "all_gather", msg_SP, SP)
     else:
         t_SP = 0.0

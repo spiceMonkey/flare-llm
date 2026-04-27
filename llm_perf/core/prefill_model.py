@@ -230,9 +230,10 @@ def compute_prefill_comm(
     else:
         t_EP = 0.0
 
-    # SP: KV all-gather (token-scaled)
+    # SP: KV all-gather (token-scaled). Per-rank gathered output convention
+    # (collective_cost.py §6: M = G·shard).
     if SP > 1:
-        msg_SP = (tokens / SP) * (2 * H_kv / TP) * b
+        msg_SP = tokens * (2 * H_kv / TP) * b
         t_SP = _cost("SP", "all_gather", msg_SP, SP)
     else:
         t_SP = 0.0

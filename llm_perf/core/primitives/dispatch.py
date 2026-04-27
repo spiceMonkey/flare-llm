@@ -35,11 +35,10 @@ from .collective_cost import (
     ring_all_gather,
     ring_all_reduce,
     ring_reduce_scatter,
+    torus_a2a,
     torus_all_gather,
     torus_all_reduce,
-    torus_moe_all_to_all,
     tree_all_reduce,
-    tree_moe_all_to_all,
 )
 
 # Accepted `op` values.
@@ -199,16 +198,19 @@ def enumerate_options(
 
     Algorithm name space:
       - Star (single-tier or multi-tier crossbar):
-          AR:        "ring", "tree", optionally "inc"
+          AR:        "ring", "tree", "tree_pipelined", optionally "inc"
           AG:        "ring", optionally "inc"
           MoE A2A:   "ring" (= pairwise direct-send), optionally "inc"
-                     ("tree" deprecated — not enumerated)
           P2P:       "p2p" (single hop, no algorithm choice)
       - Torus:
           all ops:   "torus-dim-ring"  (single option; INC structurally absent
                                         on torus per `system_spec.TorusTier`)
       - Mixed crossbar/torus: same as the dispatcher's flat-fallback path
                               (warns at cost_collective time, not here).
+
+    "tree" maps to the literal P=1 binomial tree (BW coefficient = log_G);
+    "tree_pipelined" maps to the asymptotic P→P* form (BW coefficient = 1)
+    that NCCL ships at bulk M.
 
     INC eligibility (collectives.md §3.4 / §4.4 / §5.4):
       - AR / AG via "inc" requires every crossed tier to declare `inc != "none"`.
@@ -282,9 +284,13 @@ def enumerate_options(
             options.append(
                 ("tree", _hierarchical_crossbar_cost(op, M, G, crossed, "tree"))
             )
+            options.append(
+                ("tree_pipelined", _hierarchical_crossbar_cost(op, M, G, crossed, "tree_pipelined"))
+            )
         else:
             options.append(("ring", _crossbar_cost(op, M, G, alpha_s, bw_Bps, "ring")))
             options.append(("tree", _crossbar_cost(op, M, G, alpha_s, bw_Bps, "tree")))
+            options.append(("tree_pipelined", _crossbar_cost(op, M, G, alpha_s, bw_Bps, "tree_pipelined")))
     elif op == "moe_a2a":
         # MoE A2A: multi-tier crossbar uses per-destination-class accounting
         # (collectives.md §5.3); single-tier uses flat pairwise.
@@ -292,7 +298,6 @@ def enumerate_options(
             options.append(("ring", _hierarchical_a2a_cost(M, G, crossed)))
         else:
             options.append(("ring", _crossbar_cost(op, M, G, alpha_s, bw_Bps, "ring")))
-        # tree_moe_all_to_all is deprecated (collectives.md §5.1); not enumerated.
 
     # INC variants — only on pure crossbar (CrossbarTier; full mesh has no
     # `inc` field so it's automatically excluded by `_is_inc`).
@@ -367,12 +372,16 @@ def _crossbar_cost(
             return ring_all_reduce(M, G, alpha_s, bw_Bps)
         if algorithm == "tree":
             return tree_all_reduce(M, G, alpha_s, bw_Bps)
+        if algorithm == "tree_pipelined":
+            return tree_all_reduce(M, G, alpha_s, bw_Bps, pipelined=True)
         raise ValueError(f"Unsupported algorithm for all_reduce: {algorithm!r}")
     if op == "moe_a2a":
+        # MoE Dispatch+Combine round-trip: caller's M is the one-way per-rank
+        # payload, so we double the underlying single-direction A2A cost. The
+        # 2× factor lives here (not inside pairwise_a2a) because it is a
+        # property of the dispatcher's MoE contract, not of the primitive.
         if algorithm == "ring":
-            return pairwise_a2a(M, G, alpha_s, bw_Bps)
-        if algorithm == "tree":
-            return tree_moe_all_to_all(M, G, alpha_s, bw_Bps)
+            return 2 * pairwise_a2a(M, G, alpha_s, bw_Bps)
         raise ValueError(f"Unsupported algorithm for moe_a2a: {algorithm!r}")
     raise AssertionError(f"unreachable op={op!r}")  # caller validated
 
@@ -432,12 +441,13 @@ def _hierarchical_crossbar_cost(
 
     if op == "all_reduce":
         # Inner RS + outer sub-AR + inner AG.
-        # Per-rank shard after inner RS = M / G_inner = M·L/N.
-        M_inner_shard = M / G_inner
+        # M = per-rank full vector (AR convention, unchanged upstream).
+        # New AG/RS convention: M = per-rank pre-scatter input / gathered
+        # output, so inner RS and inner AG both pass the full M.
         t_inner_rs = ring_reduce_scatter(
-            M_inner_shard, G_inner, alpha_inner_s, bw_inner_Bps
+            M, G_inner, alpha_inner_s, bw_inner_Bps
         )
-        # Outer sub-AR: payload per rank = M·L/N = M/G_inner.
+        # Outer sub-AR: payload per rank after inner RS = M / G_inner.
         M_outer = M / G_inner
         if outer_alg == "ring":
             t_outer = ring_all_reduce(
@@ -447,36 +457,42 @@ def _hierarchical_crossbar_cost(
             t_outer = tree_all_reduce(
                 M_outer, L, alpha_outer_s, bw_outer_Bps
             )
+        elif outer_alg == "tree_pipelined":
+            t_outer = tree_all_reduce(
+                M_outer, L, alpha_outer_s, bw_outer_Bps, pipelined=True
+            )
         else:
             raise ValueError(
                 f"Unsupported outer_alg for hierarchical AR: {outer_alg!r}"
             )
         t_inner_ag = ring_all_gather(
-            M_inner_shard, G_inner, alpha_inner_s, bw_inner_Bps
+            M, G_inner, alpha_inner_s, bw_inner_Bps
         )
         return t_inner_rs + t_outer + t_inner_ag
 
     if op == "all_gather":
-        # Inner AG → outer AG cascade. Per collectives.md §4.3:
-        #   inner AG with per-rank shard M, group G_inner
-        #   outer AG with per-rank shard G_inner·M, group L
+        # Inner AG → outer AG cascade.
+        # New AG convention: M = per-rank gathered output. After inner AG
+        # each rank holds G_inner shards = M / L bytes; after outer AG
+        # each rank holds the full M.
         t_inner = ring_all_gather(
-            M, G_inner, alpha_inner_s, bw_inner_Bps
+            M / L, G_inner, alpha_inner_s, bw_inner_Bps
         )
         t_outer = ring_all_gather(
-            G_inner * M, L, alpha_outer_s, bw_outer_Bps
+            M, L, alpha_outer_s, bw_outer_Bps
         )
         return t_inner + t_outer
 
     if op == "reduce_scatter":
         # Outer RS → inner RS cascade (time-reverse of AG).
-        #   outer RS with per-rank output shard M/L (input M, group L)
-        #   inner RS with per-rank output shard M/N = M/(L·G_inner) (input M/L, group G_inner)
+        # New RS convention: M = per-rank pre-scatter input. Outer RS
+        # consumes M and produces M/L; inner RS consumes M/L and produces
+        # M/(L·G_inner) = M/N.
         t_outer = ring_reduce_scatter(
-            M / L, L, alpha_outer_s, bw_outer_Bps
+            M, L, alpha_outer_s, bw_outer_Bps
         )
         t_inner = ring_reduce_scatter(
-            M / (L * G_inner), G_inner, alpha_inner_s, bw_inner_Bps
+            M / L, G_inner, alpha_inner_s, bw_inner_Bps
         )
         return t_outer + t_inner
 
@@ -588,7 +604,9 @@ def _inc_crossbar_cost(
     if op == "all_gather":
         return inc_all_gather(M, G, alpha_s, bw_Bps)
     if op == "moe_a2a":
-        return inc_a2a(M, G, alpha_s, bw_Bps)
+        # MoE Dispatch+Combine: 2× wrap, same as the SW crossbar / torus
+        # paths. Keeps the dispatcher's MoE contract topology-uniform.
+        return 2 * inc_a2a(M, G, alpha_s, bw_Bps)
     raise AssertionError(f"INC path reached with unsupported op={op!r}")
 
 
@@ -604,7 +622,7 @@ def _torus_cost(op: str, M: float, G: int, crossed: List[TierSpec]) -> float:
     `dims` tuples into the effective k-D structure. Dim-alignment is checked
     against prefix-products of the concatenated dims; misalignment falls back
     to a flat-ring conservative bound with a `UserWarning`. If any tier is a
-    k-D mesh (no wraparound), `torus_moe_all_to_all` is called with
+    k-D mesh (no wraparound), `torus_a2a` is called with
     `wraparound=False` (halved bisection → $D_\\mathrm{max}/4$ on A2A).
     """
     full_dims: Tuple[int, ...] = tuple(
@@ -640,8 +658,11 @@ def _torus_cost(op: str, M: float, G: int, crossed: List[TierSpec]) -> float:
     if op == "all_gather":
         return torus_all_gather(M, subdims, alpha_s, bw_Bps)
     if op == "moe_a2a":
-        return torus_moe_all_to_all(M, subdims, alpha_s, bw_Bps,
-                                     wraparound=wraparound)
+        # MoE Dispatch+Combine: same 2× wrap as the crossbar path so the
+        # dispatcher's MoE contract is topology-uniform (caller passes the
+        # one-way per-rank payload regardless of fabric type).
+        return 2 * torus_a2a(M, subdims, alpha_s, bw_Bps,
+                             wraparound=wraparound)
     raise AssertionError(f"unreachable op={op!r}")  # caller validated
 
 
