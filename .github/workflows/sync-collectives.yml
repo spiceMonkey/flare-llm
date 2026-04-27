@@ -1,4 +1,4 @@
-name: Sync collectives docs
+name: Sync from collective-comm
 
 on:
   schedule:
@@ -15,35 +15,69 @@ jobs:
     env:
       UPSTREAM: https://github.com/spiceMonkey/collective-comm.git
       UPSTREAM_BRANCH: main
-      SUBPATH: documentation/modeling
-      DEST: documentation/explaining/collectives
+      DOC_SUBPATH: documentation/modeling
+      DOC_DEST: documentation/explaining/collectives
+      CODE_SRC: code/core/collective_cost.py
+      CODE_DEST: llm_perf/core/primitives/collective_cost.py
     steps:
       - uses: actions/checkout@v4
 
-      - name: Snapshot upstream subfolder
+      - name: Snapshot upstream
         id: snap
         run: |
           set -euo pipefail
           TMP=$(mktemp -d)
           git clone --depth=1 --branch="$UPSTREAM_BRANCH" "$UPSTREAM" "$TMP"
           SHA=$(git -C "$TMP" rev-parse --short HEAD)
-          mkdir -p "$DEST"
-          rsync -a --delete "$TMP/$SUBPATH/" "$DEST/"
+
+          # 1) Mirror documentation subtree.
+          mkdir -p "$DOC_DEST"
+          rsync -a --delete "$TMP/$DOC_SUBPATH/" "$DOC_DEST/"
+
+          # 2) Mirror collective_cost.py with AUTO-SYNCED banner prepended.
+          # Banner is re-injected on every sync so the file always carries
+          # the DO-NOT-EDIT marker even though the body is upstream-verbatim.
+          mkdir -p "$(dirname "$CODE_DEST")"
+          {
+          cat <<'BANNER'
+# ─────────────────────────────────────────────────────────────────────
+# AUTO-SYNCED FROM UPSTREAM — DO NOT EDIT LOCALLY
+# Source of truth: https://github.com/spiceMonkey/collective-comm
+# Path:            code/core/collective_cost.py
+# Sync workflow:   .github/workflows/sync-collectives.yml
+#
+# Edits made directly to this file will be overwritten on the next sync.
+# To change behaviour, open a PR against the upstream repo, then re-run
+# the sync (or wait for the Monday cron). Local-only adapters belong in
+# sibling modules (see e.g. stage_aggregator.py).
+#
+# Doc-path note: docstrings here reference upstream
+# `documentation/modeling/`; that subtree lands locally at
+# `documentation/explaining/collectives/`.
+# ─────────────────────────────────────────────────────────────────────
+
+BANNER
+          cat "$TMP/$CODE_SRC"
+          } > "$CODE_DEST"
+
           rm -rf "$TMP"
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
 
       - name: Open PR if changed
         uses: peter-evans/create-pull-request@v6
         with:
-          commit-message: "docs: sync collectives from spiceMonkey/collective-comm@${{ steps.snap.outputs.sha }}"
+          commit-message: "chore: sync from spiceMonkey/collective-comm@${{ steps.snap.outputs.sha }}"
           branch: chore/sync-collectives
           delete-branch: true
-          title: "Sync collectives docs from upstream (${{ steps.snap.outputs.sha }})"
+          title: "Sync from collective-comm upstream (${{ steps.snap.outputs.sha }})"
           body: |
-            Automated snapshot of `documentation/modeling/` from
+            Automated snapshot from
             [spiceMonkey/collective-comm](https://github.com/spiceMonkey/collective-comm)
-            at commit `${{ steps.snap.outputs.sha }}`, copied into
-            `documentation/explaining/collectives/`.
+            at commit `${{ steps.snap.outputs.sha }}`:
+
+            - `documentation/modeling/` → `documentation/explaining/collectives/`
+            - `code/core/collective_cost.py` → `llm_perf/core/primitives/collective_cost.py`
+              (AUTO-SYNCED banner is re-prepended on every run)
 
             Review the diff, then merge to land the update.
           labels: documentation,automated
