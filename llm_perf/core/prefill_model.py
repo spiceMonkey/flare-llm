@@ -6,6 +6,7 @@ from ..specs.system_spec import SystemSpec
 from ..specs.partition_spec import PartitionSpec
 from ..specs.tuner_spec import TuningSpec
 from ..utils import TB_TO_FLOPS
+from .decode_model import _eta_TC_at_mb
 from .memory_placement import resolve_placement, t_mem_from_placement
 from .primitives import (
     dense_weight_bytes,
@@ -48,10 +49,13 @@ class PrefillCommResults:
 
 @dataclass
 class PrefillLatencyResults:
-    t_prefill_compute: float        # F_prefill_device / R_GPU
+    t_prefill_compute: float        # raw F_prefill_device / R_GPU
+    t_prefill_compute_eff: float    # Tensor-Core-derated: t_compute / η_TC
+    eta_TC: float                   # Tensor Core efficiency at this prefill payload
     t_prefill_mem: float            # multi-tier sum, sram.md §2.1
-    t_prefill_local: float          # max(compute, mem)
+    t_prefill_local: float          # max(compute_eff, mem)
     t_prefill_comm: float
+    t_SW_per_stage: float           # per-stage CPU dispatch budget = (L/PP) · k · τ_launch
     t_pipeline_warmup: float        # (PP-1) * t_stage
     t_prefill: float                # full hardware prefill latency
 
@@ -281,6 +285,7 @@ def compute_prefill_latency(
     EP = max(1, partition.EP)
     SP = partition.SP
     rho = tuner.overlap_factor
+    rho_SW = tuner.sw_overlap_factor
 
     S = tuner.S_input
     B_pf = tuner.B_prefill
@@ -289,6 +294,32 @@ def compute_prefill_latency(
     H = model.H
     H_kv = model.H_kv()
     L = model.L
+
+    # SW dispatch budget per stage. Prefill is one forward pass per request
+    # (or per chunk) — there is no microbatch round structure as in decode,
+    # so the per-stage formula is L/PP layers worth of launches:
+    #     t_SW_per_stage = (L/PP) · k · τ_launch
+    # where k decomposes into compute + collective kernel counts and the
+    # collective counts are zero on axes where the parallelism is 1.
+    n_TP = tuner.n_TP_collectives if TP > 1 else 0
+    n_EP = tuner.n_EP_collectives if EP > 1 else 0
+    n_SP = tuner.n_SP_collectives if SP > 1 else 0
+    k_per_layer = tuner.kernels_per_layer_compute + tuner.kernels_per_collective_call * (n_TP + n_EP + n_SP)
+    layers_per_stage = L / PP if PP > 0 else L
+    t_SW_per_stage = layers_per_stage * k_per_layer * tuner.kernel_launch_us * 1e-6
+
+    def _compose_SW(t_local_gpu: float) -> float:
+        """Compose per-stage GPU work with SW dispatch via ρ_SW.
+
+        ρ_SW = 1 (default) → max(t_local_gpu, t_SW_per_stage) (full overlap).
+        ρ_SW = 0           → t_local_gpu + t_SW_per_stage     (no overlap).
+        """
+        composed = max(
+            t_local_gpu,
+            rho_SW * t_local_gpu + (1.0 - rho_SW) * (t_local_gpu + t_SW_per_stage),
+            t_SW_per_stage,
+        )
+        return composed
 
     # Per-tier memory time helper. T_kv_write_device is per-request; the
     # placement layer treats it the same as decode's T_KV (sram.md §1.3
@@ -307,8 +338,17 @@ def compute_prefill_latency(
     # ── Single-request prefill (§3) ──────────────────────
 
     t_prefill_compute = flops.F_prefill_device / R_gpu
+    # η_TC at prefill payload (mb_eff = B_prefill · S / PP). With typical
+    # S ≥ 256 this saturates to 1.0 for any reasonable curve (the wgmma
+    # M-tile floor is 64), so prefill is essentially unaffected by the
+    # derate. Applied for consistency with decode and to capture small-S
+    # corner cases.
+    mb_prefill = max(1, B_pf) * max(1, S) / max(1, PP)
+    eta_TC = _eta_TC_at_mb(tuner.tensor_core_efficiency, mb_prefill)
+    t_prefill_compute_eff = t_prefill_compute / eta_TC if eta_TC > 0 else float("inf")
     t_prefill_mem = _t_mem(traffic.T_theta_device, traffic.T_kv_write_device, B=1)
-    t_prefill_local = max(t_prefill_compute, t_prefill_mem)
+    t_prefill_local_gpu = max(t_prefill_compute_eff, t_prefill_mem)
+    t_prefill_local = _compose_SW(t_prefill_local_gpu)
     t_prefill_comm = comm.t_prefill_comm
 
     # Pipeline warmup: (PP-1) stages must fill before first token emerges
@@ -326,12 +366,15 @@ def compute_prefill_latency(
     if B_pf > 1:
         # FLOPs scale linearly with B_prefill
         t_batched_compute = B_pf * flops.F_prefill_device / R_gpu
+        # η_TC at the batched payload (already computed above using B_pf · S).
+        t_batched_compute_eff = t_batched_compute / eta_TC if eta_TC > 0 else float("inf")
         # Traffic: weights loaded once + B_pf * KV writes per request
         # (multi-tier sum; placement re-resolved at this B).
         t_batched_mem = _t_mem(
             traffic.T_theta_device, traffic.T_kv_write_device, B=B_pf,
         )
-        t_batched_local = max(t_batched_compute, t_batched_mem)
+        t_batched_local_gpu = max(t_batched_compute_eff, t_batched_mem)
+        t_batched_local = _compose_SW(t_batched_local_gpu)
         # Comm scales with the batched token count (B_pf · S), not S alone:
         # collective messages carry per-step activations whose payload grows
         # with tokens per step. α is unchanged; β (payload/BW) grows with B_pf.
@@ -391,7 +434,13 @@ def compute_prefill_latency(
             T_kv_chunk_k = T_kv_write_chunk + T_kv_read_k
             t_chunk_mem_k = _t_mem(T_theta_chunk, T_kv_chunk_k, B=1)
 
-            t_chunk_local_k = max(t_chunk_compute_k, t_chunk_mem_k)
+            # η_TC at chunk payload (mb_chunk = B_pf · C / PP). For typical
+            # C the saturated curve gives 1.0 — same caveat as unchunked.
+            mb_chunk = max(1, B_pf) * max(1, C) / max(1, PP)
+            eta_TC_chunk = _eta_TC_at_mb(tuner.tensor_core_efficiency, mb_chunk)
+            t_chunk_compute_eff_k = t_chunk_compute_k / eta_TC_chunk if eta_TC_chunk > 0 else float("inf")
+            t_chunk_local_gpu_k = max(t_chunk_compute_eff_k, t_chunk_mem_k)
+            t_chunk_local_k = _compose_SW(t_chunk_local_gpu_k)
             t_chunk_k = t_chunk_local_k + max(0.0, t_chunk_comm - rho * t_chunk_local_k)
             total_chunked += t_chunk_k
 
@@ -402,9 +451,12 @@ def compute_prefill_latency(
 
     return PrefillLatencyResults(
         t_prefill_compute=t_prefill_compute,
+        t_prefill_compute_eff=t_prefill_compute_eff,
+        eta_TC=eta_TC,
         t_prefill_mem=t_prefill_mem,
         t_prefill_local=t_prefill_local,
         t_prefill_comm=t_prefill_comm,
+        t_SW_per_stage=t_SW_per_stage,
         t_pipeline_warmup=t_pipeline_warmup,
         t_prefill=t_prefill,
         B_prefill=B_pf,
