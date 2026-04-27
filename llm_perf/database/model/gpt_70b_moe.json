@@ -1,0 +1,22 @@
+{
+  "schema": "llm_perf.model",
+  "name": "GPT-70B-MoE",
+
+  "L": 32,
+  "H": 8192,
+  "n_q": 64,
+  "n_kv": 8,
+  "I_dense": 0,
+  "vocab_size": 128256,
+  "max_seq_len": 8192,
+  "bytes_per_param": 0.5,
+
+  "moe": {
+    "n_experts": 8,
+    "k_active": 2,
+    "I_moe": 10240,
+    "n_moe_layers": 32
+  },
+
+  "_comment": "Synthesized 70B-class MoE for the d-Matrix vs GB200 NVL72 Pareto comparison. Llama-3-style attention backbone (H=8192, n_q=64 heads at d_head=128, GQA n_kv=8) plus Mixtral-style 8-expert top-2 MoE per layer (I_moe=10240). Total params ~69B; FP4 size ~35 GB. Not a real published model — a clean reference point for SRAM-augmented architectures (sram.md §3.2-§3.3) where the 1.8T model is too big to keep weights resident even at full-SquadRack scale, but a 70B-class model can plausibly land partly in SRAM."
+}
