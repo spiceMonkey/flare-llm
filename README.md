@@ -67,19 +67,20 @@ One line per component in the architecture diagram above. Full derivations live 
 ```
 .
 ├── README.md                         — this file
-├── quickstart.ipynb                  — tutorial: load specs, run the full stack
-├── pareto_basic.ipynb                — full (partition, B) exploration space  (case study)
-├── pareto_collective_algorithms.ipynb — worst-case vs optimized SW vs INC      (case study)
-├── pareto_vs_io.ipynb                — decode Pareto × scale-up I/O sweep      (case study)
-├── pareto_vs_mem.ipynb               — decode Pareto × HBM-BW sweep            (case study)
-├── pareto_vs_flops.ipynb             — decode Pareto × peak-FLOPS sweep        (case study)
-├── pareto_tpu_vs_gb200.ipynb         — TPU v5p pod vs GB200 NVL72 × collective algorithm (case study)
-├── pareto_dm_vs_gb200.ipynb          — d-Matrix vs GB200 NVL72, 1.8T + 70B MoE (case study)
-├── pareto_vs_cluster_size.ipynb      — decode Pareto × cluster size (N)        (case study)
-├── pareto_vs_scale_up_tier.ipynb     — decode Pareto × scale-up tiering        (case study)
-├── pareto_vs_overhead.ipynb          — decode Pareto × framework overhead      (case study)
-├── ttft_vs_io.ipynb                  — TTFT × mismatched-partition disagg I/O  (case study)
-├── ttft_vs_chunk.ipynb               — TTFT × chunk-size sweep (co-lo)         (case study)
+├── notebooks/                        — interactive tutorial + case studies
+│   ├── quickstart.ipynb              — load specs, run the full stack
+│   ├── pareto_basic.ipynb            — full (partition, B) exploration space
+│   ├── pareto_collective_algorithms.ipynb — worst-case vs optimized SW vs INC
+│   ├── pareto_vs_io.ipynb            — decode Pareto × scale-up I/O sweep
+│   ├── pareto_vs_mem.ipynb           — decode Pareto × HBM-BW sweep
+│   ├── pareto_vs_flops.ipynb         — decode Pareto × peak-FLOPS sweep
+│   ├── pareto_tpu_vs_gb200.ipynb     — TPU v5p pod vs GB200 NVL72 × collective algorithm
+│   ├── pareto_dm_vs_gb200.ipynb      — d-Matrix vs GB200 NVL72, 1.8T + 70B MoE
+│   ├── pareto_vs_cluster_size.ipynb  — decode Pareto × cluster size (N)
+│   ├── pareto_vs_scale_up_tier.ipynb — decode Pareto × scale-up tiering
+│   ├── pareto_vs_overhead.ipynb      — decode Pareto × framework overhead
+│   ├── ttft_vs_io.ipynb              — TTFT × mismatched-partition disagg I/O
+│   └── ttft_vs_chunk.ipynb           — TTFT × chunk-size sweep (co-lo)
 ├── documentation/
 │   ├── modeling/                     — methodology derivations (notation, decode, prefill, e2e, kv, framework, collectives, sram, dram3d)
 │   └── explaining/                   — design-intent walkthroughs
@@ -131,7 +132,7 @@ The `llm_perf` package is organized as four concentric layers — each one pure,
 python -m venv .llm_perf
 source .llm_perf/bin/activate
 pip install jupyter matplotlib numpy
-jupyter notebook quickstart.ipynb
+jupyter notebook notebooks/quickstart.ipynb
 ```
 
 The quickstart walks through discovery, loading, running `InferenceCalculator`, and inspecting the memory/FLOPs/traffic/comm/latency breakdown.
@@ -175,7 +176,7 @@ Each notebook is a self-contained design question with a plot and a short takeaw
 
 The case studies use **GPT-1.8T MoE @ FP4** on **GB200-class devices** (NVL72 baseline; cluster-size study extends past 72 GPUs hypothetically). The TPU-vs-GB200 study is the one exception — it compares a TPU v5p pod against GB200 NVL576 to isolate fabric-topology and AR-algorithm effects.
 
-### `pareto_basic.ipynb` — the full exploration space behind the frontier
+### `notebooks/pareto_basic.ipynb` — the full exploration space behind the frontier
 
 ![full (partition, B) exploration cloud vs. extracted frontier](assets/pareto_basic.png)
 
@@ -185,7 +186,7 @@ Enumerates every valid `(PP, TP, EP, SP)` partition, sweeps `B` from 1 to the KV
 
 **Headline:** at baseline GB200 NVL72, **304 valid partitions → 7,469 `(partition, B)` evaluations → 34 frontier points (~0.5% of the cloud)**. Of those 34, `PP=60 TP=1 EP=1` claims 24, `PP=30 TP=2 EP=1` claims 5, `PP=24 TP=1 EP=1` claims 3, and `PP=15 TP=4 EP=1` claims 2. PP dominates regime selection: shallow PP sits in the high-interactivity corner (low per-GPU throughput, small B), deep PP in the high-throughput corner (large B amortizes warmup). The later notebooks (`pareto_vs_io`, `pareto_vs_mem`, `pareto_vs_overhead`) re-run this exact enumeration once per hardware/overhead anchor and plot only the frontier — this notebook is what's underneath.
 
-### `pareto_collective_algorithms.ipynb` — worst-case vs optimized SW vs INC on the same hardware
+### `notebooks/pareto_collective_algorithms.ipynb` — worst-case vs optimized SW vs INC on the same hardware
 
 ![decode Pareto: 3 collective-algorithm modes on GB200 NVL576 (NVLS + Quantum SHARP)](assets/pareto_collective_algorithms.png)
 
@@ -215,7 +216,7 @@ System: `gb200.nvl576.hierarchical.inc` (576 GPUs, NVLink5 + IB, NVLS + Quantum 
 
 The cheaper AR cost lets `sw_opt` and `inc` afford a wider TP=16 at the high-interactivity corner (sacrificing throughput for lower TPOT — 0.26 ms vs 0.31 ms for `worst`). Mid- and high-throughput corners converge as compute starts dominating comm at large B. With this model's group-size constraints (TP, EP ≤ 16), every collective stays inside the 72-port NVLink5 inner tier — multi-tier hierarchical AR / AG never fires, and INC's main lift is the `n_α` collapse + BW-eff doubling on the AR phase. On a model with `EP > 72` (e.g. DeepSeek-R1 at EP=128/256), the gap between `worst` and `sw_opt` widens further because the optimizer additionally swaps in the hierarchical RS → sub-AR → AG composition with payload telescoping.
 
-### `pareto_vs_io.ipynb` — decode Pareto under scale-up I/O provisioning
+### `notebooks/pareto_vs_io.ipynb` — decode Pareto under scale-up I/O provisioning
 
 ![decode Pareto vs. scale-up I/O](assets/pareto_vs_io.png)
 
@@ -225,7 +226,7 @@ Sweeps BW (1× → ~2.67× GB200 baseline) and α (1.0× → 0.25× baseline) as
 
 **Headline:** the frontier shifts smoothly with I/O provisioning but winning partitions re-order at corners — low-BW regimes favor shallower PP and more TP locality; high-BW regimes favor deeper PP that exploits cheap cross-stage comm.
 
-### `pareto_vs_mem.ipynb` — decode Pareto under HBM-BW scaling
+### `notebooks/pareto_vs_mem.ipynb` — decode Pareto under HBM-BW scaling
 
 ![decode Pareto vs. HBM bandwidth](assets/pareto_vs_mem.png)
 
@@ -244,7 +245,7 @@ Sweeps HBM BW from 1× (8 TB/s, baseline) to 4× (32 TB/s) at fixed scale-up I/O
 
 Scarce memory bandwidth favors wide TP to parallelize weight reads; abundant memory bandwidth makes the TP collective pure overhead.
 
-### `pareto_vs_flops.ipynb` — decode Pareto under peak-FLOPS scaling
+### `notebooks/pareto_vs_flops.ipynb` — decode Pareto under peak-FLOPS scaling
 
 ![decode Pareto vs. peak FLOPS at two context lengths](assets/pareto_vs_flops_short_vs_long.png)
 
@@ -261,7 +262,7 @@ Sweeps peak FLOPS from 0.5× (H100-class ~4.5 PF) to 4× (~36 PF) at fixed HBM (
 
 **Prefill / training are the opposite regime** — their attention compute grows as `S²` while KV traffic grows as `S`, putting arithmetic intensity orders of magnitude above any hardware balance point. FLOPS is the primary knob for TTFT and for training throughput. See `documentation/explaining/why_flops_doesnt_help_at_long_context.md` for the full AI / slope derivation and the decode-vs-prefill-vs-training contrast, and `documentation/explaining/frontier_convergence_at_high_b.md` for the $B^*$ story.
 
-### `pareto_tpu_vs_gb200.ipynb` — TPU v5p pod vs GB200 NVL72 across collective algorithms
+### `notebooks/pareto_tpu_vs_gb200.ipynb` — TPU v5p pod vs GB200 NVL72 across collective algorithms
 
 ![decode Pareto: TPU v5p pod (3D torus, N=4096) vs GB200 NVL72 (single-switch NVLink, N=72)](assets/pareto_tpu_vs_gb200.png)
 
@@ -271,7 +272,7 @@ Four frontiers on one figure for GPT-1.8T MoE @ FP4, `S_decode=8192`: **TPU v5p 
 
 **Headline:** **GB200 wins peak throughput/GPU ~3× (1324 vs 434 tok/s/GPU)** — reflecting both per-device FLOPS (9000 vs 459 TF) and HBM bandwidth (8 TB/s vs 2.8 TB/s). **TPU wins peak interactivity by ~3.7× (749 vs 203 tok/s)** — not for fabric reasons but because a 4096-device pod admits much wider weight sharding (`PP·TP·EP` up to 32 at the interactivity corner), whereas NVL72's 72-way factorization caps replica at 60 for this model with the wider partition range, leaving each device with ~15 GB of weights to stream per token. The decode interactivity corner is HBM-BW-bound, and at B=1 the corner TPOT ~ `M_θ / (replica · BW_HBM)` — the pod's sharding headroom dominates. **The optimizer barely moves either frontier at the peak corners** (within 1% of the manual baselines): GB200's optimized frontier matches DBT (the optimizer correctly picks `tree` over `ring` at G ≤ 16 where α dominates, then merges with ring once BW dominates at large M); TPU's optimized frontier matches dim-ring with greedy align (torus has only one shipped algorithm, so the optimizer's job is just to confirm `torus-dim-ring`). The visible gap is on non-prefix-aligned partitions (TPU flat-ring fallback) and ring's α-cost on GB200 at small B. The lesson: collective-algorithm choice moves a frontier only when the regime is α-bound *and* the group size exposes the scaling-order difference; at either memory-bound corner it's the fabric's *size headroom* — how wide you can shard — that decides interactivity.
 
-### `pareto_dm_vs_gb200.ipynb` — d-Matrix LPDDR5+SRAM cluster vs GB200 NVL72
+### `notebooks/pareto_dm_vs_gb200.ipynb` — d-Matrix LPDDR5+SRAM cluster vs GB200 NVL72
 
 ![decode Pareto: GPT-1.8T MoE FP4 (left) and 70B MoE FP4 (right) on GB200 NVL72 vs d-Matrix server / squadrack](assets/pareto_dm_vs_gb200.png)
 
@@ -286,7 +287,7 @@ Three systems on the same axes: **GB200 NVL72** (72 GPUs · 192 GB HBM3e @ 8 TB/
 
 **Reading from the curves:** SRAM-residency is a partition-shape question, not just a raw-bandwidth comparison. The 70B squadrack frontier collapses to **11 points** (vs 47 on GB200) because the SRAM-resident corner dominates almost any other shape — the optimizer drives every interactivity target to the same TP=4 PP=60 attractor. For models that can't shard small enough to fit SRAM (the 1.8T case), the system reverts to the LPDDR5-bound regime and per-package throughput trails GB200 by ~30×. See `documentation/modeling/sram.md` §3 for the underlying multi-tier roofline that drives both behaviors and `auto_priority` for the weights-vs-KV greedy tiebreaker.
 
-### `pareto_vs_cluster_size.ipynb` — decode Pareto under cluster-size scaling
+### `notebooks/pareto_vs_cluster_size.ipynb` — decode Pareto under cluster-size scaling
 
 ![decode Pareto vs. cluster size](assets/pareto_vs_cluster_size.png)
 
@@ -312,7 +313,7 @@ Device utilization is the silent cost — `DP = N // replica` is floored, so par
 
 DeepSeek-R1 has a very different lever profile on paper: `L=61` is prime (so PP is binary, 1 or 61), `n_experts=256` makes EP a headline capability, and `n_kv=5` keeps KV traffic tiny. A naïve prediction is that DeepSeek scales via EP while GPT scales via PP. The actual sweep **refutes that prediction** — on the frontier, DeepSeek's winning shape is `PP=61 + TP ∈ {1,2,4,8}` as N doubles 64 → 1024, mirroring GPT's `PP=60 + TP ∈ {1,2,4,8,16}`. EP stays at 1 almost everywhere, flickering to EP=2 only on a few interior points at N=1024. The decode-Pareto optimizer dislikes EP: MoE all-to-all adds per-layer latency on the interactivity corner that low-TP plain PP avoids. `n_experts=256` is an *architectural capability*, not a partition the frontier wants to use. **Both models converge on the same scaling rule: max out PP toward L, then grow TP, leave EP at 1.**
 
-### `pareto_vs_scale_up_tier.ipynb` — decode Pareto under scale-up tiering + collective-algorithm choice
+### `notebooks/pareto_vs_scale_up_tier.ipynb` — decode Pareto under scale-up tiering + collective-algorithm choice
 
 ![decode Pareto: ideal NVL576 baseline vs rail-optimized 2-tier under 3 algorithm modes (ring, optimized SW, INC)](assets/pareto_vs_scale_up_tier.png)
 
@@ -336,7 +337,7 @@ GPT-1.8T forces the cliff through TP because `n_q=128` gives TP headroom. DeepSe
 
 Running the same 576-GPU sweep against five scale-up fabrics — ideal-NVL576, NVL72×8, NVL32×18, NVL16×36, NVL8×72 — shows the phantom cliff is robust even under rack-shrink. Left panel (full GQA-legal partition set): all five Pareto frontiers overlap exactly, including NVL8. The tier-1 cost lives at interior points (+430% worst-case on NVL8) but never on the envelope — the optimizer sidesteps the cliff by picking TP ≤ rack-radix (on NVL8 it picks TP ≤ 8, EP = 1). Right panel (partitions forced to cross: TP = 16 OR EP = 16): the frontiers finally separate — NVL8 on the left, NVL16/32/72/ideal clustered on the right. **Practical sizing:** the relevant scale-up unit is *large enough to hold the model's largest per-role group* — for GPT-1.8T decode (TP ≤ 16, EP ≤ 16), NVL16 is enough and NVL72 buys nothing extra. See `documentation/explaining/when_hierarchical_scale_up_matters.md` for the full argument.
 
-### `pareto_vs_overhead.ipynb` — decode Pareto under framework overhead
+### `notebooks/pareto_vs_overhead.ipynb` — decode Pareto under framework overhead
 
 ![decode Pareto vs. framework overhead](assets/pareto_vs_overhead.png)
 
@@ -355,7 +356,7 @@ Applies framework overhead post-hoc — runs the hardware sweep once per partiti
 
 **Headline:** overhead is an **asymmetric tax** — it crushes the high-interactivity (small B) corner but barely moves the high-throughput corner. Despite that, the winning partition at every corner is **stable** across all six overhead values — overhead shifts you along the frontier but does not re-order partition choice.
 
-### `ttft_vs_io.ipynb` — mismatched-partition disaggregation: does it pay off?
+### `notebooks/ttft_vs_io.ipynb` — mismatched-partition disaggregation: does it pay off?
 
 ![TTFT vs. inter-cluster BW/α under mismatched-partition disagg](assets/ttft_vs_io.png)
 
@@ -370,7 +371,7 @@ Sweeps inter-cluster BW (50 GB/s → 3.6 TB/s) and α (0.5 μs → 5 ms) as two 
 
 **Headline:** in the 2–32k commercial band, **mismatched-partition disagg doesn't pay off** — at any BW, at any α. Compute savings from the mismatched prefill partitions are 0.4–8 ms; the KV handoff tax exceeds those savings everywhere. The win case is long-context (64k+) workloads (Mooncake P99 territory) where wide-TP prefill's attention-FLOP savings materialize. For the bulk of commercial traffic, matched-partition co-lo — or disagg-with-matched-partition for scheduling benefits — is the simpler choice.
 
-### `ttft_vs_chunk.ipynb` — chunked prefill sweet-spot
+### `notebooks/ttft_vs_chunk.ipynb` — chunked prefill sweet-spot
 
 ![TTFT vs. chunk size across 2k–32k prompts](assets/ttft_vs_chunk.png)
 
