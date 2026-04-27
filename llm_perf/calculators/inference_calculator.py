@@ -42,7 +42,7 @@ class InferenceCalculator:
         flops = compute_flops(self.model, self.partition, self.tuner)
         traffic = compute_traffic(self.model, self.partition, self.tuner)
         comm = compute_comm(self.model, self.system, self.partition, self.tuner)
-        latency = compute_latency(self.system, self.partition, self.tuner, flops, traffic, comm)
+        latency = compute_latency(self.model, self.system, self.partition, self.tuner, flops, traffic, comm)
         return InferenceResults(
             memory=memory,
             flops=flops,

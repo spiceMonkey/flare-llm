@@ -13,10 +13,11 @@ Public surface (preserved from the pre-refactor four-file split):
   - compute_flops(model, partition, tuner) → FlopsResults
   - compute_traffic(model, partition, tuner) → TrafficResults
   - compute_comm(model, system, partition, tuner) → CommResults
-  - compute_latency(system, partition, tuner, flops, traffic, comm) → LatencyResults
+  - compute_latency(model, system, partition, tuner, flops, traffic, comm) → LatencyResults
 """
 
 from dataclasses import dataclass
+from typing import Dict, Optional
 
 from ..specs.model_spec import LlmModelSpec
 from ..specs.system_spec import SystemSpec
@@ -32,6 +33,56 @@ from .primitives import (
     aggregate_per_stage,
     cost_collective,
 )
+
+
+# ────────────────────────────────────────────────────────────
+# SW-overhead helpers (kernel_launch_overhead.md §5)
+# ────────────────────────────────────────────────────────────
+
+def _eta_TC_at_mb(curve: Optional[Dict[int, float]], mb: float) -> float:
+    """Piecewise-linear lookup of Tensor Core efficiency at microbatch `mb`.
+
+    None ⇒ 1.0 always (legacy: no compute derate).
+    `mb` clamps to the curve's [min_key, max_key] range.
+    """
+    if curve is None or not curve:
+        return 1.0
+    keys = sorted(curve.keys())
+    if mb <= keys[0]:
+        return float(curve[keys[0]])
+    if mb >= keys[-1]:
+        return float(curve[keys[-1]])
+    for i in range(len(keys) - 1):
+        lo, hi = keys[i], keys[i + 1]
+        if lo <= mb <= hi:
+            t = (mb - lo) / (hi - lo)
+            return float(curve[lo]) + t * (float(curve[hi]) - float(curve[lo]))
+    return 1.0  # unreachable; defensive
+
+
+def _t_SW_per_round(
+    L: int,
+    tuner: TuningSpec,
+    partition: PartitionSpec,
+) -> float:
+    """Per-round CPU dispatch budget on each device.
+
+        t_SW = L · (k_compute + k_per_collective · n_collectives_per_layer) · τ_launch
+
+    `n_collectives_per_layer` counts only collectives that actually fire for
+    the current shape (zero when the corresponding parallelism axis is 1).
+    Returns 0 when kernel_launch_us is 0 (legacy behavior).
+    """
+    tau_us = tuner.kernel_launch_us
+    if tau_us <= 0.0:
+        return 0.0
+    k_c = tuner.kernels_per_layer_compute
+    k_coll = tuner.kernels_per_collective_call
+    n_TP = tuner.n_TP_collectives if partition.TP > 1 else 0
+    n_EP = tuner.n_EP_collectives if max(1, partition.EP) > 1 else 0
+    n_SP = tuner.n_SP_collectives if partition.SP > 1 else 0
+    k = k_c + k_coll * (n_TP + n_EP + n_SP)
+    return L * k * tau_us * 1e-6
 
 
 # ────────────────────────────────────────────────────────────
@@ -68,11 +119,14 @@ class CommResults:
 
 @dataclass
 class LatencyResults:
-    t_compute: float
+    t_compute: float          # raw roofline compute time = F_step / R_gpu
+    t_compute_eff: float      # Tensor-Core-derated compute time (= t_compute / η_TC)
+    eta_TC: float             # Tensor Core efficiency factor at this mb (1.0 = peak)
     t_mem: float
-    t_local: float
+    t_local: float            # max(t_compute_eff, t_mem) — memory-or-compute-bound roofline
     t_comm: float
-    t_stage: float
+    t_stage: float            # GPU-only step time (compute + comm + overlap)
+    t_SW: float               # per-round CPU dispatch budget = L · k · τ_launch
     t_step_user: float
     pp_bubble_factor: float
     TPS_single: float
@@ -268,6 +322,7 @@ def compute_comm(
 # ────────────────────────────────────────────────────────────
 
 def compute_latency(
+    model: LlmModelSpec,
     system: SystemSpec,
     partition: PartitionSpec,
     tuner: TuningSpec,
@@ -280,7 +335,13 @@ def compute_latency(
     The per-stage roofline gives the cost of one pipeline stage processing
     the current batch. For a user observing inter-token latency we apply a
     pipeline-bubble correction when B < PP:
-        t_step_user = t_stage · max(1, PP / B).
+        t_step_user = max(t_stage_GPU, t_SW) · max(1, PP / B).
+
+    `t_stage_GPU` is the GPU-side compute + comm time (with optional Tensor
+    Core efficiency derate at small microbatch). `t_SW` is the per-round
+    CPU dispatch budget (kernel_launch_overhead.md §5). The two are
+    composed via `sw_overlap_factor` ρ_SW: ρ_SW=1 means SW is fully hidden
+    by GPU work (just `max`), ρ_SW=0 means strict serialization.
     """
     B = tuner.B_decode
     PP = partition.PP
@@ -302,15 +363,39 @@ def compute_latency(
         placement=tuner.placement,
     )
     t_compute = flops.F_step_device / R_gpu
+
+    # Tensor Core efficiency derate at small microbatch.
+    # mb = B / PP (microbatch size in steady-state inflight pipeline).
+    # η_TC ramps from ~0 at mb=1 (FP8 below the wgmma M=64 floor) to ~1
+    # at mb ≥ 4·tile (compute-bound peak). curve=None ⇒ η_TC=1 (legacy).
+    mb = max(1, B) / max(1, PP)
+    eta_TC = _eta_TC_at_mb(tuner.tensor_core_efficiency, mb)
+    t_compute_eff = t_compute / eta_TC if eta_TC > 0 else float("inf")
+
     t_mem = t_mem_from_placement(placement, B=max(1, B), tiers=tiers)
-    t_local = max(t_compute, t_mem)
+    t_local = max(t_compute_eff, t_mem)
 
     t_comm = comm.t_comm_stage
     rho = tuner.overlap_factor
     t_stage = t_local + max(0.0, t_comm - rho * t_local)
 
+    # Per-round CPU dispatch budget (kernel_launch_overhead.md §5).
+    # Composed with t_stage via ρ_SW: full overlap (default) ⇒ max(...);
+    # zero overlap ⇒ t_stage + t_SW.
+    t_SW = _t_SW_per_round(model.L, tuner, partition)
+    rho_SW = tuner.sw_overlap_factor
+    t_stage_with_SW = max(t_stage, rho_SW * t_stage + (1.0 - rho_SW) * (t_stage + t_SW))
+    # Simpler reading at the two boundary points:
+    #   ρ_SW = 1 → t_stage_with_SW = t_stage  (SW fully hidden by GPU work)
+    #   ρ_SW = 0 → t_stage_with_SW = max(t_stage, t_stage + t_SW) = t_stage + t_SW
+    # For the strict "max" interpretation when SW is the bottleneck, callers
+    # who want max(t_stage, t_SW) instead of additive should set ρ_SW such
+    # that the formula above matches; the additive form is the safer upper
+    # bound and is what we ship as default behavior away from full overlap.
+    t_stage_with_SW = max(t_stage_with_SW, t_SW)
+
     pp_bubble_factor = max(1.0, PP / max(1, B))
-    t_step_user = t_stage * pp_bubble_factor
+    t_step_user = t_stage_with_SW * pp_bubble_factor
     TPOT = t_step_user
 
     TPS_single = B / t_step_user if t_step_user > 0 else 0.0
@@ -330,10 +415,13 @@ def compute_latency(
 
     return LatencyResults(
         t_compute=t_compute,
+        t_compute_eff=t_compute_eff,
+        eta_TC=eta_TC,
         t_mem=t_mem,
         t_local=t_local,
         t_comm=t_comm,
         t_stage=t_stage,
+        t_SW=t_SW,
         t_step_user=t_step_user,
         pp_bubble_factor=pp_bubble_factor,
         TPS_single=TPS_single,
