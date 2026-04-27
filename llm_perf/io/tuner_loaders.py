@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from ..specs.tuner_spec import MemoryPlacementSpec, TuningSpec
 from ..utils import (
@@ -107,6 +107,42 @@ def tuning_spec_from_json_dict(cfg: Dict[str, Any]) -> TuningSpec:
     if float(cfg.get("overlap_factor", 0.0)) > 1.0:
         raise ValueError(f"overlap_factor must be <= 1.0, got {cfg['overlap_factor']}")
 
+    # SW-overhead fields (kernel_launch_overhead.md §5). All optional;
+    # defaults disable the term so legacy tuner JSONs keep their meaning.
+    sw_int_fields = [f for f in ("kernels_per_layer_compute", "kernels_per_collective_call") if f in cfg]
+    if sw_int_fields:
+        validate_nonnegative_int_fields(cfg, sw_int_fields, prefix="tuning configuration")
+    sw_float_fields = [f for f in ("kernel_launch_us", "sw_overlap_factor") if f in cfg]
+    if sw_float_fields:
+        validate_nonnegative_float_fields(cfg, sw_float_fields, prefix="tuning configuration")
+    if float(cfg.get("sw_overlap_factor", 1.0)) > 1.0:
+        raise ValueError(
+            f"sw_overlap_factor must be <= 1.0, got {cfg['sw_overlap_factor']}"
+        )
+
+    eta_TC_cfg = cfg.get("tensor_core_efficiency", None)
+    if eta_TC_cfg is None:
+        eta_TC: Optional[Dict[int, float]] = None
+    else:
+        if not isinstance(eta_TC_cfg, dict):
+            raise ValueError(
+                "tuning configuration: 'tensor_core_efficiency' must be an "
+                f"object mapping mb→efficiency, got {eta_TC_cfg!r}"
+            )
+        eta_TC = {}
+        for k, v in eta_TC_cfg.items():
+            mb = int(k)
+            eta = float(v)
+            if mb < 1:
+                raise ValueError(
+                    f"tensor_core_efficiency: mb keys must be >= 1, got {mb}"
+                )
+            if not (0.0 <= eta <= 1.0):
+                raise ValueError(
+                    f"tensor_core_efficiency[{mb}]: efficiency must be in [0, 1], got {eta}"
+                )
+            eta_TC[mb] = eta
+
     # MemoryPlacementSpec block (sram.md §1.3 Operator-Specified policy).
     # JSON shape:  "placement": {"weights_tier": "sram", "kv_tier": "auto"}
     # Both fields default to "auto" → greedy fastest-first.
@@ -121,6 +157,10 @@ def tuning_spec_from_json_dict(cfg: Dict[str, Any]) -> TuningSpec:
         auto_priority=str(placement_cfg.get("auto_priority", "weights")),
     )
 
+    # SW-overhead fields fall back to TuningSpec dataclass defaults when
+    # absent from JSON — keeps a single source of truth for the production
+    # baseline.
+    _defaults = TuningSpec()
     return TuningSpec(
         n_TP_collectives=int(cfg.get("n_TP_collectives", 2)),
         n_EP_collectives=int(cfg.get("n_EP_collectives", 1)),
@@ -140,6 +180,11 @@ def tuning_spec_from_json_dict(cfg: Dict[str, Any]) -> TuningSpec:
         torus_algorithm=torus_algorithm,
         inc_enabled=bool(cfg.get("inc_enabled", True)),
         placement=placement,
+        kernels_per_layer_compute=int(cfg.get("kernels_per_layer_compute", _defaults.kernels_per_layer_compute)),
+        kernels_per_collective_call=int(cfg.get("kernels_per_collective_call", _defaults.kernels_per_collective_call)),
+        kernel_launch_us=float(cfg.get("kernel_launch_us", _defaults.kernel_launch_us)),
+        sw_overlap_factor=float(cfg.get("sw_overlap_factor", _defaults.sw_overlap_factor)),
+        tensor_core_efficiency=eta_TC if eta_TC is not None else _defaults.tensor_core_efficiency,
     )
 
 

@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from typing import Dict, Optional
 
 
 @dataclass
@@ -95,4 +96,36 @@ class TuningSpec:
     # weights or KV to a named tier (e.g. d-Matrix Capacity Mode pins
     # weights to "lpddr5" to free SRAM for larger batch / context).
     placement: MemoryPlacementSpec = field(default_factory=MemoryPlacementSpec)
+
+    # ── SW overhead modeling (kernel_launch_overhead.md §5) ─────────────
+    # Per-round CPU dispatch budget on each device:
+    #     t_SW = L · k · τ_launch
+    # where  k = kernels_per_layer_compute
+    #          + kernels_per_collective_call · (n_TP_eff + n_EP_eff + n_SP_eff)
+    # and the n_*_eff terms are the per-layer collective counts that
+    # actually fire for the current shape (i.e. zero when the
+    # corresponding parallelism axis is 1).
+    #
+    # Production-realistic defaults: CUDA Graphs on (τ_launch ≈ 1.5 μs),
+    # ~10 kernels per layer (after typical fusion), ~2 kernels per NCCL
+    # collective call, full async overlap (ρ_SW = 1) so SW acts as a
+    # *floor* on t_step_user — kicks in only when t_SW > t_stage. To
+    # disable the SW term entirely (legacy roofline), set
+    # `kernel_launch_us = 0.0` in tuner JSON.
+    kernels_per_layer_compute: int = 10
+    kernels_per_collective_call: int = 2
+    kernel_launch_us: float = 1.5       # 0 disables; ~1.5 μs with CUDA Graphs, ~7 μs without
+    sw_overlap_factor: float = 1.0      # ρ_SW ∈ [0, 1]; 1 = full async overlap (SW hidden by GPU work)
+
+    # Tensor Core efficiency curve η_TC(mb) for compute roofline.
+    # Maps microbatch size mb (= B / PP) to a derate factor in [0, 1].
+    # `compute_latency` uses piecewise-linear interpolation between
+    # adjacent keys; mb values below the minimum key clamp to that key's
+    # efficiency, mb values above the maximum clamp to that key's value.
+    # When None, η_TC = 1.0 always (legacy behavior — no compute derate).
+    # Representative FP8 ramp on Hopper / Blackwell:
+    #     {1: 0.05, 16: 0.4, 64: 0.8, 256: 1.0}
+    # See documentation/explaining/practical_pp_choice.md §3.3 for the
+    # tile-floor argument that motivates this curve.
+    tensor_core_efficiency: Optional[Dict[int, float]] = None
 
