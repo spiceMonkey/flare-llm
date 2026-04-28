@@ -70,6 +70,11 @@ from .weight_footprint import (
 from .kv_footprint import kv_bytes_per_seq
 from .linear_flops import linear_flops_per_token
 from .dispatch import cost_collective, enumerate_options
+from .partition_layout import (
+    DEFAULT_ORDER as NESTED_LAYOUT_ORDER,
+    assign_tier_per_axis,
+    tier_at,
+)
 
 __all__ = [
     # P2P
@@ -127,4 +132,8 @@ __all__ = [
     # dispatcher
     "cost_collective",
     "enumerate_options",
+    # nested-layout helper
+    "NESTED_LAYOUT_ORDER",
+    "assign_tier_per_axis",
+    "tier_at",
 ]

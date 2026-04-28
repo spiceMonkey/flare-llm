@@ -15,6 +15,9 @@ from .primitives import (
     linear_flops_per_token,
     aggregate_per_stage,
     cost_collective,
+    p2p_hop,
+    assign_tier_per_axis,
+    tier_at,
 )
 
 
@@ -213,10 +216,14 @@ def compute_prefill_comm(
             inc_enabled=inc_enabled,
         )
 
-    # PP: token-scaled activation hop
+    # PP: token-scaled activation hop. Cost at the *correct* fabric tier
+    # under nested-layout rule (see decode_model.compute_comm for the full
+    # rationale and partition_layout.py for the helper).
     if PP > 1:
         msg_PP = (tokens * H / TP) * b
-        t_PP = _cost("PP", "p2p", msg_PP, 2)
+        pp_tier_idx = assign_tier_per_axis(partition, system, role="PP")["PP"]
+        pp_tier = tier_at(system, "PP", pp_tier_idx)
+        t_PP = p2p_hop(msg_PP, pp_tier.alpha_us * 1e-6, pp_tier.bw_per_port_GBps * 1e9)
     else:
         t_PP = 0.0
 
