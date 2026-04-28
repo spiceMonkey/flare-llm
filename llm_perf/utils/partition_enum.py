@@ -41,17 +41,34 @@ def _power_of_2_ladder(max_val: int) -> List[int]:
     return out
 
 
-def scale_up_domain_size(system: SystemSpec, role: str = "TP") -> int:
-    """Number of devices reachable in the innermost scale-up tier.
+def scale_up_domain_size(
+    system: SystemSpec,
+    role: str = "TP",
+    *,
+    scale_up_tier_index: int = 0,
+) -> int:
+    """Cumulative number of devices reachable through tier `scale_up_tier_index` (inclusive).
 
-    Returns the `ports` field of tier 0 of the fabric chain mapped to
-    `role`. For NVL72 this is 72; for d-Matrix pair_mesh tier-0 it is 4
-    (server-local).
+    `scale_up_tier_index = 0` returns the ports of tier 0 alone — the
+    innermost domain (e.g., 72 for NVL72; 16 for the d-Matrix pair-of-cards
+    mesh). `scale_up_tier_index = i` returns the cumulative reach
+    `prod(tier[k].ports for k in 0..i)` — useful when a deployment treats
+    a multi-tier fabric as a single scale-up unit (e.g., d-Matrix tier-1
+    PCIe extends the domain to a full server = 16 × 4 = 64 chiplets).
+
+    Out-of-range indices clamp to the last available tier rather than
+    raising — so a single-tier system like NVL72 with
+    `scale_up_tier_index=1` still returns its tier-0 reach (72) instead of
+    erroring.
     """
     chain = system.get_tier_chain(role)
     if not chain:
         raise ValueError(f"No tier chain configured for collective role {role!r}")
-    return chain[0].ports
+    idx = max(0, min(scale_up_tier_index, len(chain) - 1))
+    reach = 1
+    for t in chain[: idx + 1]:
+        reach *= t.ports
+    return reach
 
 
 def enumerate_partitions(
@@ -65,6 +82,7 @@ def enumerate_partitions(
     tp_max_override: Optional[int] = None,
     ep_max_override: Optional[int] = None,
     scale_up_domain_override: Optional[int] = None,
+    scale_up_tier_index: int = 0,
 ) -> List[PartitionSpec]:
     """Enumerate valid (PP, TP, EP, SP) partitions for `model` on `system`.
 
@@ -85,8 +103,18 @@ def enumerate_partitions(
         Override the auto-derived TP / EP caps. Useful for sensitivity
         sweeps that intentionally cross the natural cap.
     scale_up_domain_override : int, optional
-        Override the auto-derived scale-up domain size. Useful when the
-        sweep replaces the system fabric to test a hypothetical topology.
+        Override the auto-derived scale-up domain size with an absolute
+        value. Takes precedence over `scale_up_tier_index`. Useful when
+        the sweep replaces the system fabric to test a hypothetical
+        topology.
+    scale_up_tier_index : int, default 0
+        Index into the fabric chain (`system.get_tier_chain(role)`) up to
+        which the scale-up domain extends. 0 = innermost tier only
+        (default — every collective stays within tier 0 of the fabric);
+        1 = cumulative reach through tier 1 (e.g., d-Matrix server-wide
+        via PCIe = 16 × 4 = 64); etc. Indices beyond the chain length
+        clamp to the last tier. Inert when `scale_up_domain_override` is
+        also set.
     """
     if num_devices is None:
         num_devices = system.num_devices
@@ -107,7 +135,7 @@ def enumerate_partitions(
     if scale_up_domain_override is not None:
         scale_up = scale_up_domain_override
     else:
-        scale_up = scale_up_domain_size(system)
+        scale_up = scale_up_domain_size(system, scale_up_tier_index=scale_up_tier_index)
 
     if pp_choices is None:
         pp_choices = [pp for pp in _DEFAULT_PP_LADDER if pp <= pp_max]
@@ -130,18 +158,25 @@ def enumerate_partitions(
     return out
 
 
-def describe_constraints(model: LlmModelSpec, system: SystemSpec, pp_max: int = 16) -> str:
+def describe_constraints(
+    model: LlmModelSpec,
+    system: SystemSpec,
+    pp_max: int = 16,
+    *,
+    scale_up_tier_index: int = 0,
+) -> str:
     """One-line summary of the active constraints, for notebook printouts."""
     n_kv = model.n_kv
     n_experts = model.moe.n_experts if model.moe is not None else None
-    scale_up = scale_up_domain_size(system)
+    scale_up = scale_up_domain_size(system, scale_up_tier_index=scale_up_tier_index)
     if n_experts is not None:
         tp_max = min(n_kv, n_experts)
         return (
             f"PP ≤ {pp_max}; TP ≤ min(n_kv={n_kv}, n_experts={n_experts}) = {tp_max}; "
             f"EP ≤ n_experts={n_experts}; TP·EP ≤ scale_up={scale_up}"
+            f" (tier_idx={scale_up_tier_index})"
         )
     return (
         f"PP ≤ {pp_max}; TP ≤ n_kv={n_kv}; EP = 1 (dense); "
-        f"TP·EP ≤ scale_up={scale_up}"
+        f"TP·EP ≤ scale_up={scale_up} (tier_idx={scale_up_tier_index})"
     )
