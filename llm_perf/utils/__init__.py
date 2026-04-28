@@ -23,6 +23,11 @@ from .constants import (
     TB_TO_FLOPS,
     US_TO_SECONDS,
 )
+from .partition_enum import (
+    enumerate_partitions,
+    scale_up_domain_size,
+    describe_constraints,
+)
 from .plotting import save_config_tps_scatter
 
 __all__ = [
@@ -43,4 +48,7 @@ __all__ = [
     "TB_TO_FLOPS",
     "save_config_tps_scatter",
     "US_TO_SECONDS",
+    "enumerate_partitions",
+    "scale_up_domain_size",
+    "describe_constraints",
 ]
