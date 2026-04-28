@@ -11,12 +11,12 @@ outer tiers as needed. ``assign_tier_per_axis`` resolves a `PartitionSpec`
 + `SystemSpec` into a per-axis tier index under this rule.
 
 The output is consumed by the comm-cost path so that, e.g., PP send/recv
-between two adjacent stages is priced at the *correct* tier — currently
-the framework prices every PP hop at tier 0 because `cost_collective` is
-called with `G=2` (single hop), which always resolves to the innermost
-tier even when PP physically spans an outer fabric tier (e.g., d-Matrix
-squadrack PP=32 spanning 4 servers crosses PCIe and Ethernet, not just
-the pair-of-cards mesh).
+between two adjacent stages is priced at the *correct* tier — the
+framework would otherwise price every PP hop at tier 0 because
+`cost_collective` is called with `G=2` (single hop), which always
+resolves to the innermost tier even when PP physically spans an outer
+fabric tier (e.g., d-Matrix squadrack PP=32 with TP=8 spanning the
+ethernet rack-tier, not just the package D2D mesh).
 """
 
 from typing import Dict, Tuple
