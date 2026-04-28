@@ -26,8 +26,9 @@ optimized independently.
 Resolution scope:
   - tp_algorithm_decode  / tp_algorithm_prefill   (TP all-reduce)
   - ep_algorithm_decode  / ep_algorithm_prefill   (EP MoE all-to-all)
-  - SP is always ring AG (no knob — only shipped variant per `collectives.md
-    §4.5`); the SP-related fields don't exist on TuningSpec.
+  - SP is always ring AG (no knob — only shipped variant per
+    `collectives/01_collective_algorithms.md §6`); the SP-related fields
+    don't exist on TuningSpec.
 
 Non-`auto` fields pass through unchanged. If the partition makes a collective
 trivial (e.g. TP=1 → no AR work), the field resolves to `"ring"` as a stable

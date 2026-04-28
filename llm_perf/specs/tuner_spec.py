@@ -46,7 +46,7 @@ class TuningSpec:
     #   passing the tuner to `InferenceCalculator.run()`. Reaching the
     #   dispatcher with "auto" raises ValueError.
     #   SP is always ring AG (no knob — only shipped option per
-    #   collectives.md §4.5).
+    #   collectives/01_collective_algorithms.md §6).
     #   The legacy fields `tp_algorithm` / `ep_algorithm` are deprecated
     #   single-knob aliases; the loader copies them into both _decode and
     #   _prefill when the per-phase fields are unspecified.

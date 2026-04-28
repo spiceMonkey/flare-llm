@@ -11,7 +11,7 @@ class MemoryTierSpec:
     of memory tiers, fastest first. Each tier carries a capacity, an effective
     peak read bandwidth, an optional first-byte latency, and an optional
     sustained-bandwidth deflator. The `eta_beta` deflator follows the same
-    convention as collective contention (`collectives.md §7`): 1.0 = peak,
+    convention as collective contention (`collectives/05_contention_and_congestion.md`): 1.0 = peak,
     < 1 = sustained-throughput losses (HBM refresh + bank conflicts ≈ 0.92,
     LPDDR5 ≈ 0.85, SRAM ≈ 1.0; sram.md §1.2). The `alpha_us` first-byte cost
     is structurally negligible for steady-state decode (see sram.md §2.1) and
@@ -106,7 +106,7 @@ class CrossbarTier:
     Default topology for all existing system JSONs. `ports` is the radix —
     the number of ranks reachable within this tier from any single rank.
     Cumulative reach at tier k is the product of ports over tiers 0..k.
-    See documentation/modeling/collectives.md §3.1 / §3.4 for the cost forms consumed by each tier kind.
+    See documentation/modeling/collectives/02_topology_mapping.md §2 (star) / collectives/04_in_network_collectives.md (INC) for the cost forms consumed by each tier kind.
 
     Contention coefficients `eta_alpha` (≥ 1, inflates α) and `eta_beta`
     (∈ (0, 1], deflates BW) coarsen dynamic contention into the α–β model
@@ -123,7 +123,7 @@ class CrossbarTier:
     0.0 means "reuse alpha_us" (i.e., model assumes the tier's α already
     captures cut-through latency).
 
-    See documentation/modeling/collectives.md §3.4, §4.4, §5.4 and
+    See documentation/modeling/collectives/04_in_network_collectives.md and
     documentation/modeling/collectives/04_in_network_collectives.md.
     """
 
@@ -146,7 +146,7 @@ class TorusTier:
     `dims` is (D_1, ..., D_k); reach is prod(dims). Each node has 2k neighbor
     links; `bw_per_port_GBps` is the per-link single-direction bandwidth.
     Diameter = sum(floor(D_i/2)); bisection cut binds the largest dim.
-    See documentation/modeling/collectives.md §3.2 / §4.2 / §5.2 for the dim-decomposed primitive cost forms.
+    See documentation/modeling/collectives/02_topology_mapping.md §3 for the dim-decomposed primitive cost forms.
 
     Contention coefficients `eta_alpha`, `eta_beta` as in `CrossbarTier`;
     see documentation/modeling/contention.md.
@@ -190,7 +190,7 @@ class MeshTier:
 
     No `inc` field — mesh has no switch ASIC; INC is structurally absent.
 
-    See documentation/modeling/collectives.md §1 (mesh notes) and the
+    See documentation/modeling/collectives/02_topology_mapping.md §4 (mesh) and the
     explainer `02_topology_mapping.md §4` for full vs k-D mesh derivations.
     """
 

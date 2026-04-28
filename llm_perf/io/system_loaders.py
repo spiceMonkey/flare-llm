@@ -158,7 +158,7 @@ def _apply_oversubscription_cap(
 ) -> float:
     """Apply the §7.2 oversubscription cap: realized eta_beta = min(provided, 1/s).
 
-    Per collectives.md §7.2: a tier oversubscribed at ratio s ≥ 1 has aggregate
+    Per collectives/05_contention_and_congestion.md §4: a tier oversubscribed at ratio s ≥ 1 has aggregate
     upper-tier BW = (1/s) of aggregate downlink demand. The realized eta_beta
     is the minimum of the operator-supplied hardware-floor heuristic and the
     structural 1/s cap. Both inputs are model parameters, not error states —

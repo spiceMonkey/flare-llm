@@ -1,4 +1,4 @@
-"""Topology-aware collective cost dispatcher — collectives.md §3–§6.
+"""Topology-aware collective cost dispatcher — collectives/00_summary.md §4–§7.
 
 Walks a fabric chain innermost-first, picking each tier's contribution
 based on its `.topology` discriminator. Crossbar tiers flatten to a single
@@ -125,7 +125,7 @@ def cost_collective(
     if classes == {"crossbar"}:
         # INC eligibility: every crossed tier must declare inc != "none"
         # AND the caller must not have opted out. AR / AG / RS route via the
-        # SHARP-class switch ALU + multicast crossbar (collectives.md §3.4,
+        # SHARP-class switch ALU + multicast crossbar (collectives/04_in_network_collectives.md,
         # §4.4) — needs `inc != "none"` on every tier. A2A routes via HW
         # crossbar scatter-gather (§5.4) — needs `inc == "hw_a2a"` on every
         # tier (NOT covered by sharp_class). p2p is a single hop, no INC.
@@ -135,14 +135,14 @@ def cost_collective(
             if op == "moe_a2a" and all(_is_hw_a2a(t) for t in crossed):
                 return _inc_crossbar_cost(op, M, G, crossed)
         # Multi-tier crossbar AR / AG: route through the hierarchical RS →
-        # sub-AR → AG composition (collectives.md §3.3 / §4.3). Inner = first
+        # sub-AR → AG composition (collectives/03_hierarchical_topologies.md §2). Inner = first
         # crossed tier; outer = remaining crossed tier(s) flattened. Single-
         # tier still uses the flat path. The `algorithm` knob maps to the
         # outer phase's choice (inner is always ring — only shipped).
         if len(crossed) > 1 and op in ("all_reduce", "all_gather"):
             return _hierarchical_crossbar_cost(op, M, G, crossed, algorithm)
         # Multi-tier crossbar MoE A2A: per-destination-class accounting
-        # (collectives.md §5.3). A2A doesn't telescope — cost itemizes by
+        # (collectives/03_hierarchical_topologies.md §2). A2A doesn't telescope — cost itemizes by
         # destination class (intra-pod / outer). The `algorithm` knob is
         # ignored (only pairwise direct-send is shipped; tree is deprecated).
         if len(crossed) > 1 and op == "moe_a2a":
@@ -212,7 +212,7 @@ def enumerate_options(
     "tree_pipelined" maps to the asymptotic P→P* form (BW coefficient = 1)
     that NCCL ships at bulk M.
 
-    INC eligibility (collectives.md §3.4 / §4.4 / §5.4):
+    INC eligibility (collectives/04_in_network_collectives.md):
       - AR / AG via "inc" requires every crossed tier to declare `inc != "none"`.
       - MoE A2A via "inc" requires every crossed tier to declare `inc == "hw_a2a"`
         (sharp_class does not accelerate A2A).
@@ -293,7 +293,7 @@ def enumerate_options(
             options.append(("tree_pipelined", _crossbar_cost(op, M, G, alpha_s, bw_Bps, "tree_pipelined")))
     elif op == "moe_a2a":
         # MoE A2A: multi-tier crossbar uses per-destination-class accounting
-        # (collectives.md §5.3); single-tier uses flat pairwise.
+        # (collectives/03_hierarchical_topologies.md §2); single-tier uses flat pairwise.
         if len(crossed) > 1 and classes == {"crossbar"}:
             options.append(("ring", _hierarchical_a2a_cost(M, G, crossed)))
         else:
@@ -388,7 +388,7 @@ def _crossbar_cost(
 
 # ────────────────────────────────────────────────────────────
 # Hierarchical crossbar path — RS → sub-AR → AG composition for AR;
-# inner-then-outer cascade for AG / RS. Per collectives.md §3.3 / §4.3.
+# inner-then-outer cascade for AG / RS. Per collectives/03_hierarchical_topologies.md §2.
 # ────────────────────────────────────────────────────────────
 
 def _hierarchical_crossbar_cost(
@@ -402,8 +402,8 @@ def _hierarchical_crossbar_cost(
     (the only shipped variant for inner RS / AG); outer uses `outer_alg ∈
     {ring, tree}` for AR.
 
-    AR (collectives.md §3.3): inner RS + outer sub-AR(M·L/N) + inner AG.
-    AG (collectives.md §4.3): inner AG + outer AG(G_inner·M).
+    AR (collectives/03_hierarchical_topologies.md §2): inner RS + outer sub-AR(M·L/N) + inner AG.
+    AG (collectives/03_hierarchical_topologies.md §2): inner AG + outer AG(G_inner·M).
     RS: outer RS(M/L) + inner RS(M/N) — time-reverse of AG.
 
     All three preserve the flat-ring β coefficient (telescoping); the α-side
@@ -504,7 +504,7 @@ def _hierarchical_crossbar_cost(
 def _hierarchical_a2a_cost(
     M: float, G: int, crossed: List[TierSpec]
 ) -> float:
-    """Hierarchical A2A per-destination-class accounting (collectives.md §5.3).
+    """Hierarchical A2A per-destination-class accounting (collectives/03_hierarchical_topologies.md §2).
 
     A2A doesn't decompose hierarchically — every source-destination pair carries
     a distinct payload, so cross-tier permutation traffic equals the full
@@ -576,9 +576,9 @@ def _inc_crossbar_cost(
 
     BW: narrowest link among crossed tiers, scaled by each tier's `eta_beta`.
     Matches the crossbar α/BW reduction and lets contention modeling
-    (collectives.md §7) flow through identically.
+    (collectives/05_contention_and_congestion.md) flow through identically.
 
-    Routing per op (collectives.md §3.4 / §4.4 / §5.4):
+    Routing per op (collectives/04_in_network_collectives.md):
       - AR: switch ALU + multicast crossbar; both n_α collapse AND BW-eff
         doubling. Routes through `inc_all_reduce`.
       - AG / RS: multicast or ALU+scatter; α-only collapse, BW unchanged
@@ -643,7 +643,7 @@ def _torus_cost(op: str, M: float, G: int, crossed: List[TierSpec]) -> float:
         warnings.warn(
             f"Torus collective G={G} misaligned with dims={full_dims}; "
             f"using conservative flat-ring bound. "
-            f"See collectives.md §3.2 for dim-aligned layouts.",
+            f"See collectives/02_topology_mapping.md §3 for dim-aligned layouts.",
             UserWarning,
             stacklevel=3,
         )
