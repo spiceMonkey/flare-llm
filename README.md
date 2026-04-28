@@ -37,7 +37,7 @@ The collective-communication and network primitives that price every TP/EP/SP/PP
 Two paths in this repo are auto-synced from upstream:
 
 - [`llm_perf/core/primitives/collective_cost.py`](llm_perf/core/primitives/collective_cost.py) ← `code/core/collective_cost.py` (the α–β primitive library)
-- [`documentation/explaining/collectives/`](documentation/explaining/collectives/) ← `documentation/modeling/` (workload-agnostic explainers + cheatsheet)
+- [`documentation/modeling/collectives/`](documentation/modeling/collectives/) ← `documentation/modeling/` (workload-agnostic explainers + cheatsheet)
 
 Both are kept in sync by [`.github/workflows/sync-collectives.yml`](.github/workflows/sync-collectives.yml) (Mondays 06:00 UTC + manual dispatch). Each run lands the upstream snapshot as a PR; the synced code file carries an `AUTO-SYNCED — DO NOT EDIT LOCALLY` banner that the workflow re-prepends on every run. **Refer to the upstream repo for derivations, additional algorithms, contention calibration, and any further reading on the cost model itself.**
 

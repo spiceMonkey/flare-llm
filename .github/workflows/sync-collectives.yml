@@ -16,7 +16,7 @@ jobs:
       UPSTREAM: https://github.com/spiceMonkey/collective-comm.git
       UPSTREAM_BRANCH: main
       DOC_SUBPATH: documentation/modeling
-      DOC_DEST: documentation/explaining/collectives
+      DOC_DEST: documentation/modeling/collectives
       CODE_SRC: code/core/collective_cost.py
       CODE_DEST: llm_perf/core/primitives/collective_cost.py
     steps:
@@ -56,7 +56,7 @@ jobs:
               '#' \
               '# Doc-path note: docstrings here reference upstream' \
               '# `documentation/modeling/`; that subtree lands locally at' \
-              '# `documentation/explaining/collectives/`.' \
+              '# `documentation/modeling/collectives/`.' \
               '# ─────────────────────────────────────────────────────────────────────' \
               ''
             cat "$TMP/$CODE_SRC"
@@ -77,7 +77,7 @@ jobs:
             [spiceMonkey/collective-comm](https://github.com/spiceMonkey/collective-comm)
             at commit `${{ steps.snap.outputs.sha }}`:
 
-            - `documentation/modeling/` → `documentation/explaining/collectives/`
+            - `documentation/modeling/` → `documentation/modeling/collectives/`
             - `code/core/collective_cost.py` → `llm_perf/core/primitives/collective_cost.py`
               (AUTO-SYNCED banner is re-prepended on every run)
 

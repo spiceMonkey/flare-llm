@@ -124,7 +124,7 @@ class CrossbarTier:
     captures cut-through latency).
 
     See documentation/modeling/collectives.md §3.4, §4.4, §5.4 and
-    documentation/explaining/collectives/04_in_network_collectives.md.
+    documentation/modeling/collectives/04_in_network_collectives.md.
     """
 
     name: str
