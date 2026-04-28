@@ -305,10 +305,13 @@ def compute_prefill_latency(
     # The PP-hop term uses the middle-stage 2× factor (recv + send) by
     # default; edge stages do only one direction (off by one k_pp_hop·τ,
     # negligible at PP >> 1).
-    n_TP = tuner.n_TP_collectives if TP > 1 else 0
-    n_EP = tuner.n_EP_collectives if EP > 1 else 0
-    n_SP = tuner.n_SP_collectives if SP > 1 else 0
-    k_per_layer = tuner.kernels_per_layer_compute + tuner.kernels_per_collective_call * (n_TP + n_EP + n_SP)
+    n_TP_calls = tuner.n_TP_collectives if TP > 1 else 0
+    # See decode_model._t_SW_per_round for the n_EP × 2 expansion: cost-model
+    # convention treats one MoE A2A as a single "round-trip" with the 2× wrapped
+    # internally; the SW launch counter must expand to 2 actual NCCL API calls.
+    n_EP_calls = 2 * tuner.n_EP_collectives if EP > 1 else 0
+    n_SP_calls = tuner.n_SP_collectives if SP > 1 else 0
+    k_per_layer = tuner.kernels_per_layer_compute + tuner.kernels_per_collective_call * (n_TP_calls + n_EP_calls + n_SP_calls)
     layers_per_stage = L / PP if PP > 0 else L
     k_pp_hop = tuner.kernels_per_pp_hop if PP > 1 else 0
     t_SW_per_stage = (

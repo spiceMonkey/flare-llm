@@ -88,10 +88,15 @@ def _t_SW_per_round(
         return 0.0
     k_c = tuner.kernels_per_layer_compute
     k_coll = tuner.kernels_per_collective_call
-    n_TP = tuner.n_TP_collectives if partition.TP > 1 else 0
-    n_EP = tuner.n_EP_collectives if max(1, partition.EP) > 1 else 0
-    n_SP = tuner.n_SP_collectives if partition.SP > 1 else 0
-    k = k_c + k_coll * (n_TP + n_EP + n_SP)
+    n_TP_calls = tuner.n_TP_collectives if partition.TP > 1 else 0
+    # n_EP_collectives is "1 MoE A2A round-trip per layer" in cost-model
+    # convention (dispatch.py wraps the round-trip's 2× factor inside
+    # _cost("moe_a2a", ...)). The SW launch counter must expand this to
+    # 2 actual NCCL API calls (dispatch + combine) because each call is
+    # a separate kernel-launch event with its own dispatch τ.
+    n_EP_calls = 2 * tuner.n_EP_collectives if max(1, partition.EP) > 1 else 0
+    n_SP_calls = tuner.n_SP_collectives if partition.SP > 1 else 0
+    k = k_c + k_coll * (n_TP_calls + n_EP_calls + n_SP_calls)
     t_layer = L * k * tau_us * 1e-6
     pp_microbatches = partition.PP if partition.PP > 1 else 0
     t_pp = pp_microbatches * tuner.kernels_per_pp_hop * tau_us * 1e-6

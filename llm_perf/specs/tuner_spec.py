@@ -60,9 +60,17 @@ class TuningSpec:
     tp_algorithm: str = "ring"
     ep_algorithm: str = "ring"
 
-    # Collectives per layer
+    # Collectives per layer (cost-model convention).
+    # n_TP_collectives: number of TP all-reduces per layer (post-attn + post-FFN = 2).
+    # n_EP_collectives: number of MoE A2A *round-trips* per MoE layer
+    #     (dispatch + combine = 1 round-trip; the 2× factor for the round-trip
+    #     lives inside dispatch.py's `_cost("moe_a2a", ...)` wrap, so this
+    #     count is "1 round-trip per MoE layer", not "2 a2a calls").
+    # n_SP_collectives: number of SP all-gathers per layer (1 with ring SP).
+    # NOTE: SW launch counting expands n_EP by 2× internally because the
+    # round-trip is actually 2 NCCL API calls in flight (see decode_model.py).
     n_TP_collectives: int = 2
-    n_EP_collectives: int = 2
+    n_EP_collectives: int = 1
     n_SP_collectives: int = 1
 
     # Overlap factor ρ in [0, 1]: Fraction of local time utilized to hide comms.
