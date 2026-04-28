@@ -109,7 +109,7 @@ def tuning_spec_from_json_dict(cfg: Dict[str, Any]) -> TuningSpec:
 
     # SW-overhead fields (kernel_launch_overhead.md §5). All optional;
     # defaults disable the term so legacy tuner JSONs keep their meaning.
-    sw_int_fields = [f for f in ("kernels_per_layer_compute", "kernels_per_collective_call") if f in cfg]
+    sw_int_fields = [f for f in ("kernels_per_layer_compute", "kernels_per_collective_call", "kernels_per_pp_hop") if f in cfg]
     if sw_int_fields:
         validate_nonnegative_int_fields(cfg, sw_int_fields, prefix="tuning configuration")
     sw_float_fields = [f for f in ("kernel_launch_us", "sw_overlap_factor") if f in cfg]
@@ -182,6 +182,7 @@ def tuning_spec_from_json_dict(cfg: Dict[str, Any]) -> TuningSpec:
         placement=placement,
         kernels_per_layer_compute=int(cfg.get("kernels_per_layer_compute", _defaults.kernels_per_layer_compute)),
         kernels_per_collective_call=int(cfg.get("kernels_per_collective_call", _defaults.kernels_per_collective_call)),
+        kernels_per_pp_hop=int(cfg.get("kernels_per_pp_hop", _defaults.kernels_per_pp_hop)),
         kernel_launch_us=float(cfg.get("kernel_launch_us", _defaults.kernel_launch_us)),
         sw_overlap_factor=float(cfg.get("sw_overlap_factor", _defaults.sw_overlap_factor)),
         tensor_core_efficiency=eta_TC if eta_TC is not None else _defaults.tensor_core_efficiency,

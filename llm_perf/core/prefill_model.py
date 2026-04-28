@@ -297,16 +297,24 @@ def compute_prefill_latency(
 
     # SW dispatch budget per stage. Prefill is one forward pass per request
     # (or per chunk) — there is no microbatch round structure as in decode,
-    # so the per-stage formula is L/PP layers worth of launches:
-    #     t_SW_per_stage = (L/PP) · k · τ_launch
+    # so the per-stage formula is L/PP layers worth of launches plus one
+    # PP boundary's worth of P2P sends/recvs (inert when PP = 1):
+    #     t_SW_per_stage = (L/PP) · k · τ_launch  +  k_pp_hop · τ_launch
     # where k decomposes into compute + collective kernel counts and the
     # collective counts are zero on axes where the parallelism is 1.
+    # The PP-hop term uses the middle-stage 2× factor (recv + send) by
+    # default; edge stages do only one direction (off by one k_pp_hop·τ,
+    # negligible at PP >> 1).
     n_TP = tuner.n_TP_collectives if TP > 1 else 0
     n_EP = tuner.n_EP_collectives if EP > 1 else 0
     n_SP = tuner.n_SP_collectives if SP > 1 else 0
     k_per_layer = tuner.kernels_per_layer_compute + tuner.kernels_per_collective_call * (n_TP + n_EP + n_SP)
     layers_per_stage = L / PP if PP > 0 else L
-    t_SW_per_stage = layers_per_stage * k_per_layer * tuner.kernel_launch_us * 1e-6
+    k_pp_hop = tuner.kernels_per_pp_hop if PP > 1 else 0
+    t_SW_per_stage = (
+        layers_per_stage * k_per_layer * tuner.kernel_launch_us * 1e-6
+        + k_pp_hop * tuner.kernel_launch_us * 1e-6
+    )
 
     def _compose_SW(t_local_gpu: float) -> float:
         """Compose per-stage GPU work with SW dispatch via ρ_SW.

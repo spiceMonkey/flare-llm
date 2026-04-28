@@ -114,6 +114,12 @@ class TuningSpec:
     # `kernel_launch_us = 0.0` in tuner JSON.
     kernels_per_layer_compute: int = 10
     kernels_per_collective_call: int = 2
+    # Kernels per PP boundary on each device, per microbatch: 1 recv from
+    # upstream + 1 send to downstream = 2 (middle stages). Edge stages do
+    # only one direction; the formula below treats every stage as middle
+    # for simplicity (off by one PP × τ on edge stages, negligible at PP>>1).
+    # Set to 1 if `ncclSendRecv` (or a custom kernel) fuses the pair.
+    kernels_per_pp_hop: int = 2
     kernel_launch_us: float = 1.5       # 0 disables; ~1.5 μs with CUDA Graphs, ~7 μs without
     # ρ_SW ∈ [0, 1]; 1 = full async overlap (SW hidden by GPU work).
     # **Caveat:** 1.0 is the upper-end case — accurate for CUDA-Graphs-replayed
