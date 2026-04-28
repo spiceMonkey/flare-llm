@@ -35,7 +35,7 @@ def tuning_spec_from_json_dict(cfg: Dict[str, Any]) -> TuningSpec:
           "ep_algorithm": "tree"
 
           "n_TP_collectives": 2,
-          "n_EP_collectives": 1,
+          "n_EP_collectives": 2,
           "n_SP_collectives": 1,
 
           "overlap_factor": 0.3,
@@ -163,7 +163,7 @@ def tuning_spec_from_json_dict(cfg: Dict[str, Any]) -> TuningSpec:
     _defaults = TuningSpec()
     return TuningSpec(
         n_TP_collectives=int(cfg.get("n_TP_collectives", 2)),
-        n_EP_collectives=int(cfg.get("n_EP_collectives", 1)),
+        n_EP_collectives=int(cfg.get("n_EP_collectives", 2)),
         n_SP_collectives=int(cfg.get("n_SP_collectives", 1)),
         overlap_factor=float(cfg.get("overlap_factor", 0.0)),
         S_decode=int(cfg.get("S_decode", 2048)),

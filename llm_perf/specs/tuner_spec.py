@@ -60,17 +60,16 @@ class TuningSpec:
     tp_algorithm: str = "ring"
     ep_algorithm: str = "ring"
 
-    # Collectives per layer (cost-model convention).
-    # n_TP_collectives: number of TP all-reduces per layer (post-attn + post-FFN = 2).
-    # n_EP_collectives: number of MoE A2A *round-trips* per MoE layer
-    #     (dispatch + combine = 1 round-trip; the 2× factor for the round-trip
-    #     lives inside dispatch.py's `_cost("moe_a2a", ...)` wrap, so this
-    #     count is "1 round-trip per MoE layer", not "2 a2a calls").
-    # n_SP_collectives: number of SP all-gathers per layer (1 with ring SP).
-    # NOTE: SW launch counting expands n_EP by 2× internally because the
-    # round-trip is actually 2 NCCL API calls in flight (see decode_model.py).
+    # NCCL API call counts per layer. These match both the cost-model
+    # accumulator (decode.md §5.5) and the SW launch counter (decode.md §6.3.2)
+    # so a single field describes both.
+    # n_TP_collectives: TP all-reduces per layer (post-attn + post-FFN = 2).
+    # n_EP_collectives: MoE A2A calls per MoE layer (dispatch + combine = 2);
+    #     each call costs one single-direction A2A — see dispatch.py's
+    #     `_cost("moe_a2a", ...)`.
+    # n_SP_collectives: SP all-gathers per layer (1 with ring SP).
     n_TP_collectives: int = 2
-    n_EP_collectives: int = 1
+    n_EP_collectives: int = 2
     n_SP_collectives: int = 1
 
     # Overlap factor ρ in [0, 1]: Fraction of local time utilized to hide comms.
@@ -106,13 +105,18 @@ class TuningSpec:
     placement: MemoryPlacementSpec = field(default_factory=MemoryPlacementSpec)
 
     # ── SW overhead modeling (kernel_launch_overhead.md §5) ─────────────
-    # Per-round CPU dispatch budget on each device:
-    #     t_SW = L · k · τ_launch
-    # where  k = kernels_per_layer_compute
-    #          + kernels_per_collective_call · (n_TP_eff + n_EP_eff + n_SP_eff)
-    # and the n_*_eff terms are the per-layer collective counts that
-    # actually fire for the current shape (i.e. zero when the
-    # corresponding parallelism axis is 1).
+    # Per-microbatch dispatch budget on each PP stage (same units as t_stage):
+    #     t_SW = τ_launch · [
+    #              (L / PP)     · (k_compute + k_collective · (n_TP + n_SP))
+    #            + (L_moe / PP) · k_collective · n_EP
+    #            + k_pp_hop
+    #          ]
+    # where the n_* terms are the per-layer collective call counts above
+    # (zeroed for axes where the parallelism is 1, i.e. that collective
+    # never fires). EP launches only fire on the L_moe/PP MoE layers this
+    # stage owns (mirrors the L_moe/PP factor in §5.5's t_comm formula).
+    # The PP-hop term contributes k_pp_hop launches per microbatch transit
+    # and is inert when PP = 1.
     #
     # Production-realistic defaults: CUDA Graphs on (τ_launch ≈ 1.5 μs),
     # ~10 kernels per layer (after typical fusion), ~2 kernels per NCCL

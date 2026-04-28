@@ -8,7 +8,7 @@
   "ep_algorithm": "ring",
 
   "n_TP_collectives": 2,
-  "n_EP_collectives": 1,  
+  "n_EP_collectives": 2,
   "n_SP_collectives": 1,
   "overlap_factor": 0.0
 }

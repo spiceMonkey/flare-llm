@@ -5,7 +5,7 @@ from ..specs.model_spec import LlmModelSpec
 from ..specs.system_spec import SystemSpec
 from ..specs.partition_spec import PartitionSpec
 from ..specs.tuner_spec import TuningSpec
-from ..utils import TB_TO_FLOPS
+from ..utils import GB_TO_BYTES, TB_TO_FLOPS
 from .decode_model import _eta_TC_at_mb, effective_peak_flops_TF
 from .memory_placement import resolve_placement, t_mem_from_placement
 from .primitives import (
@@ -60,6 +60,7 @@ class PrefillLatencyResults:
     t_prefill_comm: float
     t_SW_per_stage: float           # per-stage CPU dispatch budget = (L/PP) · k · τ_launch
     t_pipeline_warmup: float        # (PP-1) * t_stage
+    t_LM_prefill: float             # LM head one-shot on stage PP-1 (prefill.md §3.4)
     t_prefill: float                # full hardware prefill latency
 
     # Batched prefill
@@ -316,31 +317,38 @@ def compute_prefill_latency(
     # default; edge stages do only one direction (off by one k_pp_hop·τ,
     # negligible at PP >> 1).
     n_TP_calls = tuner.n_TP_collectives if TP > 1 else 0
-    # See decode_model._t_SW_per_round for the n_EP × 2 expansion: cost-model
-    # convention treats one MoE A2A as a single "round-trip" with the 2× wrapped
-    # internally; the SW launch counter must expand to 2 actual NCCL API calls.
-    n_EP_calls = 2 * tuner.n_EP_collectives if EP > 1 else 0
+    # n_EP_collectives counts NCCL API calls directly (dispatch + combine
+    # = 2 per MoE layer); see decode_model._t_SW_per_microbatch. EP launches
+    # only fire on MoE layers — split the layer term into dense + MoE
+    # contributions, matching the L_moe/PP factor in §5.5's t_comm formula.
+    n_EP_calls = tuner.n_EP_collectives if EP > 1 else 0
     n_SP_calls = tuner.n_SP_collectives if SP > 1 else 0
-    k_per_layer = tuner.kernels_per_layer_compute + tuner.kernels_per_collective_call * (n_TP_calls + n_EP_calls + n_SP_calls)
+    if model.moe is not None:
+        L_moe_total = model.moe.n_moe_layers if model.moe.n_moe_layers else L
+    else:
+        L_moe_total = 0
+    k_dense = tuner.kernels_per_layer_compute + tuner.kernels_per_collective_call * (n_TP_calls + n_SP_calls)
+    k_moe_extra = tuner.kernels_per_collective_call * n_EP_calls
     layers_per_stage = L / PP if PP > 0 else L
+    moe_layers_per_stage = L_moe_total / PP if PP > 0 else L_moe_total
     k_pp_hop = tuner.kernels_per_pp_hop if PP > 1 else 0
     t_SW_per_stage = (
-        layers_per_stage * k_per_layer * tuner.kernel_launch_us * 1e-6
+        layers_per_stage * k_dense * tuner.kernel_launch_us * 1e-6
+        + moe_layers_per_stage * k_moe_extra * tuner.kernel_launch_us * 1e-6
         + k_pp_hop * tuner.kernel_launch_us * 1e-6
     )
 
     def _compose_SW(t_local_gpu: float) -> float:
         """Compose per-stage GPU work with SW dispatch via ρ_SW.
 
-        ρ_SW = 1 (default) → max(t_local_gpu, t_SW_per_stage) (full overlap).
-        ρ_SW = 0           → t_local_gpu + t_SW_per_stage     (no overlap).
+        Base + unhidden-overflow form (same pattern as compute/comm overlap
+        in decode.md §6.2). GPU work is the base; SW dispatch overlaps for
+        ρ_SW · t_local_gpu; any remainder serializes after.
+
+        ρ_SW = 1 → t_local_gpu + max(0, t_SW - t_local_gpu) = max(t_local_gpu, t_SW)
+        ρ_SW = 0 → t_local_gpu + t_SW_per_stage (no overlap)
         """
-        composed = max(
-            t_local_gpu,
-            rho_SW * t_local_gpu + (1.0 - rho_SW) * (t_local_gpu + t_SW_per_stage),
-            t_SW_per_stage,
-        )
-        return composed
+        return t_local_gpu + max(0.0, t_SW_per_stage - rho_SW * t_local_gpu)
 
     # Per-tier memory time helper. T_kv_write_device is per-request; the
     # placement layer treats it the same as decode's T_KV (sram.md §1.3
@@ -357,6 +365,26 @@ def compute_prefill_latency(
         return t_mem_from_placement(plc, B=max(1, B), tiers=tiers)
 
     # ── Single-request prefill (§3) ──────────────────────
+
+    # LM head one-shot on stage PP-1 (prefill.md §1.5 / §3.4):
+    #   F_LM = 2·B_pf·H·V/TP — only the last position per request
+    #   T_LM = HVb/TP (TP-sharded weights) + B_pf·V·b (logit rows)
+    # Added outside warmup since the LM head fires once at the end of the
+    # prefill traversal (after the pipeline is filled), not per stage.
+    # For chunked prefill it fires once after the last chunk (same one-shot).
+    BW_top = tiers[0].bandwidth_GBps * tiers[0].eta_beta * GB_TO_BYTES
+    V = model.vocab_size
+    b = model.bytes_per_param
+    B_pf_eff = max(1, B_pf)
+
+    def _t_LM(B_eff: int) -> float:
+        F_lm = 2.0 * B_eff * H * V / max(1, TP)
+        T_lm = (H * V * b) / max(1, TP) + B_eff * V * b
+        t_c = F_lm / R_gpu if R_gpu > 0 else 0.0
+        t_m = T_lm / BW_top if BW_top > 0 else 0.0
+        return max(t_c, t_m)
+
+    t_LM_prefill = _t_LM(B_pf_eff)
 
     t_prefill_compute = flops.F_prefill_device / R_gpu
     # η_TC at prefill payload (mb_eff = B_prefill · S / PP). With typical
@@ -380,6 +408,7 @@ def compute_prefill_latency(
         t_prefill_local
         + max(0.0, t_prefill_comm - rho * t_prefill_local)
         + t_pipeline_warmup
+        + t_LM_prefill
     )
 
     # ── Batched prefill (§4) ─────────────────────────────
@@ -406,6 +435,7 @@ def compute_prefill_latency(
             t_batched_local
             + max(0.0, comm_batched.t_prefill_comm - rho * t_batched_local)
             + t_pipeline_warmup
+            + t_LM_prefill
         )
     else:
         t_prefill_batched = t_prefill
@@ -465,7 +495,9 @@ def compute_prefill_latency(
             t_chunk_k = t_chunk_local_k + max(0.0, t_chunk_comm - rho * t_chunk_local_k)
             total_chunked += t_chunk_k
 
-        t_prefill_chunked = total_chunked
+        # LM head fires once after the last chunk (one projection per request,
+        # not per chunk), mirroring prefill.md §3.4.
+        t_prefill_chunked = total_chunked + t_LM_prefill
     else:
         n_chunks = 0
         t_prefill_chunked = t_prefill  # no chunking → same as unchunked
@@ -479,6 +511,7 @@ def compute_prefill_latency(
         t_prefill_comm=t_prefill_comm,
         t_SW_per_stage=t_SW_per_stage,
         t_pipeline_warmup=t_pipeline_warmup,
+        t_LM_prefill=t_LM_prefill,
         t_prefill=t_prefill,
         B_prefill=B_pf,
         t_prefill_batched=t_prefill_batched,

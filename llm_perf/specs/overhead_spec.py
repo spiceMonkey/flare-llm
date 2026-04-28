@@ -28,5 +28,4 @@ class OverheadSpec:
 
     # Per-step overhead (microseconds)
     t_graph_us: float = 0.0        # legacy CUDA graph replay constant; superseded by LatencyResults.t_SW
-    t_sample_us: float = 0.0       # token sampling
     t_detok_us: float = 0.0        # detokenization

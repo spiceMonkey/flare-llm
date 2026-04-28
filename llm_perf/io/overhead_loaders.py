@@ -19,7 +19,6 @@ def overhead_spec_from_json_dict(cfg: Dict[str, Any]) -> OverheadSpec:
         t_sched_us=float(cfg.get("t_sched_us", 0.0)),
         t_tok_us=float(cfg.get("t_tok_us", 0.0)),
         t_graph_us=float(cfg.get("t_graph_us", 0.0)),
-        t_sample_us=float(cfg.get("t_sample_us", 0.0)),
         t_detok_us=float(cfg.get("t_detok_us", 0.0)),
     )
 

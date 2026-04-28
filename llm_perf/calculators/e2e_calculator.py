@@ -77,7 +77,7 @@ class E2ECalculator:
         # derived term is zero (legacy path / SW disabled).
         t_sched = (oh.t_sched_us + oh.t_tok_us) * US_TO_S
         t_graph_legacy_us = oh.t_graph_us if dec.t_SW <= 0.0 else 0.0
-        t_framework_per_step = (t_graph_legacy_us + oh.t_sample_us + oh.t_detok_us) * US_TO_S
+        t_framework_per_step = (t_graph_legacy_us + oh.t_detok_us) * US_TO_S
 
         # Prefill latency (0 if no prefill results)
         if self.prefill is not None:

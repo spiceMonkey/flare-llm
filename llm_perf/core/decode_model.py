@@ -97,26 +97,37 @@ def _eta_TC_at_mb(curve: Optional[Dict[int, float]], mb: float) -> float:
     return 1.0  # unreachable; defensive
 
 
-def _t_SW_per_round(
+def _t_SW_per_microbatch(
     L: int,
+    L_moe: int,
     tuner: TuningSpec,
     partition: PartitionSpec,
 ) -> float:
-    """Per-round CPU dispatch budget on each device.
+    """Per-microbatch dispatch budget on a single PP stage.
 
-        t_SW = L · (k_compute + k_per_collective · n_collectives_per_layer) · τ_launch
-             + PP · k_pp_hop · τ_launch    (PP send/recv launches)
+        t_SW = (L/PP)     · (k_compute + k_coll · (n_TP + n_SP)) · τ_launch
+             + (L_moe/PP) · k_coll · n_EP · τ_launch
+             + k_pp_hop   · τ_launch    (P2P send/recv per microbatch transit)
 
-    `n_collectives_per_layer` counts only collectives that actually fire for
-    the current shape (zero when the corresponding parallelism axis is 1).
+    Same units as `t_stage` (per microbatch on this stage), so the two
+    compose directly via the SW overlap factor in the t_step,user formula
+    without a unit mismatch.
 
-    The PP-hop term comes from steady-state inflight batching: each stage
-    handles k_pp_hop P2P kernels per microbatch (default 2: 1 recv +
-    1 send) × PP microbatches per round → PP · k_pp_hop launches per
-    stage per round. Inert when PP=1 (no inter-stage hops). Edge stages
-    do only one direction (k_pp_hop / 2 effectively); the formula uses
-    the middle-stage value for simplicity, off by ≈ PP · τ on edges,
-    which is negligible at PP >> 1.
+    Layer breakdown:
+      - All L/PP layers on this stage fire compute + TP + SP launches.
+      - Only the L_moe/PP MoE layers on this stage fire EP launches
+        (dense layers don't trigger MoE A2A). Mirrors the per-layer
+        accounting in decode.md §5.5's t_comm formula.
+
+    PP-hop term: one microbatch transit triggers k_pp_hop P2P kernels
+    on a middle stage (default 2: 1 recv + 1 send). Edge stages do only
+    one direction; the formula uses the middle-stage value (off by
+    half a launch on edges, negligible at PP > 1). Inert when PP=1
+    (no inter-stage hops).
+
+    `n_collectives_per_layer` counts only collectives that actually
+    fire for the current shape (zero when the corresponding parallelism
+    axis is 1).
 
     Returns 0 when kernel_launch_us is 0 (legacy behavior).
     """
@@ -126,18 +137,20 @@ def _t_SW_per_round(
     k_c = tuner.kernels_per_layer_compute
     k_coll = tuner.kernels_per_collective_call
     n_TP_calls = tuner.n_TP_collectives if partition.TP > 1 else 0
-    # n_EP_collectives is "1 MoE A2A round-trip per layer" in cost-model
-    # convention (dispatch.py wraps the round-trip's 2× factor inside
-    # _cost("moe_a2a", ...)). The SW launch counter must expand this to
-    # 2 actual NCCL API calls (dispatch + combine) because each call is
-    # a separate kernel-launch event with its own dispatch τ.
-    n_EP_calls = 2 * tuner.n_EP_collectives if max(1, partition.EP) > 1 else 0
+    # n_EP_collectives counts NCCL API calls directly (dispatch + combine
+    # = 2 per MoE layer); each costs one single-direction A2A in dispatch.py.
+    n_EP_calls = tuner.n_EP_collectives if max(1, partition.EP) > 1 else 0
     n_SP_calls = tuner.n_SP_collectives if partition.SP > 1 else 0
-    k = k_c + k_coll * (n_TP_calls + n_EP_calls + n_SP_calls)
-    t_layer = L * k * tau_us * 1e-6
-    pp_microbatches = partition.PP if partition.PP > 1 else 0
-    t_pp = pp_microbatches * tuner.kernels_per_pp_hop * tau_us * 1e-6
-    return t_layer + t_pp
+    PP = max(1, partition.PP)
+    layers_per_stage = L / PP
+    moe_layers_per_stage = L_moe / PP
+    k_dense = k_c + k_coll * (n_TP_calls + n_SP_calls)
+    k_moe_extra = k_coll * n_EP_calls
+    t_layer = layers_per_stage * k_dense * tau_us * 1e-6
+    t_moe = moe_layers_per_stage * k_moe_extra * tau_us * 1e-6
+    k_pp_hop = tuner.kernels_per_pp_hop if partition.PP > 1 else 0
+    t_pp = k_pp_hop * tau_us * 1e-6
+    return t_layer + t_moe + t_pp
 
 
 # ────────────────────────────────────────────────────────────
@@ -182,6 +195,7 @@ class LatencyResults:
     t_comm: float
     t_stage: float            # GPU-only step time (compute + comm + overlap)
     t_SW: float               # per-round CPU dispatch budget = L · k · τ_launch
+    t_LM: float               # LM head one-shot latency on stage PP-1 (decode.md §6.2)
     t_step_user: float
     pp_bubble_factor: float
     TPS_single: float
@@ -449,23 +463,47 @@ def compute_latency(
     rho = tuner.overlap_factor
     t_stage = t_local + max(0.0, t_comm - rho * t_local)
 
-    # Per-round CPU dispatch budget (kernel_launch_overhead.md §5).
+    # Per-microbatch per-stage CPU dispatch budget (kernel_launch_overhead.md §5).
     # Composed with t_stage via ρ_SW: full overlap (default) ⇒ max(...);
-    # zero overlap ⇒ t_stage + t_SW.
-    t_SW = _t_SW_per_round(model.L, tuner, partition)
+    # zero overlap ⇒ t_stage + t_SW. EP launches only fire on MoE layers
+    # (mirrors the L_moe/PP factor in §5.5's t_comm formula).
+    if model.moe is not None:
+        L_moe_total = model.moe.n_moe_layers if model.moe.n_moe_layers else model.L
+    else:
+        L_moe_total = 0
+    t_SW = _t_SW_per_microbatch(model.L, L_moe_total, tuner, partition)
     rho_SW = tuner.sw_overlap_factor
-    t_stage_with_SW = max(t_stage, rho_SW * t_stage + (1.0 - rho_SW) * (t_stage + t_SW))
-    # Simpler reading at the two boundary points:
-    #   ρ_SW = 1 → t_stage_with_SW = t_stage  (SW fully hidden by GPU work)
-    #   ρ_SW = 0 → t_stage_with_SW = max(t_stage, t_stage + t_SW) = t_stage + t_SW
-    # For the strict "max" interpretation when SW is the bottleneck, callers
-    # who want max(t_stage, t_SW) instead of additive should set ρ_SW such
-    # that the formula above matches; the additive form is the safer upper
-    # bound and is what we ship as default behavior away from full overlap.
-    t_stage_with_SW = max(t_stage_with_SW, t_SW)
+    # Base + unhidden-overflow form (same pattern as compute/comm overlap in
+    # decode.md §6.2). GPU work is the base; SW dispatch overlaps for
+    # ρ_SW · t_stage; any remainder serializes after.
+    #   ρ_SW = 1 → t_stage + max(0, t_SW - t_stage) = max(t_stage, t_SW)
+    #             (SW fully hidden when t_stage >= t_SW; SW-bound floor otherwise)
+    #   ρ_SW = 0 → t_stage + t_SW (no overlap, costs add)
+    t_stage_with_SW = t_stage + max(0.0, t_SW - rho_SW * t_stage)
 
     pp_bubble_factor = max(1.0, PP / max(1, B))
-    t_step_user = t_stage_with_SW * pp_bubble_factor
+
+    # Top-tier memory bandwidth (also used by B* below). Multi-tier devices use
+    # tier 0's effective bandwidth as a fast-tier proxy.
+    BW_top = tiers[0].bandwidth_GBps * tiers[0].eta_beta * GB_TO_BYTES
+
+    # LM head one-shot on stage PP-1 (decode.md §6.2 / §7.2):
+    #   F_LM,step = 2·B·H·V / TP
+    #   T_LM,step = HVb/TP (weights, sharded by TP) + B·V·b (logits output, replicated)
+    #   t_LM = max(F_LM/R_gpu, T_LM/BW_top)
+    # Added outside γ_pp because the LM head fires once per step regardless of
+    # bubble depth (it is not pipelined across PP stages).
+    V = model.vocab_size
+    TP = max(1, partition.TP)
+    b = model.bytes_per_param
+    B_eff = max(1, B)
+    F_lm = 2.0 * B_eff * model.H * V / TP
+    T_lm = (model.H * V * b) / TP + B_eff * V * b
+    t_lm_compute = F_lm / R_gpu if R_gpu > 0 else 0.0
+    t_lm_mem = T_lm / BW_top if BW_top > 0 else 0.0
+    t_LM = max(t_lm_compute, t_lm_mem)
+
+    t_step_user = t_stage_with_SW * pp_bubble_factor + t_LM
     TPOT = t_step_user
 
     TPS_single = B / t_step_user if t_step_user > 0 else 0.0
@@ -475,11 +513,9 @@ def compute_latency(
     TTPS = DP * TPS_single
 
     # B* crossover: batch size where the system transitions from
-    # memory-bound to compute-bound. For multi-tier devices this uses tier 0's
-    # effective bandwidth as a representative fast-tier proxy (sram.md §2.2
+    # memory-bound to compute-bound. For multi-tier devices, sram.md §2.2
     # gives the exact two-tier form when weights and KV live on separate
-    # tiers; the single-tier formula here matches that special case W=K=tier-0).
-    BW_top = tiers[0].bandwidth_GBps * tiers[0].eta_beta * GB_TO_BYTES
+    # tiers; the single-tier formula here matches that special case W=K=tier-0.
     denom = flops.F_token_device * BW_top - traffic.T_kv * R_gpu
     B_star = (traffic.T_theta * R_gpu / denom) if denom > 0 else float("inf")
 
@@ -492,6 +528,7 @@ def compute_latency(
         t_comm=t_comm,
         t_stage=t_stage,
         t_SW=t_SW,
+        t_LM=t_LM,
         t_step_user=t_step_user,
         pp_bubble_factor=pp_bubble_factor,
         TPS_single=TPS_single,

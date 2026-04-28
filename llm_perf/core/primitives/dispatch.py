@@ -259,10 +259,10 @@ def enumerate_options(
         options.append(("p2p", _crossbar_cost(op, M, G, alpha_s, bw_Bps, "ring")))
         return options
 
-    # AR / AG: multi-tier crossbar routes through hierarchical (collectives.md
-    # §3.3 / §4.3); single-tier crossbar (and the mixed-chain fallback) use
-    # the flat path. The `ring`/`tree` names map to the outer-phase choice
-    # on multi-tier; inner is always ring.
+    # AR / AG: multi-tier crossbar routes through hierarchical
+    # (collectives/03_hierarchical_topologies.md §2); single-tier crossbar
+    # (and the mixed-chain fallback) use the flat path. The `ring`/`tree`
+    # names map to the outer-phase choice on multi-tier; inner is always ring.
     use_hierarchical = (
         len(crossed) > 1
         and classes == {"crossbar"}
@@ -376,12 +376,12 @@ def _crossbar_cost(
             return tree_all_reduce(M, G, alpha_s, bw_Bps, pipelined=True)
         raise ValueError(f"Unsupported algorithm for all_reduce: {algorithm!r}")
     if op == "moe_a2a":
-        # MoE Dispatch+Combine round-trip: caller's M is the one-way per-rank
-        # payload, so we double the underlying single-direction A2A cost. The
-        # 2× factor lives here (not inside pairwise_a2a) because it is a
-        # property of the dispatcher's MoE contract, not of the primitive.
+        # Single-direction A2A cost. The MoE Dispatch+Combine round-trip is
+        # accounted for by the caller via n_EP=2 collectives per MoE layer
+        # (one dispatch + one combine), each costing one t_EP. See
+        # documentation/modeling/decode.md §5.2 + §5.5.
         if algorithm == "ring":
-            return 2 * pairwise_a2a(M, G, alpha_s, bw_Bps)
+            return pairwise_a2a(M, G, alpha_s, bw_Bps)
         raise ValueError(f"Unsupported algorithm for moe_a2a: {algorithm!r}")
     raise AssertionError(f"unreachable op={op!r}")  # caller validated
 
@@ -512,15 +512,16 @@ def _hierarchical_a2a_cost(
     pattern is pairwise direct-send with each destination paying its own path
     cost; the total is a destination-weighted sum:
 
-        t = 2 · [ (G_inner − 1) · (α_inner + (M/G)/BW_inner)
-              +   (G − G_inner) · (α_outer + (M/G)/BW_outer) ]
+        t = (G_inner − 1) · (α_inner + (M/G)/BW_inner)
+          + (G − G_inner) · (α_outer + (M/G)/BW_outer)
 
     Pod boundary = first crossed tier's reach (G_inner). Same-leaf and cross-
     leaf cross-pod destinations are collapsed into a single "outer" class —
     explicit pod_size override is a future enhancement when 3-tier hierarchies
-    (intra-pod / same-leaf / cross-leaf) need to be modeled. The factor of 2
-    bakes in the Dispatch + Combine round-trip (matches `pairwise_a2a` and
-    `inc_a2a` conventions).
+    (intra-pod / same-leaf / cross-leaf) need to be modeled. Returns the cost
+    of one single-direction A2A; the MoE Dispatch+Combine round-trip is
+    accounted for by the caller as n_EP=2 collectives per MoE layer (matches
+    `pairwise_a2a` and `inc_a2a` conventions).
     """
     inner_tier = crossed[0]
     outer_tiers = crossed[1:]
@@ -557,7 +558,7 @@ def _hierarchical_a2a_cost(
         if n_outer > 0
         else 0.0
     )
-    return 2 * (t_intra + t_outer)  # Dispatch + Combine round-trip
+    return t_intra + t_outer  # single-direction A2A; caller scales by n_EP=2
 
 
 # ────────────────────────────────────────────────────────────
@@ -571,8 +572,9 @@ def _inc_crossbar_cost(
 
     α aggregation: sum `inc_alpha_us` (or `alpha_us` when the override is 0)
     across every crossed tier, scaled by each tier's `eta_alpha`. This maps
-    to the k-tier scale-out depth: one α contribution per tier level, with
-    the round-trip factor applied inside the primitive.
+    to the k-tier scale-out depth: one α contribution per tier level. For
+    `moe_a2a` this returns one single-direction cost; the caller scales by
+    n_EP=2 (Dispatch + Combine).
 
     BW: narrowest link among crossed tiers, scaled by each tier's `eta_beta`.
     Matches the crossbar α/BW reduction and lets contention modeling
@@ -604,9 +606,9 @@ def _inc_crossbar_cost(
     if op == "all_gather":
         return inc_all_gather(M, G, alpha_s, bw_Bps)
     if op == "moe_a2a":
-        # MoE Dispatch+Combine: 2× wrap, same as the SW crossbar / torus
-        # paths. Keeps the dispatcher's MoE contract topology-uniform.
-        return 2 * inc_a2a(M, G, alpha_s, bw_Bps)
+        # Single-direction A2A cost; caller multiplies by n_EP=2 (dispatch
+        # + combine) at the per-layer accumulator level.
+        return inc_a2a(M, G, alpha_s, bw_Bps)
     raise AssertionError(f"INC path reached with unsupported op={op!r}")
 
 
@@ -658,11 +660,10 @@ def _torus_cost(op: str, M: float, G: int, crossed: List[TierSpec]) -> float:
     if op == "all_gather":
         return torus_all_gather(M, subdims, alpha_s, bw_Bps)
     if op == "moe_a2a":
-        # MoE Dispatch+Combine: same 2× wrap as the crossbar path so the
-        # dispatcher's MoE contract is topology-uniform (caller passes the
-        # one-way per-rank payload regardless of fabric type).
-        return 2 * torus_a2a(M, subdims, alpha_s, bw_Bps,
-                             wraparound=wraparound)
+        # Single-direction A2A cost; caller multiplies by n_EP=2 (dispatch
+        # + combine) at the per-layer accumulator level.
+        return torus_a2a(M, subdims, alpha_s, bw_Bps,
+                         wraparound=wraparound)
     raise AssertionError(f"unreachable op={op!r}")  # caller validated
 
 
