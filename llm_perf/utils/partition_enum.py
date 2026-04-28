@@ -6,8 +6,8 @@ re-derive them inline.
 
 Constraints applied (all must hold):
   - pp * tp * ep * sp <= num_devices
-  - pp <= pp_max  (default 16; matches production deployment limits where
-    deeper PP creates intractable bubble / TTFT trade-offs)
+  - pp <= pp_max  (default 32; the typical production cap where deeper
+    PP starts running into bubble / TTFT / microbatch-floor headwinds)
   - tp <= n_kv  (each TP rank must hold ≥ 1 KV head)
   - tp <= n_experts and ep <= n_experts  (MoE only — sharding cannot
     exceed expert count)
@@ -25,7 +25,7 @@ from ..specs.partition_spec import PartitionSpec
 from ..specs.system_spec import SystemSpec
 
 
-_DEFAULT_PP_LADDER = [1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 20, 24, 30, 40, 60]
+_DEFAULT_PP_LADDER = [1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 16, 20, 24, 30, 32, 40, 60]
 _DEFAULT_SP_LADDER = [1, 2, 4, 8, 16, 32, 64]
 
 
@@ -76,7 +76,7 @@ def enumerate_partitions(
     system: SystemSpec,
     *,
     num_devices: Optional[int] = None,
-    pp_max: int = 16,
+    pp_max: int = 32,
     pp_choices: Optional[List[int]] = None,
     sp_choices: Optional[List[int]] = None,
     tp_max_override: Optional[int] = None,
@@ -94,8 +94,9 @@ def enumerate_partitions(
         Total devices available. Defaults to `system.num_devices`. Override
         when sweeping cluster size at fixed system spec.
     pp_max : int
-        Maximum PP. Default 16 (production limit; deeper PP rarely deploys
-        because bubble / TTFT costs grow faster than t_stage shrinks).
+        Maximum PP. Default 32 (typical production cap — deeper PP starts
+        running into bubble / TTFT / microbatch-floor headwinds even with
+        inflight batching, but 32 leaves room to explore the cliff).
     pp_choices, sp_choices : list of int, optional
         Override the enumeration ladders. Defaults are the standard ladders
         used across the notebook suite.
@@ -161,7 +162,7 @@ def enumerate_partitions(
 def describe_constraints(
     model: LlmModelSpec,
     system: SystemSpec,
-    pp_max: int = 16,
+    pp_max: int = 32,
     *,
     scale_up_tier_index: int = 0,
 ) -> str:
