@@ -6,12 +6,17 @@
     "name": "H200-SXM",
     "hbm_capacity_GB": 141.0,
     "hbm_bandwidth_GBps": 4800.0,
-    "peak_flops_TF": 1979.0
+    "peak_flops_TF": 989.0
   },
   "fabrics": {
     "nvlink4": {
       "tiers": [
-        {"name": "nvswitch", "ports": 8, "bw_per_port_GBps": 450.0, "alpha_us": 1.0}
+        {
+          "name": "nvswitch",
+          "ports": 8,
+          "bw_per_port_GBps": 450.0,
+          "alpha_us": 1.0
+        }
       ]
     }
   },
@@ -27,6 +32,5 @@
     "eta": 1.0,
     "delta_alpha_us": 0.0
   },
-
-  "_comment": "NVIDIA HGX H200: 141 GB HBM3E @ 4.8 TB/s, FP8 dense 1979 TFLOPS/GPU, NVLink4 900 GB/s bidir (450 GB/s single-direction). 8-GPU NVLink domain via 4 NVSwitch chips. B_agg = 8 × 450 GB/s = 3.6 TB/s single-dir system aggregate. Cross-node would be InfiniBand."
+  "_comment": "NVIDIA HGX H200: 141 GB HBM3E @ 4.8 TB/s, FP16 dense 989 TFLOPS/GPU per framework convention (peak_flops_TF stores FP16 dense; FP8 = 1979 by linear byte scaling \u2014 same Hopper compute as H100, just bigger HBM), NVLink4 900 GB/s bidir (450 GB/s single-direction). 8-GPU NVLink domain via 4 NVSwitch chips. B_agg = 8 \u00d7 450 GB/s = 3.6 TB/s single-dir system aggregate. Cross-node would be InfiniBand."
 }

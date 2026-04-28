@@ -6,12 +6,17 @@
     "name": "GB300-NVL72",
     "hbm_capacity_GB": 288.0,
     "hbm_bandwidth_GBps": 12000.0,
-    "peak_flops_TF": 5000.0
+    "peak_flops_TF": 2500.0
   },
   "fabrics": {
     "nvlink5": {
       "tiers": [
-        {"name": "intra-rack-nvswitch", "ports": 72, "bw_per_port_GBps": 900.0, "alpha_us": 0.5}
+        {
+          "name": "intra-rack-nvswitch",
+          "ports": 72,
+          "bw_per_port_GBps": 900.0,
+          "alpha_us": 0.5
+        }
       ]
     }
   },
@@ -27,6 +32,5 @@
     "eta": 1.0,
     "delta_alpha_us": 0.0
   },
-
-  "_comment": "GB300 NVL72: Blackwell Ultra, 288 GB HBM3E @ 12 TB/s, FP8 dense 5000 TFLOPS/GPU, NVLink5 1.8 TB/s bidir (900 GB/s single-direction). All 72 GPUs in single NVLink domain via 9 NVSwitch Gen3 chips (64.8 TB/s single-dir system aggregate)."
+  "_comment": "GB300 NVL72: Blackwell Ultra, 288 GB HBM3E @ 12 TB/s, FP16 dense 2500 TFLOPS/GPU per framework convention (peak_flops_TF = FP16 dense per chip; FP8 = 5000, FP4 = 10000 by linear byte scaling \u2014 these are the source-spec aggregate numbers though Blackwell Ultra published FP4 dense is closer to 15 PF, so the FP16-baseline form here understates B300 FP4 by ~33%; conservative), NVLink5 1.8 TB/s bidir (900 GB/s single-direction). All 72 GPUs in single NVLink domain via 9 NVSwitch Gen3 chips (64.8 TB/s single-dir system aggregate)."
 }

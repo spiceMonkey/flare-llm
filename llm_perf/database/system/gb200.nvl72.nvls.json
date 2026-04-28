@@ -6,13 +6,19 @@
     "name": "GB200-NVL72",
     "hbm_capacity_GB": 192.0,
     "hbm_bandwidth_GBps": 8000.0,
-    "peak_flops_TF": 9000.0
+    "peak_flops_TF": 2250.0
   },
   "fabrics": {
     "nvlink5": {
       "tiers": [
-        {"name": "intra-rack-nvswitch", "ports": 72, "bw_per_port_GBps": 900.0, "alpha_us": 0.5,
-         "inc": "nvls", "inc_alpha_us": 0.2}
+        {
+          "name": "intra-rack-nvswitch",
+          "ports": 72,
+          "bw_per_port_GBps": 900.0,
+          "alpha_us": 0.5,
+          "inc": "nvls",
+          "inc_alpha_us": 0.2
+        }
       ]
     }
   },
@@ -22,5 +28,5 @@
     "SP": "nvlink5",
     "PP": "nvlink5"
   },
-  "_comment": "NVL72 + NVLink SHARP (NVLS). Identical to gb200.72gpu but tier declares inc='nvls' with inc_alpha_us=0.2 us switch cut-through (software endpoint alpha_us=0.5 us retained for software fallback). Dispatcher routes AR/AG to INC primitives when tuner.inc_enabled (default True): single-switch star → n_alpha=2 (1 us vs ring's 2*71=142 us) + BW_eff doubled for AR. A2A stays on the crossbar ring path — NVSwitch Gen4 has no hardware A2A primitive. See documentation/explaining/collectives/03_in_network_collectives.md §2.1."
+  "_comment": "NVL72 + NVLink SHARP (NVLS). Identical to gb200.72gpu but tier declares inc='nvls' with inc_alpha_us=0.2 us switch cut-through (software endpoint alpha_us=0.5 us retained for software fallback). Dispatcher routes AR/AG to INC primitives when tuner.inc_enabled (default True): single-switch star \u2192 n_alpha=2 (1 us vs ring's 2*71=142 us) + BW_eff doubled for AR. A2A stays on the crossbar ring path \u2014 NVSwitch Gen4 has no hardware A2A primitive. See documentation/explaining/collectives/03_in_network_collectives.md \u00a72.1."
 }

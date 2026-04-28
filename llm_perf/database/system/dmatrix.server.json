@@ -8,7 +8,7 @@
     "hbm_bandwidth_GBps": 51.2,
     "sram_capacity_MB": 256.0,
     "sram_bandwidth_TBps": 18.75,
-    "peak_flops_TF": 1200.0
+    "peak_flops_TF": 150.0
   },
   "fabrics": {
     "package_d2d": {
@@ -16,7 +16,9 @@
         {
           "name": "package-d2d-2x2-mesh",
           "topology": "mesh",
-          "dims": [4],
+          "dims": [
+            4
+          ],
           "full": true,
           "bw_per_port_GBps": 128.0,
           "alpha_us": 0.115
@@ -25,24 +27,52 @@
     },
     "dmx_bridge": {
       "tiers": [
-        {"name": "dmx-bridge-2-cards", "ports": 4,
-         "bw_per_port_GBps": 64.0, "alpha_us": 0.4}
+        {
+          "name": "dmx-bridge-2-cards",
+          "ports": 4,
+          "bw_per_port_GBps": 64.0,
+          "alpha_us": 0.4
+        }
       ]
     },
     "pcie_server": {
       "tiers": [
-        {"name": "pcie5-intra-hemisphere", "ports": 2,
-         "bw_per_port_GBps": 64.0, "alpha_us": 0.6},
-        {"name": "pcie5-inter-hemisphere", "ports": 2,
-         "bw_per_port_GBps": 64.0, "alpha_us": 0.6}
+        {
+          "name": "pcie5-intra-hemisphere",
+          "ports": 2,
+          "bw_per_port_GBps": 64.0,
+          "alpha_us": 0.6
+        },
+        {
+          "name": "pcie5-inter-hemisphere",
+          "ports": 2,
+          "bw_per_port_GBps": 64.0,
+          "alpha_us": 0.6
+        }
       ]
     }
   },
   "collective_fabrics": {
-    "TP": ["package_d2d", "dmx_bridge", "pcie_server"],
-    "EP": ["package_d2d", "dmx_bridge", "pcie_server"],
-    "SP": ["package_d2d", "dmx_bridge", "pcie_server"],
-    "PP": ["package_d2d", "dmx_bridge", "pcie_server"]
+    "TP": [
+      "package_d2d",
+      "dmx_bridge",
+      "pcie_server"
+    ],
+    "EP": [
+      "package_d2d",
+      "dmx_bridge",
+      "pcie_server"
+    ],
+    "SP": [
+      "package_d2d",
+      "dmx_bridge",
+      "pcie_server"
+    ],
+    "PP": [
+      "package_d2d",
+      "dmx_bridge",
+      "pcie_server"
+    ]
   },
-  "_comment": "d-Matrix single-server reference (8 cards × 8 chiplets = 64 chiplets), modeled at chiplet granularity. Identical per-chiplet device spec as `dmatrix.squadrack`. peak_flops_TF=1200 stores the per-chiplet MXINT4 dense peak (= 9600 TFLOPS / 8 chiplets per card; the higher-throughput precision matching GB200's `peak_flops_TF=9000` FP4 convention). MXINT8 dense peak is half that (300 TF/chiplet, = 2400 TF/card) — a model running at INT8 against this spec is over-stated by 4× the same way an INT8 model on GB200 is over-stated by 4× against the FP4 peak; the framework does not auto-derate by `bytes_per_param`. Fabric chain decomposes the in-server hierarchy into 4 tiers (cumulative reach 4 → 16 → 32 → 64): (1) `package_d2d` — 2×2 full mesh of 4 chiplets within a single Corsair package via D2D links, 128 GB/s, 0.115 μs (whitepaper Fig 6); (2) `dmx_bridge` — 4 packages joined across 2 cards via the DMX Bridge, 64 GB/s, 0.4 μs (whitepaper Fig 9); (3a) `pcie5-intra-hemisphere` — 2 sets of 2-card pairs (= 32 chiplets) within one PCIe-switch hemisphere, 64 GB/s, 0.6 μs; (3b) `pcie5-inter-hemisphere` — 2 hemispheres joined across the host-CPU PCIe switches (= 64 chiplets full server), 64 GB/s, 0.6 μs. Both PCIe hops use the same Gen5 x16 lanes; we model them as a single 2-tier `pcie_server` fabric with reach 2 × 2 = 4. Performance Mode tuners (placement=auto/auto) put weights+KV in SRAM when capacity allows; Capacity Mode pins weights to LPDDR5. Use this system for workloads that fit in a single 8-card server (e.g., Llama-3-8B per sram.md §3.2). For full-rack scale, use `dmatrix.squadrack` which adds the JetStream/Ethernet tier across servers."
+  "_comment": "d-Matrix single-server reference (8 cards \u00d7 8 chiplets = 64 chiplets), modeled at chiplet granularity. Identical per-chiplet device spec as `dmatrix.squadrack`. peak_flops_TF=150 stores the per-chiplet **FP16-equivalent** dense peak (= MXINT8/2 = 300/2; framework convention is FP16 dense per chip with linear byte-ratio scaling for lower precisions). Linear scaling gives MXINT8 = 300 TF/chiplet (= 2400 TF/card, matches whitepaper) and MXINT4 = 600 TF/chiplet by simple byte ratio. **Caveat**: published d-Matrix MXINT4 is 1200 TF/chiplet (4\u00d7 MXINT8, not 2\u00d7) due to block-sparse acceleration in the INT4 path; the framework's linear-byte-scaling convention under-states d-Matrix INT4 / FP4 throughput by 2\u00d7 as a known limitation. Fabric chain decomposes the in-server hierarchy into 4 tiers (cumulative reach 4 \u2192 16 \u2192 32 \u2192 64): (1) `package_d2d` \u2014 2\u00d72 full mesh of 4 chiplets within a single Corsair package via D2D links, 128 GB/s, 0.115 \u03bcs (whitepaper Fig 6); (2) `dmx_bridge` \u2014 4 packages joined across 2 cards via the DMX Bridge, 64 GB/s, 0.4 \u03bcs (whitepaper Fig 9); (3a) `pcie5-intra-hemisphere` \u2014 2 sets of 2-card pairs (= 32 chiplets) within one PCIe-switch hemisphere, 64 GB/s, 0.6 \u03bcs; (3b) `pcie5-inter-hemisphere` \u2014 2 hemispheres joined across the host-CPU PCIe switches (= 64 chiplets full server), 64 GB/s, 0.6 \u03bcs. Both PCIe hops use the same Gen5 x16 lanes; we model them as a single 2-tier `pcie_server` fabric with reach 2 \u00d7 2 = 4. Performance Mode tuners (placement=auto/auto) put weights+KV in SRAM when capacity allows; Capacity Mode pins weights to LPDDR5. Use this system for workloads that fit in a single 8-card server (e.g., Llama-3-8B per sram.md \u00a73.2). For full-rack scale, use `dmatrix.squadrack` which adds the JetStream/Ethernet tier across servers."
 }

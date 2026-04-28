@@ -39,6 +39,40 @@ from .primitives import (
 
 
 # ────────────────────────────────────────────────────────────
+# Effective compute peak under linear byte-ratio scaling
+# ────────────────────────────────────────────────────────────
+
+# Reference precision: FP16 (2 bytes per parameter). System specs store
+# peak_flops_TF as FP16 dense per chip; the framework derives precision-
+# specific peaks via linear byte scaling.
+_FP16_BYTES = 2.0
+
+
+def effective_peak_flops_TF(system: SystemSpec, bytes_per_param: float) -> float:
+    """Precision-aware compute peak (TFLOPS) per device.
+
+    Uniform convention across all system specs: ``peak_flops_TF`` stores
+    the **FP16 dense per-chip peak**. Lower precisions get a linear byte-
+    ratio boost: ``peak(p) = peak_FP16 * (2 / bytes_per_param)``.
+
+    Examples on GB200 NVL72 (peak_FP16 = 2250 TF/GPU):
+      - FP16 (b=2.0): 2250 TF
+      - FP8  (b=1.0): 4500 TF
+      - FP4  (b=0.5): 9000 TF
+
+    **Known limitation**: d-Matrix MXINT4 throughput is 4× MXINT8 rather
+    than the 2× linear byte scaling predicts (block-sparse acceleration in
+    the INT4 path). With FP16 baseline = 150 TF/chiplet, the framework
+    computes 600 TF/chiplet for MXINT4, but the published peak is
+    1200 TF/chiplet — a 2× under-estimate on d-Matrix INT4 / FP4 only.
+    Linear byte scaling holds for every other modeled architecture
+    (NVIDIA Hopper / Blackwell, TPU v5p / v6e, Groq LPU).
+    """
+    bpp = max(1e-9, bytes_per_param)
+    return system.device.peak_flops_TF * (_FP16_BYTES / bpp)
+
+
+# ────────────────────────────────────────────────────────────
 # SW-overhead helpers (kernel_launch_overhead.md §5)
 # ────────────────────────────────────────────────────────────
 
@@ -378,7 +412,11 @@ def compute_latency(
     B = tuner.B_decode
     PP = partition.PP
 
-    R_gpu = system.device.peak_flops_TF * TB_TO_FLOPS
+    # Precision-aware compute peak: peak_flops_TF in the system spec is
+    # FP16 dense per chip; linear byte scaling lifts to the model's
+    # working precision (FP8 / FP4 / INT8 / INT4). See
+    # effective_peak_flops_TF docstring for the convention.
+    R_gpu = effective_peak_flops_TF(system, model.bytes_per_param) * TB_TO_FLOPS
 
     # Step-level roofline: B tokens computed, weights loaded once.
     # `t_mem` opens the legacy single-bandwidth term over device memory tiers

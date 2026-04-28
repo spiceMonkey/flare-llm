@@ -6,27 +6,51 @@
     "name": "GB200-NVL576-hierarchical-INC",
     "hbm_capacity_GB": 192.0,
     "hbm_bandwidth_GBps": 8000.0,
-    "peak_flops_TF": 9000.0
+    "peak_flops_TF": 2250.0
   },
   "fabrics": {
     "nvlink5": {
       "tiers": [
-        {"name": "intra-rack-nvswitch", "ports": 72, "bw_per_port_GBps": 900.0, "alpha_us": 0.5,
-         "inc": "nvls", "inc_alpha_us": 0.2}
+        {
+          "name": "intra-rack-nvswitch",
+          "ports": 72,
+          "bw_per_port_GBps": 900.0,
+          "alpha_us": 0.5,
+          "inc": "nvls",
+          "inc_alpha_us": 0.2
+        }
       ]
     },
     "ib": {
       "tiers": [
-        {"name": "inter-rack-quantum-ib", "ports": 8, "bw_per_port_GBps": 400.0, "alpha_us": 2.5,
-         "inc": "sharp", "inc_alpha_us": 0.4}
+        {
+          "name": "inter-rack-quantum-ib",
+          "ports": 8,
+          "bw_per_port_GBps": 400.0,
+          "alpha_us": 2.5,
+          "inc": "sharp",
+          "inc_alpha_us": 0.4
+        }
       ]
     }
   },
   "collective_fabrics": {
-    "TP": ["nvlink5", "ib"],
-    "EP": ["nvlink5", "ib"],
-    "SP": ["nvlink5", "ib"],
-    "PP": ["nvlink5", "ib"]
+    "TP": [
+      "nvlink5",
+      "ib"
+    ],
+    "EP": [
+      "nvlink5",
+      "ib"
+    ],
+    "SP": [
+      "nvlink5",
+      "ib"
+    ],
+    "PP": [
+      "nvlink5",
+      "ib"
+    ]
   },
-  "_comment": "NVL576 with NVLS + Quantum SHARP. Intra-rack tier = NVLS (0.2 us cut-through), inter-rack tier = IB SHARP (0.4 us cut-through). Collectives spanning >72 ranks hit the multi-tier INC aggregation tree: n_alpha = 2 (0.2 + 0.4) = 1.2 us versus the software path's 2*575 = 1150 us (ring). Set tuner.inc_enabled=False to A/B against software fallback. A2A stays software — neither NVSwitch Gen4 nor SHARP accelerates it structurally."
+  "_comment": "NVL576 with NVLS + Quantum SHARP. Intra-rack tier = NVLS (0.2 us cut-through), inter-rack tier = IB SHARP (0.4 us cut-through). Collectives spanning >72 ranks hit the multi-tier INC aggregation tree: n_alpha = 2 (0.2 + 0.4) = 1.2 us versus the software path's 2*575 = 1150 us (ring). Set tuner.inc_enabled=False to A/B against software fallback. A2A stays software \u2014 neither NVSwitch Gen4 nor SHARP accelerates it structurally."
 }

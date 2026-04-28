@@ -6,7 +6,7 @@ from ..specs.system_spec import SystemSpec
 from ..specs.partition_spec import PartitionSpec
 from ..specs.tuner_spec import TuningSpec
 from ..utils import TB_TO_FLOPS
-from .decode_model import _eta_TC_at_mb
+from .decode_model import _eta_TC_at_mb, effective_peak_flops_TF
 from .memory_placement import resolve_placement, t_mem_from_placement
 from .primitives import (
     dense_weight_bytes,
@@ -284,7 +284,10 @@ def compute_prefill_latency(
 ) -> PrefillLatencyResults:
     """Hardware prefill latency: single-request, batched, and chunked."""
 
-    R_gpu = system.device.peak_flops_TF * TB_TO_FLOPS
+    # Precision-aware compute peak (see decode_model.effective_peak_flops_TF):
+    # peak_flops_TF in system spec is FP16 dense per chip; the working
+    # precision peak scales linearly with bytes_per_param.
+    R_gpu = effective_peak_flops_TF(system, model.bytes_per_param) * TB_TO_FLOPS
     tiers = system.device.get_tiers()
 
     PP = partition.PP

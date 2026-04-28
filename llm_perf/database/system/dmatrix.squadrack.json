@@ -8,7 +8,7 @@
     "hbm_bandwidth_GBps": 51.2,
     "sram_capacity_MB": 256.0,
     "sram_bandwidth_TBps": 18.75,
-    "peak_flops_TF": 1200.0
+    "peak_flops_TF": 150.0
   },
   "fabrics": {
     "package_d2d": {
@@ -16,7 +16,9 @@
         {
           "name": "package-d2d-2x2-mesh",
           "topology": "mesh",
-          "dims": [4],
+          "dims": [
+            4
+          ],
           "full": true,
           "bw_per_port_GBps": 128.0,
           "alpha_us": 0.115
@@ -25,30 +27,66 @@
     },
     "dmx_bridge": {
       "tiers": [
-        {"name": "dmx-bridge-2-cards", "ports": 4,
-         "bw_per_port_GBps": 64.0, "alpha_us": 0.4}
+        {
+          "name": "dmx-bridge-2-cards",
+          "ports": 4,
+          "bw_per_port_GBps": 64.0,
+          "alpha_us": 0.4
+        }
       ]
     },
     "pcie_server": {
       "tiers": [
-        {"name": "pcie5-intra-hemisphere", "ports": 2,
-         "bw_per_port_GBps": 64.0, "alpha_us": 0.6},
-        {"name": "pcie5-inter-hemisphere", "ports": 2,
-         "bw_per_port_GBps": 64.0, "alpha_us": 0.6}
+        {
+          "name": "pcie5-intra-hemisphere",
+          "ports": 2,
+          "bw_per_port_GBps": 64.0,
+          "alpha_us": 0.6
+        },
+        {
+          "name": "pcie5-inter-hemisphere",
+          "ports": 2,
+          "bw_per_port_GBps": 64.0,
+          "alpha_us": 0.6
+        }
       ]
     },
     "ethernet_rack": {
       "tiers": [
-        {"name": "jetstream-eth-rack", "ports": 8,
-         "bw_per_port_GBps": 50.0, "alpha_us": 2.0}
+        {
+          "name": "jetstream-eth-rack",
+          "ports": 8,
+          "bw_per_port_GBps": 50.0,
+          "alpha_us": 2.0
+        }
       ]
     }
   },
   "collective_fabrics": {
-    "TP": ["package_d2d", "dmx_bridge", "pcie_server", "ethernet_rack"],
-    "EP": ["package_d2d", "dmx_bridge", "pcie_server", "ethernet_rack"],
-    "SP": ["package_d2d", "dmx_bridge", "pcie_server", "ethernet_rack"],
-    "PP": ["package_d2d", "dmx_bridge", "pcie_server", "ethernet_rack"]
+    "TP": [
+      "package_d2d",
+      "dmx_bridge",
+      "pcie_server",
+      "ethernet_rack"
+    ],
+    "EP": [
+      "package_d2d",
+      "dmx_bridge",
+      "pcie_server",
+      "ethernet_rack"
+    ],
+    "SP": [
+      "package_d2d",
+      "dmx_bridge",
+      "pcie_server",
+      "ethernet_rack"
+    ],
+    "PP": [
+      "package_d2d",
+      "dmx_bridge",
+      "pcie_server",
+      "ethernet_rack"
+    ]
   },
-  "_comment": "d-Matrix SquadRack full-rack reference, modeled at chiplet granularity (8 servers × 8 cards × 8 chiplets = 512 chiplets). Per-chiplet device spec same as `dmatrix.server`. peak_flops_TF=1200 = MXINT4 dense per-chiplet peak (9600 TFLOPS/card / 8 chiplets); MXINT8 is half that (300 TF/chiplet); the framework does not auto-derate by `bytes_per_param`, so INT8 workloads against this spec are over-stated by 4× — same convention as GB200's FP4-peak `peak_flops_TF`. Fabric chain decomposes the rack hierarchy into 5 tiers (cumulative reach 4 → 16 → 32 → 64 → 512): (1) `package_d2d` — 2×2 full mesh of 4 chiplets within a single Corsair package via D2D links, 128 GB/s, 0.115 μs (whitepaper Fig 6). (2) `dmx_bridge` — 4 packages joined across 2 cards via the DMX Bridge (= 16-chiplet 'high-speed scale-up unit' per d-Matrix marketing), 64 GB/s, 0.4 μs (whitepaper Fig 9). (3a) `pcie5-intra-hemisphere` — 2 sets of 2-card pairs (= 32 chiplets) within one host PCIe-switch hemisphere, 64 GB/s, 0.6 μs. (3b) `pcie5-inter-hemisphere` — 2 hemispheres joined across the host-CPU PCIe switches (= 64-chiplet full server), 64 GB/s, 0.6 μs. (4) `ethernet_rack` — 8 servers per rack via 4 JetStream NICs per server (1 NIC per 16-chiplet group, brief Sept 2025 Fig 2). Each JetStream is 400 Gbps = 50 GB/s single-direction (PCIe Gen5 x16 host, overprovisioned vs the 50 GB/s wire). Per-port BW = 50 GB/s models one JetStream egress per server (conservative collective-traffic model — additional NICs are available for non-collective host I/O or wider striping but not assumed). 2.0 μs transparent-NIC latency (Hot Chips 2025). INC structurally absent on the entire chain (no SHARP-class hardware). Inter-rack scale-out fabric not modeled. Sources: d-Matrix Corsair Technical Whitepaper (Nov 2024), JetStream Product Brief (Sept 2025), Hot Chips 2025 coverage."
+  "_comment": "d-Matrix SquadRack full-rack reference, modeled at chiplet granularity (8 servers \u00d7 8 cards \u00d7 8 chiplets = 512 chiplets). Per-chiplet device spec same as `dmatrix.server`. peak_flops_TF=150 stores FP16-equivalent dense per chiplet under the framework convention (FP16 baseline; linear byte scaling: MXINT8 = 300, MXINT4 = 600 derived). Caveat: published MXINT4 is 1200 TF/chiplet \u2014 framework under-states d-Matrix INT4/FP4 by 2\u00d7 due to block-sparse acceleration not captured by linear byte scaling. Fabric chain decomposes the rack hierarchy into 5 tiers (cumulative reach 4 \u2192 16 \u2192 32 \u2192 64 \u2192 512): (1) `package_d2d` \u2014 2\u00d72 full mesh of 4 chiplets within a single Corsair package via D2D links, 128 GB/s, 0.115 \u03bcs (whitepaper Fig 6). (2) `dmx_bridge` \u2014 4 packages joined across 2 cards via the DMX Bridge (= 16-chiplet 'high-speed scale-up unit' per d-Matrix marketing), 64 GB/s, 0.4 \u03bcs (whitepaper Fig 9). (3a) `pcie5-intra-hemisphere` \u2014 2 sets of 2-card pairs (= 32 chiplets) within one host PCIe-switch hemisphere, 64 GB/s, 0.6 \u03bcs. (3b) `pcie5-inter-hemisphere` \u2014 2 hemispheres joined across the host-CPU PCIe switches (= 64-chiplet full server), 64 GB/s, 0.6 \u03bcs. (4) `ethernet_rack` \u2014 8 servers per rack via 4 JetStream NICs per server (1 NIC per 16-chiplet group, brief Sept 2025 Fig 2). Each JetStream is 400 Gbps = 50 GB/s single-direction (PCIe Gen5 x16 host, overprovisioned vs the 50 GB/s wire). Per-port BW = 50 GB/s models one JetStream egress per server (conservative collective-traffic model \u2014 additional NICs are available for non-collective host I/O or wider striping but not assumed). 2.0 \u03bcs transparent-NIC latency (Hot Chips 2025). INC structurally absent on the entire chain (no SHARP-class hardware). Inter-rack scale-out fabric not modeled. Sources: d-Matrix Corsair Technical Whitepaper (Nov 2024), JetStream Product Brief (Sept 2025), Hot Chips 2025 coverage."
 }

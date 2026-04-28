@@ -11,7 +11,12 @@
   "fabrics": {
     "nvlink4": {
       "tiers": [
-        {"name": "nvswitch", "ports": 8, "bw_per_port_GBps": 450.0, "alpha_us": 1.0}
+        {
+          "name": "nvswitch",
+          "ports": 8,
+          "bw_per_port_GBps": 450.0,
+          "alpha_us": 1.0
+        }
       ]
     }
   },
@@ -27,6 +32,5 @@
     "eta": 1.0,
     "delta_alpha_us": 0.0
   },
-
-  "_comment": "NVIDIA DGX H100: 80 GB HBM3 @ 3.35 TB/s, FP8 dense 989 TFLOPS/GPU, NVLink4 900 GB/s bidir (450 GB/s single-direction). 8-GPU NVLink domain via 4 NVSwitch chips. B_agg = 8 × 450 GB/s = 3.6 TB/s single-dir system aggregate."
+  "_comment": "NVIDIA DGX H100: 80 GB HBM3 @ 3.35 TB/s, FP16 dense 989 TFLOPS/GPU per framework convention (peak_flops_TF stores FP16 dense; FP8 = 1979 by linear byte scaling), NVLink4 900 GB/s bidir (450 GB/s single-direction). 8-GPU NVLink domain via 4 NVSwitch chips. B_agg = 8 \u00d7 450 GB/s = 3.6 TB/s single-dir system aggregate."
 }

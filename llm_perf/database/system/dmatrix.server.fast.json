@@ -8,7 +8,7 @@
     "hbm_bandwidth_GBps": 51.2,
     "sram_capacity_MB": 256.0,
     "sram_bandwidth_TBps": 18.75,
-    "peak_flops_TF": 1200.0
+    "peak_flops_TF": 150.0
   },
   "fabrics": {
     "package_d2d": {
@@ -16,7 +16,9 @@
         {
           "name": "package-d2d-2x2-mesh",
           "topology": "mesh",
-          "dims": [4],
+          "dims": [
+            4
+          ],
           "full": true,
           "bw_per_port_GBps": 900.0,
           "alpha_us": 0.115
@@ -25,24 +27,52 @@
     },
     "dmx_bridge": {
       "tiers": [
-        {"name": "dmx-bridge-2-cards", "ports": 4,
-         "bw_per_port_GBps": 900.0, "alpha_us": 0.4}
+        {
+          "name": "dmx-bridge-2-cards",
+          "ports": 4,
+          "bw_per_port_GBps": 900.0,
+          "alpha_us": 0.4
+        }
       ]
     },
     "pcie_server": {
       "tiers": [
-        {"name": "pcie5-intra-hemisphere", "ports": 2,
-         "bw_per_port_GBps": 900.0, "alpha_us": 0.6},
-        {"name": "pcie5-inter-hemisphere", "ports": 2,
-         "bw_per_port_GBps": 900.0, "alpha_us": 0.6}
+        {
+          "name": "pcie5-intra-hemisphere",
+          "ports": 2,
+          "bw_per_port_GBps": 900.0,
+          "alpha_us": 0.6
+        },
+        {
+          "name": "pcie5-inter-hemisphere",
+          "ports": 2,
+          "bw_per_port_GBps": 900.0,
+          "alpha_us": 0.6
+        }
       ]
     }
   },
   "collective_fabrics": {
-    "TP": ["package_d2d", "dmx_bridge", "pcie_server"],
-    "EP": ["package_d2d", "dmx_bridge", "pcie_server"],
-    "SP": ["package_d2d", "dmx_bridge", "pcie_server"],
-    "PP": ["package_d2d", "dmx_bridge", "pcie_server"]
+    "TP": [
+      "package_d2d",
+      "dmx_bridge",
+      "pcie_server"
+    ],
+    "EP": [
+      "package_d2d",
+      "dmx_bridge",
+      "pcie_server"
+    ],
+    "SP": [
+      "package_d2d",
+      "dmx_bridge",
+      "pcie_server"
+    ],
+    "PP": [
+      "package_d2d",
+      "dmx_bridge",
+      "pcie_server"
+    ]
   },
-  "_comment": "**FAKE / DIAGNOSTIC SYSTEM** — d-Matrix server reference (`dmatrix.server.json`) with all fabric-tier bandwidths boosted to 900 GB/s (matching GB200 NVL72's NVLink/NVSwitch per-port BW). Used in `pareto_dm_vs_gb200.ipynb` §11-13 to isolate the BW contribution to the d-Matrix vs GB200 collective-cost gap. All other parameters identical to `dmatrix.server.json`: same per-chiplet device spec (32 GB LPDDR5, 256 MB SRAM, 1200 TF MXINT4 peak / 300 TF MXINT8 half-precision), same 4-tier topology (package_d2d → dmx_bridge → pcie5-intra → pcie5-inter, cumulative reach 4 → 16 → 32 → 64), same α latencies (0.115 / 0.4 / 0.6 / 0.6 μs), and no INC support anywhere. The only delta is BW. If this fake system's Pareto matches the real `dmatrix_server`, BW is not the dominant gap vs GB200; if it approaches GB200's frontier, BW is the dominant gap. Not a real product — strictly an A/B knob for the diagnostic."
+  "_comment": "**FAKE / DIAGNOSTIC SYSTEM** \u2014 d-Matrix server reference (`dmatrix.server.json`) with all fabric-tier bandwidths boosted to 900 GB/s (matching GB200 NVL72's NVLink/NVSwitch per-port BW). Used in `pareto_dm_vs_gb200.ipynb` \u00a711-13 to isolate the BW contribution to the d-Matrix vs GB200 collective-cost gap. All other parameters identical to `dmatrix.server.json`: same per-chiplet device spec (32 GB LPDDR5, 256 MB SRAM, 150 TF FP16-equivalent peak / 300 TF MXINT8 (2\u00d7 FP16) / 600 TF MXINT4 by linear scaling vs published 1200), same 4-tier topology (package_d2d \u2192 dmx_bridge \u2192 pcie5-intra \u2192 pcie5-inter, cumulative reach 4 \u2192 16 \u2192 32 \u2192 64), same \u03b1 latencies (0.115 / 0.4 / 0.6 / 0.6 \u03bcs), and no INC support anywhere. The only delta is BW. If this fake system's Pareto matches the real `dmatrix_server`, BW is not the dominant gap vs GB200; if it approaches GB200's frontier, BW is the dominant gap. Not a real product \u2014 strictly an A/B knob for the diagnostic."
 }
