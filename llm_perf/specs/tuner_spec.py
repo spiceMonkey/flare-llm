@@ -115,7 +115,18 @@ class TuningSpec:
     kernels_per_layer_compute: int = 10
     kernels_per_collective_call: int = 2
     kernel_launch_us: float = 1.5       # 0 disables; ~1.5 μs with CUDA Graphs, ~7 μs without
-    sw_overlap_factor: float = 1.0      # ρ_SW ∈ [0, 1]; 1 = full async overlap (SW hidden by GPU work)
+    # ρ_SW ∈ [0, 1]; 1 = full async overlap (SW hidden by GPU work).
+    # **Caveat:** 1.0 is the upper-end case — accurate for CUDA-Graphs-replayed
+    # steady-state on TensorRT-LLM / vLLM / SGLang where the CPU is one
+    # `cudaGraphLaunch` per microbatch and has 1000× slack. Empirically these
+    # stacks measure ~0.85-0.95. Eager-mode PyTorch / Python serving sees
+    # ρ_SW ~0.3-0.6 because Python interpreter overhead breaks the
+    # CPU-runs-ahead invariant. The 1.0 default matches the framework's
+    # roofline philosophy (upper bound; dial down to model imperfections).
+    # Note that t_SW is still a *hard floor* when t_SW > t_stage regardless
+    # of ρ_SW, so the optimistic default does not hide the dispatch tax in
+    # the SW-bound regime.
+    sw_overlap_factor: float = 1.0
 
     # Tensor Core efficiency curve η_TC(mb) for compute roofline.
     # Maps microbatch size mb (= B / PP) to a derate factor in [0, 1].
