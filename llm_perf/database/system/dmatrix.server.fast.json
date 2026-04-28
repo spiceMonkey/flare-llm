@@ -8,7 +8,7 @@
     "hbm_bandwidth_GBps": 51.2,
     "sram_capacity_MB": 256.0,
     "sram_bandwidth_TBps": 18.75,
-    "peak_flops_TF": 300.0
+    "peak_flops_TF": 1200.0
   },
   "fabrics": {
     "package_d2d": {
@@ -44,5 +44,5 @@
     "SP": ["package_d2d", "dmx_bridge", "pcie_server"],
     "PP": ["package_d2d", "dmx_bridge", "pcie_server"]
   },
-  "_comment": "**FAKE / DIAGNOSTIC SYSTEM** — d-Matrix server reference (`dmatrix.server.json`) with all fabric-tier bandwidths boosted to 900 GB/s (matching GB200 NVL72's NVLink/NVSwitch per-port BW). Used in `pareto_dm_vs_gb200.ipynb` §11-13 to isolate the BW contribution to the d-Matrix vs GB200 collective-cost gap. All other parameters identical to `dmatrix.server.json`: same per-chiplet device spec (32 GB LPDDR5, 256 MB SRAM, 300 TFLOPS MXINT8), same 4-tier topology (package_d2d → dmx_bridge → pcie5-intra → pcie5-inter, cumulative reach 4 → 16 → 32 → 64), same α latencies (0.115 / 0.4 / 0.6 / 0.6 μs), and no INC support anywhere. The only delta is BW. If this fake system's Pareto matches the real `dmatrix_server`, BW is not the dominant gap vs GB200; if it approaches GB200's frontier, BW is the dominant gap. Not a real product — strictly an A/B knob for the diagnostic."
+  "_comment": "**FAKE / DIAGNOSTIC SYSTEM** — d-Matrix server reference (`dmatrix.server.json`) with all fabric-tier bandwidths boosted to 900 GB/s (matching GB200 NVL72's NVLink/NVSwitch per-port BW). Used in `pareto_dm_vs_gb200.ipynb` §11-13 to isolate the BW contribution to the d-Matrix vs GB200 collective-cost gap. All other parameters identical to `dmatrix.server.json`: same per-chiplet device spec (32 GB LPDDR5, 256 MB SRAM, 1200 TF MXINT4 peak / 300 TF MXINT8 half-precision), same 4-tier topology (package_d2d → dmx_bridge → pcie5-intra → pcie5-inter, cumulative reach 4 → 16 → 32 → 64), same α latencies (0.115 / 0.4 / 0.6 / 0.6 μs), and no INC support anywhere. The only delta is BW. If this fake system's Pareto matches the real `dmatrix_server`, BW is not the dominant gap vs GB200; if it approaches GB200's frontier, BW is the dominant gap. Not a real product — strictly an A/B knob for the diagnostic."
 }
