@@ -68,17 +68,18 @@ def _t_SW_per_round(
     """Per-round CPU dispatch budget on each device.
 
         t_SW = L · (k_compute + k_per_collective · n_collectives_per_layer) · τ_launch
-             + 2 · PP · k_pp_hop · τ_launch    (PP send/recv launches)
+             + PP · k_pp_hop · τ_launch    (PP send/recv launches)
 
     `n_collectives_per_layer` counts only collectives that actually fire for
     the current shape (zero when the corresponding parallelism axis is 1).
 
     The PP-hop term comes from steady-state inflight batching: each stage
-    handles ≈ 2 P2P kernels per microbatch (1 recv + 1 send) × PP
-    microbatches per round = 2·PP launches per stage per round. Inert when
-    PP=1 (no inter-stage hops). Edge stages do only one direction; the
-    formula uses the middle-stage 2× factor for simplicity (off by one
-    PP·τ on edge stages, negligible at PP >> 1).
+    handles k_pp_hop P2P kernels per microbatch (default 2: 1 recv +
+    1 send) × PP microbatches per round → PP · k_pp_hop launches per
+    stage per round. Inert when PP=1 (no inter-stage hops). Edge stages
+    do only one direction (k_pp_hop / 2 effectively); the formula uses
+    the middle-stage value for simplicity, off by ≈ PP · τ on edges,
+    which is negligible at PP >> 1.
 
     Returns 0 when kernel_launch_us is 0 (legacy behavior).
     """
@@ -92,8 +93,8 @@ def _t_SW_per_round(
     n_SP = tuner.n_SP_collectives if partition.SP > 1 else 0
     k = k_c + k_coll * (n_TP + n_EP + n_SP)
     t_layer = L * k * tau_us * 1e-6
-    n_pp_per_round = 2 * partition.PP if partition.PP > 1 else 0
-    t_pp = n_pp_per_round * tuner.kernels_per_pp_hop * tau_us * 1e-6
+    pp_microbatches = partition.PP if partition.PP > 1 else 0
+    t_pp = pp_microbatches * tuner.kernels_per_pp_hop * tau_us * 1e-6
     return t_layer + t_pp
 
 
