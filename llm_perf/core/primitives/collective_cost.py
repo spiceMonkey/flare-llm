@@ -11,7 +11,7 @@
 #
 # Doc-path note: docstrings here reference upstream
 # `documentation/modeling/`; that subtree lands locally at
-# `documentation/explaining/collectives/`.
+# `documentation/modeling/collectives/`.
 # ─────────────────────────────────────────────────────────────────────
 
 """Collective algorithm cost primitives — α-β cost model.
