@@ -60,6 +60,7 @@ One line per component in the architecture diagram above. Full derivations live 
 | KV Transfer | $t_\mathrm{KV} = \alpha_\mathrm{disagg} + M_\mathrm{KV} / \mathrm{BW_\mathrm{disagg}}$ with $M_\mathrm{KV} = (L/\mathrm{PP}) \cdot 2 S \cdot H_\mathrm{kv} \cdot b$ (0 for co-located) | [`e2e.md`](documentation/modeling/e2e.md) |
 | Distributed KV Cache | $N_\mathrm{seq,max} = \lfloor M_\mathrm{avail} / (N_\mathrm{blocks} \cdot M_\mathrm{block} \cdot \varphi_\mathrm{avg}) \rfloor$ where $M_\mathrm{avail} = \mathrm{HBM} - M_\theta - M_\mathrm{act} - M_\mathrm{sys}$ and $\varphi_\mathrm{avg} = 1 + B_\mathrm{blk} / (2 S)$ | [`kv.md`](documentation/modeling/kv.md) |
 | E2E Assembly | $\mathrm{E2E}(N_\mathrm{out}) = \mathrm{TTFT} + (N_\mathrm{out} - 1) \cdot \mathrm{TPOT} + t_\mathrm{framework}$; throughput/GPU $= \mathrm{TTPS} / N_\mathrm{GPUs} = B / (t_\mathrm{step,user} \cdot N_\mathrm{GPUs,per-replica})$; interactivity $= 1 / \mathrm{TPOT}$ (per-user; not divided by $B$) | [`e2e.md`](documentation/modeling/e2e.md) |
+| SLO & Partition Feasibility | $\mathrm{Goodput} = \max\,\lambda$ s.t. $P_p[\mathrm{TTFT}] \le \mathrm{TTFT_{SLO}}$ and $P_p[\mathrm{TPOT}] \le \mathrm{TPOT_{SLO}}$; **floor** (rules out under-sharded shapes): $T_\theta / \mathrm{BW_{mem}} \le \mathrm{TPOT_{SLO}}$; **TPOT bound** (Zone 3): $B_\mathrm{max} \approx R_\mathrm{GPU} \cdot \mathrm{TPOT_{SLO}} / F_\mathrm{token,device}$; **TTFT bound** (prefill-warmup linearity in PP): $\mathrm{PP_{max}} \approx 1 + (\mathrm{TTFT_{SLO}} - t_\mathrm{sched} - t_\mathrm{prefill,local} - t_\mathrm{step,user}) / t_\mathrm{stage,max}$; dynamic cushion $\overline{B} \ge PP + z_p \sqrt{\overline{B}}$ at percentile $p$ | [`slo.md`](documentation/modeling/slo.md) |
 
 ---
 
@@ -79,6 +80,25 @@ The diagram traces how three JSON inputs (cluster, model, tuning) become a singl
 6. **TPOT** = $t_\mathrm{step,user}$. Interactivity $= 1 / \mathrm{TPOT}$; per-replica throughput $= B / t_\mathrm{step,user}$, scaled by $\mathrm{DP}$ to get cluster TTPS.
 
 Every block in the diagram corresponds to a function in `llm_perf/core/decode_model.py`; every equation has its derivation in `documentation/modeling/decode.md`.
+
+---
+
+## SLO and Partition Feasibility
+
+Production deployments don't run at a single (partition, $B$) point — they run at the largest arrival rate $\lambda$ that keeps both TTFT and TPOT below operator-set service-level objectives (SLOs). Inverting the rooflines of `decode.md` and `prefill.md` against those SLOs produces hard bounds on the partition shape and the operating batch — **the SLO box on the partition node in the flow diagram above is exactly this constraint layer.**
+
+Four bounds, each derived in `slo.md`:
+
+1. **Floor check** — partitions whose per-device weight footprint streams slower than the SLO budget are infeasible at any $B$ and any $\lambda$. The cleanest, most operationally consequential prune; runs first in the partition sweep.
+   $$T_{\theta,\mathrm{device}} \,/\, \mathrm{BW_{mem}} \;\le\; \mathrm{TPOT_{SLO}}$$
+2. **TPOT-SLO bound on $B$** (Zone-3 closed form) — caps batch size in compute-bound operation. Independent of the per-device weight footprint; depends only on the per-device compute capacity, the per-token FLOPs, and the SLO target.
+   $$B_\mathrm{max} \;\approx\; R_\mathrm{GPU} \cdot \mathrm{TPOT_{SLO}} \,/\, F_\mathrm{token,device}$$
+3. **TTFT-SLO bound on $PP$** (prefill-warmup linearity) — caps pipeline depth via the first-token traversal cost. The asymmetry that drives most production stacks toward TP-first / shallow-PP.
+   $$\mathrm{PP_{max}} \;\approx\; 1 + (\mathrm{TTFT_{SLO}} - t_\mathrm{sched} - t_\mathrm{prefill,local} - t_\mathrm{step,user}) \,/\, t_\mathrm{stage,max}$$
+4. **Goodput** (the optimization target) — the maximum sustained arrival rate over the joint feasibility region; goodput-optimal partition is the argmax over the discrete $(PP, TP, EP, SP)$ space.
+   $$\mathrm{Goodput} \;=\; \max\,\lambda \quad \text{s.t.} \quad P_p[\mathrm{TTFT}(\lambda)] \le \mathrm{TTFT_{SLO}} \;\wedge\; P_p[\mathrm{TPOT}(\lambda)] \le \mathrm{TPOT_{SLO}}$$
+
+The joint feasibility region $\mathcal{F}_\mathrm{SLO}$, the dynamic-stability cushion ($\overline{B} \ge PP + z_p \sqrt{\overline{B}}$ at percentile $p$), the disaggregated-vs-co-located decision rule when the two SLOs disagree on PP, the goodput-optimal partition sweep recipe, and the workload-class SLO target profiles (chat / agentic / batch) are all in [`slo.md`](documentation/modeling/slo.md).
 
 ---
 
@@ -109,6 +129,7 @@ Every block in the diagram corresponds to a function in `llm_perf/core/decode_mo
 │   │   ├── decode.md                 — decode roofline (compute + multi-tier mem + comm + SW + LM + bubble)
 │   │   ├── prefill.md                — prefill latency (incl. chunked + LM head)
 │   │   ├── e2e.md                    — TTFT, TPOT, throughput, interactivity, goodput, Pareto
+│   │   ├── slo.md                    — SLO-driven partition feasibility (B_max, PP_max, goodput-optimal sweep)
 │   │   ├── kv.md                     — paged-attention KV bookkeeping
 │   │   ├── framework.md              — CPU-side serving overhead (t_tok, t_sched, t_detok)
 │   │   ├── notation.md               — canonical symbol reference (synced with decode/prefill/e2e)
