@@ -49,8 +49,6 @@ llm_perf-specific glue around the synced primitives lives in sibling modules und
 
 One line per component in the architecture diagram above. Full derivations live in `documentation/modeling/*.md`; this table is a cross-reference, not a second source of truth.
 
-> **Start with [`decode.md`](documentation/modeling/decode.md).** It's the most important modeling doc to review — every Pareto sweep, every case study, and the entire `InferenceCalculator` path go through it. The decode roofline assembles compute + multi-tier memory + collective comm + kernel-launch dispatch + LM head + pipeline bubble into a single user-observed step time, and the rest of the framework (prefill, e2e, kv paging) builds on its conventions.
-
 | Component | Key equation(s) | Doc |
 |---|---|---|
 | Serving Framework | $t_\mathrm{framework} = t_\mathrm{tok} + t_\mathrm{sched} + T_\mathrm{out} \cdot t_\mathrm{detok}$ — CPU-side per-request startup ($t_\mathrm{tok}$, $t_\mathrm{sched}$) + per-output-token streaming ($t_\mathrm{detok}$). Kernel-launch dispatch and LM-head sampling are **GPU-side** and live in the Decode row, not here. | [`framework.md`](documentation/modeling/framework.md) |
@@ -62,6 +60,25 @@ One line per component in the architecture diagram above. Full derivations live 
 | KV Transfer | $t_\mathrm{KV} = \alpha_\mathrm{disagg} + M_\mathrm{KV} / \mathrm{BW_\mathrm{disagg}}$ with $M_\mathrm{KV} = (L/\mathrm{PP}) \cdot 2 S \cdot H_\mathrm{kv} \cdot b$ (0 for co-located) | [`e2e.md`](documentation/modeling/e2e.md) |
 | Distributed KV Cache | $N_\mathrm{seq,max} = \lfloor M_\mathrm{avail} / (N_\mathrm{blocks} \cdot M_\mathrm{block} \cdot \varphi_\mathrm{avg}) \rfloor$ where $M_\mathrm{avail} = \mathrm{HBM} - M_\theta - M_\mathrm{act} - M_\mathrm{sys}$ and $\varphi_\mathrm{avg} = 1 + B_\mathrm{blk} / (2 S)$ | [`kv.md`](documentation/modeling/kv.md) |
 | E2E Assembly | $\mathrm{E2E}(N_\mathrm{out}) = \mathrm{TTFT} + (N_\mathrm{out} - 1) \cdot \mathrm{TPOT} + t_\mathrm{framework}$; throughput/GPU $= \mathrm{TTPS} / N_\mathrm{GPUs} = B / (t_\mathrm{step,user} \cdot N_\mathrm{GPUs,per-replica})$; interactivity $= 1 / \mathrm{TPOT}$ (per-user; not divided by $B$) | [`e2e.md`](documentation/modeling/e2e.md) |
+
+---
+
+## Decode Modeling Flow
+
+> **Start with [`decode.md`](documentation/modeling/decode.md).** It's the most important modeling doc to review — every Pareto sweep, every case study, and the entire `InferenceCalculator` path go through it. The decode roofline assembles compute + multi-tier memory + collective comm + kernel-launch dispatch + LM head + pipeline bubble into a single user-observed step time, and the rest of the framework (prefill, e2e, kv paging) builds on its conventions.
+
+![decode modeling flow: JSON specs → partition → per-device traffic & FLOPs → 4 parallel cost branches → assembly funnel → TPOT](assets/decode_modeling_flow.png)
+
+The diagram traces how three JSON inputs (cluster, model, tuning) become a single TPOT number:
+
+1. **Partition** maps the cluster onto a `(PP, TP, EP, SP)` shard layout, with `DP = N / (PP·TP·EP·SP)` filling the remaining device budget.
+2. **Per-device traffic & FLOPs** turn model bytes into per-device weight bytes ($T_\theta$), KV bytes ($T_\mathrm{KV}$), and FLOPs ($F_\mathrm{token}$) — this is where the partition's structural choices first hit the rooflines.
+3. **Four parallel cost branches** are computed independently from the per-device quantities: memory roofline ($t_\mathrm{mem}$), compute roofline ($t_\mathrm{compute}$), collective communication ($t_\mathrm{comm}$), and kernel-launch dispatch ($t_\mathrm{stage,sw}$).
+4. **Assembly funnel** combines them in two overlap stages: HW-side ($t_\mathrm{stage,hw} = t_\mathrm{local} + \max(0, t_\mathrm{comm} - \rho \cdot t_\mathrm{local})$) then SW-side ($t_\mathrm{stage} = t_\mathrm{stage,hw} + \max(0, t_\mathrm{stage,sw} - \rho_\mathrm{SW} \cdot t_\mathrm{stage,hw})$).
+5. **Pipeline bubble** ($\gamma_\mathrm{pp} = \max(1, PP/B)$) and **LM head** ($t_\mathrm{LM,hw}$) join at the final assembly: $t_\mathrm{step,user}(B) = \gamma_\mathrm{pp} \cdot t_\mathrm{stage} + t_\mathrm{LM,hw}$.
+6. **TPOT** = $t_\mathrm{step,user}$. Interactivity $= 1 / \mathrm{TPOT}$; per-replica throughput $= B / t_\mathrm{step,user}$, scaled by $\mathrm{DP}$ to get cluster TTPS.
+
+Every block in the diagram corresponds to a function in `llm_perf/core/decode_model.py`; every equation has its derivation in `documentation/modeling/decode.md`.
 
 ---
 
