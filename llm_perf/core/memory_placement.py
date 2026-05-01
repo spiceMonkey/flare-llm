@@ -8,13 +8,23 @@ Standalone pure functions that:
      under the policy declared by `MemoryPlacementSpec` ("auto" greedy
      fastest-first, or operator-pinned to a named tier).
   2. `t_mem_from_placement(...)` — assemble the multi-tier roofline memory
-     time per sram.md §2.1 (dropped-α form):
-       t_mem(B) = Σ_i (T_θ,i + B · T_KV,i) / BW_eff,i
+     time per sram.md §2.1 (full α–β form):
+       t_mem(B) = Σ_i [ α_i · 𝟙(bytes_i > 0) + (T_θ,i + B · T_KV,i) / BW_eff,i ]
+
+The α term is one transaction per tier per step (the simplest no-paging
+assumption — a single fetch covers all bytes on that tier). For the
+on-die / co-packaged tiers in scope here (SRAM / HBM / LPDDR5) it is
+structurally negligible (sram.md §2.1) and the JSON specs leave
+α_i = 0; carrying it explicitly keeps the formula in the standard α–β
+form and lets small-read regimes reinstate it without a structural
+change. A future refinement (txn-granularity, see TODO at the bottom)
+would replace the 1-transaction count with ⌈bytes_i / G_i⌉ for those
+paged / small-read workloads.
 
 Single-tier reduction: when the device exposes one tier (the legacy shim
-path from PR1), greedy "auto"/"auto" puts everything on tier 0 and
-`t_mem_from_placement` collapses to the legacy `T_step / BW_mem`
-expression — bitwise identical to pre-PR2 behavior.
+path from PR1) with α_0 = 0, greedy "auto"/"auto" puts everything on
+tier 0 and `t_mem_from_placement` collapses to the legacy
+`T_step / BW_mem` expression — bitwise identical to pre-PR2 behavior.
 
 Activations (T_act) are not modeled here — `decode.md §2.2` drops them per
 the FlashAttention-applied assumption (sram.md §1.1 closing paragraph).
@@ -221,16 +231,31 @@ def t_mem_from_placement(
     B: int,
     tiers: List[MemoryTierSpec],
 ) -> float:
-    """Multi-tier decode roofline memory time per sram.md §2.1 (dropped-α form):
+    """Multi-tier decode roofline memory time per sram.md §2.1 (full α–β form):
 
-        t_mem(B) = Σ_i (T_θ,i + B · T_KV,i) / BW_eff,i
+        t_mem(B) = Σ_i [ α_i · 𝟙(bytes_i > 0) + (T_θ,i + B · T_KV,i) / BW_eff,i ]
 
-    where BW_eff,i = BW_i · η_β,i (sram.md §1.2). The α_i first-byte term
-    is dropped at the device level (sram.md §2.1 magnitude argument).
+    where BW_eff,i = BW_i · η_β,i (sram.md §1.2) and bytes_i = T_θ,i +
+    B · T_KV,i. The α_i term counts one first-byte fetch per tier per
+    step — the simplest no-paging assumption (one transaction covers all
+    bytes resident on that tier). It is gated on bytes_i > 0 so an
+    unused tier pays no startup cost.
 
-    Single-tier reduction: when len(tiers) = 1 with η_β = 1.0 (PR1 legacy
-    shim), this returns (T_θ + B · T_KV) / BW exactly — matches pre-PR2
-    `t_mem = T_step / BW_mem` to floating-point equality.
+    For the on-die / co-packaged tiers in scope here (SRAM / HBM /
+    LPDDR5) α_i is structurally negligible and the JSON specs leave it
+    at 0 (sram.md §2.1 magnitude argument); the term is carried in the
+    formula so the device roofline stays in the standard α–β form and
+    so small-read regimes can reinstate it without restructuring.
+
+    TODO(txn-granularity): replace the 1-transaction count with
+    N_txn,i = ⌈bytes_i / G_i⌉ when small-read regimes (paged-attention
+    KV blocks, flash-style weight chunks) come online. Current form is
+    the upper-bound (most amortized) case.
+
+    Single-tier reduction: when len(tiers) = 1 with η_β = 1.0 and
+    α_0 = 0 (PR1 legacy shim), this returns (T_θ + B · T_KV) / BW
+    exactly — matches pre-PR2 `t_mem = T_step / BW_mem` to floating-point
+    equality.
     """
     total = 0.0
     for w_i, kv_i, tier in zip(
@@ -241,5 +266,8 @@ def t_mem_from_placement(
         bw_eff = tier.bandwidth_GBps * tier.eta_beta * GB_TO_BYTES
         if bw_eff <= 0:
             continue
-        total += (w_i + B * kv_i) / bw_eff
+        bytes_i = w_i + B * kv_i
+        if bytes_i <= 0:
+            continue
+        total += tier.alpha_us * 1e-6 + bytes_i / bw_eff
     return total

@@ -1071,22 +1071,22 @@ $$
 t_{\text{compute}}(B) = \frac{F_{\text{step,device}}(B)}{R_{\text{GPU}}} = \frac{B \cdot F_{\text{token,device}}}{R_{\text{GPU}}}
 $$
 
-The memory roofline opens up across the device's memory hierarchy. Modern accelerators expose an ordered list of memory tiers $i = 0, 1, \ldots, n-1$ (fastest first): single-tier HBM on H100 / B200, two-tier SRAM + LPDDR5 on d-Matrix Corsair, single-tier on-die SRAM on Groq LPU. A **placement policy** $\pi$ assigns weight and KV bytes to specific tiers, splitting $T_{\theta,\text{device}}$ into per-tier shares $T_{\theta,0}, \ldots, T_{\theta,n-1}$ and $T_{\text{KV},\text{device}}$ into $T_{\text{KV},0}, \ldots, T_{\text{KV},n-1}$. Each tier carries its own effective bandwidth $BW_{\text{eff},i} = BW_i \cdot \eta_{\beta,i}$ (peak rate deflated by a sustained-throughput contention factor $\eta_{\beta,i} \in (0, 1]$, see `sram.md §1.2`). The per-step memory time sums bytes-moved over per-tier bandwidth across all tiers:
+The memory roofline opens up across the device's memory hierarchy. Modern accelerators expose an ordered list of memory tiers $i = 0, 1, \ldots, n-1$ (fastest first): single-tier HBM on H100 / B200, two-tier SRAM + LPDDR5 on d-Matrix Corsair, single-tier on-die SRAM on Groq LPU. A **placement policy** $\pi$ assigns weight and KV bytes to specific tiers, splitting $T_{\theta,\text{device}}$ into per-tier shares $T_{\theta,0}, \ldots, T_{\theta,n-1}$ and $T_{\text{KV},\text{device}}$ into $T_{\text{KV},0}, \ldots, T_{\text{KV},n-1}$. Each tier carries its own effective bandwidth $BW_{\text{eff},i} = BW_i \cdot \eta_{\beta,i}$ (peak rate deflated by a sustained-throughput contention factor $\eta_{\beta,i} \in (0, 1]$, see `sram.md §1.2`) and a first-byte latency $\alpha_i$ paid once per non-empty placement on that tier (the standard $\alpha$–$\beta$ form, treating each tier as a single transaction per step). The per-step memory time across all tiers is:
 
 $$
-t_{\text{mem}}(B) = \sum_{i=0}^{n-1} \frac{T_{\theta,i} + B \cdot T_{\text{KV},i}}{BW_{\text{eff},i}}
+t_{\text{mem}}(B) = \sum_{i=0}^{n-1} \left[\, \alpha_i \cdot \mathbb{1}\!\bigl(\mathrm{bytes}_i > 0\bigr) \;+\; \frac{T_{\theta,i} + B \cdot T_{\text{KV},i}}{BW_{\text{eff},i}} \,\right]
 $$
 
-Per-tier first-byte latencies $\alpha_i$ are dropped here because they contribute well under 0.1% of $t_{\text{mem}}$ at decode-step granularity; the full $\alpha$–$\beta$ form is reinstated in small-read regimes (paged-attention block fetch, flash-style spill — see `sram.md §2.1`). Tier definitions, placement policies (greedy fastest-first, operator-pinned), and worked numerical examples for d-Matrix Corsair / B200 / Groq LPU live in `sram.md`; this document treats $T_{\theta,i}$ and $T_{\text{KV},i}$ as given inputs.
+The $\alpha_i$ floor is kept here so the device roofline matches the standard $\alpha$–$\beta$ form rather than a $\beta$-only shorthand. For the on-die / co-packaged tiers in scope here — SRAM, HBM, LPDDR5 — $\alpha_i$ falls in the 1 ns – 200 ns range and contributes well under 0.1% of $t_{\text{mem}}$ at decode-step granularity, so dropping it for simplicity is a safe approximation in subsequent derivations. The full $\alpha$–$\beta$ form is also what gets reinstated in small-read regimes (paged-attention block fetch, flash-style spill — see `sram.md §2.1`). Tier definitions, placement policies (greedy fastest-first, operator-pinned), and worked numerical examples for d-Matrix Corsair / B200 / Groq LPU live in `sram.md`; this document treats $T_{\theta,i}$ and $T_{\text{KV},i}$ as given inputs.
 
 **Single-tier reduction.** When $n = 1$ — single-tier devices like H100 / B200 / Groq LPU, or any system modeled before opening up the tier list — the sum collapses to one term:
 
 $$
-t_{\text{mem}}(B) = \frac{T_{\theta,\text{device}} + B \cdot T_{\text{KV,device}}}{BW_{\text{eff},0}}
+t_{\text{mem}}(B) = \alpha_0 \;+\; \frac{T_{\theta,\text{device}} + B \cdot T_{\text{KV,device}}}{BW_{\text{eff},0}}
 \qquad (n = 1)
 $$
 
-with $BW_{\text{eff},0} \equiv BW_{\text{mem}}$. The Operational Intensity and $B^\star$ analyses below are written against this single-tier shorthand for compactness; the multi-tier crossover (weights and KV pinned to different tiers — d-Matrix Capacity Mode being the canonical example) is derived in `sram.md §2.2`.
+with $BW_{\text{eff},0} \equiv BW_{\text{mem}}$. The Operational Intensity and $B^\star$ analyses below are written against this single-tier shorthand and additionally drop $\alpha_0$ (negligible for on-die tiers) for compactness; the multi-tier crossover (weights and KV pinned to different tiers — d-Matrix Capacity Mode being the canonical example) is derived in `sram.md §2.2`.
 
 $t_{\text{compute}}(B)$ is the time assuming unlimited memory bandwidth — linear in $B$ since every sequence contributes its own per-token FLOPs. $t_{\text{mem}}(B)$ is the time assuming compute is free — within each tier, weights amortize once per step (the $T_{\theta,i}$ terms are $B$-independent) while KV reads scale with $B$ (each sequence reads its own history). For long-context LLMs the $B \cdot T_{\text{KV},i}$ contribution summed across tiers is often dominant.
 
@@ -1562,6 +1562,8 @@ $$
 t_{\text{mem}}(B) =
 \frac{T_{\theta,\text{device}} + B \cdot T_{\text{KV,device}}}{BW_{\text{mem}}}
 $$
+
+This is the single-tier, dropped-$\alpha$ shorthand of the multi-tier $\alpha$–$\beta$ form in §4 — kept here for compactness on the assumption that on-die tier $\alpha$ contributes well under 0.1% of $t_{\text{mem}}$. Reinstate $\alpha_i$ per §4 when modeling small-read regimes.
 
 ### Roofline local latency
 

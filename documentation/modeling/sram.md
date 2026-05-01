@@ -108,17 +108,13 @@ This section opens the per-token roofline term by tier (§2.1) and then derives 
 
 ## 2.1 Per-Tier Roofline
 
-For a fixed placement $\pi$ and batch size $B$, the per-step memory time on tier $i$ follows the standard $\alpha$–$\beta$ form: a per-transaction startup latency plus a bytes-moved term at the tier's effective bandwidth. Treating each tier as a single transaction per step (the simplest no-paging assumption), the **full** per-step memory time across all tiers is:
+For a fixed placement $\pi$ and batch size $B$, the per-step memory time on tier $i$ follows the standard $\alpha$–$\beta$ form: a per-transaction startup latency plus a bytes-moved term at the tier's effective bandwidth. Treating each tier as a single transaction per step (the simplest no-paging assumption — one fetch covers all bytes resident on the tier), the per-step memory time across all tiers is:
 
-$$t_{\mathrm{mem}}(B) \;=\; \sum_{i=0}^{n-1} \left[\, \alpha_i \;+\; \frac{T_{\theta,i} + B \cdot T_{\mathrm{KV},i}}{BW_{\mathrm{eff},i}} \,\right]$$
+$$t_{\mathrm{mem}}(B) \;=\; \sum_{i=0}^{n-1} \left[\, \alpha_i \cdot \mathbb{1}\!\bigl(\mathrm{bytes}_i > 0\bigr) \;+\; \frac{T_{\theta,i} + B \cdot T_{\mathrm{KV},i}}{BW_{\mathrm{eff},i}} \,\right]$$
 
-For all tier types modeled in this document — HBM, SRAM, LPDDR5 — the $\alpha_i$ term is structurally negligible compared to the bytes-moved term at the granularities steady-state decode operates on. $\alpha_i$ is in the 1 ns (SRAM) to ~200 ns (LPDDR5) range, while the per-step bytes term lands in the 10 µs to 10 ms range across the §3 examples; $\alpha_i$ contributes well under 0.1% of $t_{\mathrm{mem}}$ in every case. We therefore drop the $\alpha_i$ terms for the device-level decode roofline:
+The indicator on $\alpha_i$ gates the startup cost on a non-empty placement: a tier holding no weights and no KV pays no first-byte fee. The $\alpha_i$ floor is retained for completeness so the device roofline is the full $\alpha$–$\beta$ form rather than a $\beta$-only shorthand. For the on-die / co-packaged tiers in scope here — SRAM, HBM, LPDDR5 — $\alpha_i$ sits in the 1 ns (SRAM) to ~200 ns (LPDDR5) range, while the per-step bytes term lands in the 10 µs to 10 ms range across the §3 examples; $\alpha_i$ contributes well under 0.1% of $t_{\mathrm{mem}}$ in every case. Keeping the $\alpha_i$ term in the formula is therefore harmless on accuracy and useful as the structural anchor for *small-read* regimes (paged-attention block fetches, flash-style chunked weight loads) where it does start to bind; a future refinement will replace the 1-transaction count with $N_{\mathrm{txn},i} = \lceil \mathrm{bytes}_i / G_i \rceil$ for those workloads.
 
-$$t_{\mathrm{mem}}(B) \;=\; \sum_{i=0}^{n-1} \frac{T_{\theta,i} + B \cdot T_{\mathrm{KV},i}}{BW_{\mathrm{eff},i}}$$
-
-This dropped-$\alpha$ form is what enters the rest of this document and the existing decode pipeline. The full $\alpha$–$\beta$ form should be reinstated for *small-read* regimes — paged-attention block fetches (KV blocks of 16–64 KB at HBM speeds), flash-style spill (LLM-in-a-Flash chunked weight loads), or any prefill-side cost model that samples KV at single-block granularity — where $\alpha_i$ stops being amortizable. Disaggregated KV transfer is already modeled with its own $\alpha_{\mathrm{inter}}$ in `prefill.md §6` and is unaffected by this dropping.
-
-The dropped-$\alpha$ form is the structural generalization of the legacy `decode.md §4.3` formula and matches the per-token decode roofline of LIMINAL [LIMINAL, Eq. 1] with the aggregate-bandwidth term opened up into per-tier components. Two consequences fall out of this form:
+The form here is the structural generalization of the legacy `decode.md §4.3` formula and matches the per-token decode roofline of LIMINAL [LIMINAL, Eq. 1] with the aggregate-bandwidth term opened up into per-tier components and the $\alpha$ floor reinstated. Two consequences fall out of the bytes-moved part:
 
 1. **Weights amortize over batch within their tier.** The $T_{\theta,i}$ term carries no $B$ factor — doubling $B$ halves the per-token weight cost on every tier where weights live.
 2. **KV cache does not amortize.** The $B \cdot T_{\mathrm{KV},i}$ term scales linearly with $B$ on every tier. Increasing batch trades weight-bound time for KV-bound time but never eliminates the KV component. This matches the empirical "Mind the Memory Gap" observation that large-batch GPU inference remains memory-bound up to and past the throughput plateau, because attention reads scale linearly with $B$ while attention's arithmetic intensity stays nearly constant [MIND-GAP].
@@ -131,9 +127,9 @@ with $t_{\mathrm{compute}}(B) = B \cdot F_{\mathrm{token,device}} / R_{\mathrm{G
 
 The single-tier reduction is exact: when $n = 1$ the sum has one term and
 
-$$t_{\mathrm{mem}}(B) = \frac{T_{\theta,\mathrm{device}} + B \cdot T_{\mathrm{KV,device}}}{BW_{\mathrm{eff},0}}$$
+$$t_{\mathrm{mem}}(B) = \alpha_0 \;+\; \frac{T_{\theta,\mathrm{device}} + B \cdot T_{\mathrm{KV,device}}}{BW_{\mathrm{eff},0}}$$
 
-recovering `decode.md §4.3` with $BW_{\mathrm{mem}} \equiv BW_{\mathrm{eff},0}$.
+recovering `decode.md §4.3` with $BW_{\mathrm{mem}} \equiv BW_{\mathrm{eff},0}$ when $\alpha_0$ is dropped (the negligible-$\alpha$ regime for on-die / co-packaged tiers).
 
 ## 2.2 Crossover and Two Operating Modes
 
