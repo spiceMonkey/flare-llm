@@ -9,20 +9,25 @@ class MemoryTierSpec:
 
     Per `documentation/modeling/sram.md §1.1`, devices expose an ordered list
     of memory tiers, fastest first. Each tier carries a capacity, an effective
-    peak read bandwidth, an optional first-byte latency, and an optional
-    sustained-bandwidth deflator. The `eta_beta` deflator follows the same
-    convention as collective contention (`collectives/05_contention_and_congestion.md`): 1.0 = peak,
-    < 1 = sustained-throughput losses (HBM refresh + bank conflicts ≈ 0.92,
-    LPDDR5 ≈ 0.85, SRAM ≈ 1.0; sram.md §1.2). The `alpha_us` first-byte cost
-    is structurally negligible for steady-state decode (see sram.md §2.1) and
-    is dropped by the device-level roofline; it is kept on the spec for
-    small-read regimes (paged-attention block fetch, flash-style spill).
+    peak read bandwidth, a first-byte latency, and a sustained-bandwidth
+    deflator. The `eta_beta` deflator follows the same convention as
+    collective contention (`collectives/05_contention_and_congestion.md`):
+    1.0 = peak, < 1 = sustained-throughput losses (HBM refresh + bank
+    conflicts ≈ 0.92, LPDDR5 ≈ 0.85, SRAM ≈ 1.0; sram.md §1.2).
+
+    The `alpha_us` first-byte cost enters the device roofline as one
+    transaction per tier per step (sram.md §2.1, full α–β form). For the
+    on-die / co-packaged tiers in scope here it is structurally
+    negligible (SRAM ~1 ns, HBM ~10 ns, LPDDR5 ~200 ns) and the JSON
+    specs leave it at 0; it is kept on the spec so the formula stays in
+    the standard α–β form and so small-read regimes (paged-attention
+    block fetch, flash-style spill — sram.md §2.1) can reinstate it.
     """
 
     name: str                      # e.g. "hbm", "sram", "lpddr5"
     capacity_GB: float             # per-device capacity (GB, decimal)
     bandwidth_GBps: float          # peak read bandwidth (GB/s)
-    alpha_us: float = 0.0          # first-byte latency (μs); decode roofline drops it
+    alpha_us: float = 0.0          # first-byte latency (μs); 1 transaction / tier / step
     eta_beta: float = 1.0          # sustained-BW deflator ∈ (0, 1]; 1.0 = peak
 
 
