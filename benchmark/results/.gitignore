@@ -1,0 +1,5 @@
+# Validator output (plots, CSVs) — keep the directory tracked but ignore
+# everything in it.
+*
+!.gitignore
+!.gitkeep
