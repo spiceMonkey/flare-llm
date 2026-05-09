@@ -476,3 +476,15 @@ Speculative decoding breaks the 1:1 token-per-step mapping of vanilla decode by 
 - $B^\star_{\text{spec}}$ — Verify-step compute-bound crossover batch (`decode.md §9.4`):
   $$B^\star_{\text{spec}} \approx \frac{T_{\theta,\text{device}} \cdot R_{\text{GPU}}}{n_{\text{tok,verify}} \cdot F_{\text{token,device}} \cdot BW_{\text{mem}} - T_{\text{KV,device}} \cdot R_{\text{GPU}}}$$
   Falls below the vanilla $B^\star$ of §10 by approximately $n_{\text{tok,verify}}$.
+
+---
+
+## 19. Per-Sequence Serving Runtime Overhead
+_(→ decode.md §7.2)_
+
+Captures host-side per-step work that scales with the active-sequence count $B$ — PagedAttention block-table gather, continuous-batching scheduler decisions, per-sequence sampling glue, token-append bookkeeping. Distinct from the kernel-launch dispatch budget $t_{\mathrm{stage,sw}}$ (per microbatch, near-constant in $B$; `decode.md §7.1`) and from the per-request scheduler latency $t_{\mathrm{sched}}$ of §13 above (once per request, not once per step). Symbols introduced in `decode.md §7.2`.
+
+- $c_{\mathrm{serving}}$ — Per-sequence per-step CPU serving runtime constant (seconds/seq/step). Stack-dependent calibration knob: ≈10 µs/seq for aggressively fused C++ stacks, ≈20–30 µs/seq for production CUDA-Graph stacks (TensorRT-LLM, NVIDIA Dynamo), ≈30–60 µs/seq for Python-heavy stacks (vLLM, SGLang in eager mode) (`decode.md §7.2`).
+- $t_{\mathrm{serving}}(B) = c_{\mathrm{serving}} \cdot B$ — Per-step serving runtime overhead. Additive to $t_{\mathrm{step,user}}(B)$, not overlapped with GPU work; sits outside the pipeline-bubble multiplier $\gamma_{\mathrm{pp}}$ since it fires once per step regardless of bubble depth (`decode.md §7.2`, used in `decode.md §7.3`).
+
+When $c_{\mathrm{serving}} = 0$ (the default), $t_{\mathrm{serving}}(B) = 0$ and the §7.3 user-observed step time formula is recovered exactly — the term is opt-in.
