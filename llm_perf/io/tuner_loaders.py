@@ -143,6 +143,29 @@ def tuning_spec_from_json_dict(cfg: Dict[str, Any]) -> TuningSpec:
                 )
             eta_TC[mb] = eta
 
+    eta_BW_cfg = cfg.get("bw_efficiency", None)
+    if eta_BW_cfg is None:
+        eta_BW: Optional[Dict[int, float]] = None
+    else:
+        if not isinstance(eta_BW_cfg, dict):
+            raise ValueError(
+                "tuning configuration: 'bw_efficiency' must be an "
+                f"object mapping B→efficiency, got {eta_BW_cfg!r}"
+            )
+        eta_BW = {}
+        for k, v in eta_BW_cfg.items():
+            B = int(k)
+            eta = float(v)
+            if B < 1:
+                raise ValueError(
+                    f"bw_efficiency: B keys must be >= 1, got {B}"
+                )
+            if not (0.0 < eta <= 1.0):
+                raise ValueError(
+                    f"bw_efficiency[{B}]: efficiency must be in (0, 1], got {eta}"
+                )
+            eta_BW[B] = eta
+
     # MemoryPlacementSpec block (sram.md §1.3 Operator-Specified policy).
     # JSON shape:  "placement": {"weights_tier": "sram", "kv_tier": "auto"}
     # Both fields default to "auto" → greedy fastest-first.
@@ -186,6 +209,7 @@ def tuning_spec_from_json_dict(cfg: Dict[str, Any]) -> TuningSpec:
         kernel_launch_us=float(cfg.get("kernel_launch_us", _defaults.kernel_launch_us)),
         sw_overlap_factor=float(cfg.get("sw_overlap_factor", _defaults.sw_overlap_factor)),
         tensor_core_efficiency=eta_TC if eta_TC is not None else _defaults.tensor_core_efficiency,
+        bw_efficiency=eta_BW if eta_BW is not None else _defaults.bw_efficiency,
         n_tok_draft=int(cfg.get("n_tok_draft", _defaults.n_tok_draft)),
         p_accept=float(cfg.get("p_accept", _defaults.p_accept)),
         t_serving_per_seq_us=float(cfg.get("t_serving_per_seq_us", _defaults.t_serving_per_seq_us)),

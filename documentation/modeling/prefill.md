@@ -660,7 +660,7 @@ $$
 
 **Interpretation of each term:**
 
-- **$t_{\text{prefill,local}}(B_{\text{prefill}})$** is the roofline local time with two corrections added to the legacy $\max(t_{\text{compute}}, t_{\text{mem}})$ form: a Tensor Core efficiency derate at small effective microbatch, and an SW composition for per-stage CPU kernel-launch overhead. Both are detailed below.
+- **$t_{\text{prefill,local}}(B_{\text{prefill}})$** is the roofline local time with three corrections added to the legacy $\max(t_{\text{compute}}, t_{\text{mem}})$ form: a Tensor Core efficiency derate at small effective microbatch, an HBM sustained-bandwidth derate against $\eta_\beta(B_{\text{prefill}})$, and an SW composition for per-stage CPU kernel-launch overhead. All three are detailed below.
 - **$\max(0,\, t_{\text{prefill,comm}}(B_{\text{prefill}}) - \rho\, t_{\text{prefill,local}}(B_{\text{prefill}}))$** is residual communication after compute–communication overlap. In the compute-bound prefill regime, $t_{\text{prefill,local}}$ is large, so significant communication hiding ($\rho \approx 0.8$–$1.0$) is achievable.
 - **$t_{\text{pipeline,warmup}}(B_{\text{prefill}})$** is the pipeline fill penalty; grows with $PP$ and with $B_{\text{prefill}} \cdot S_{\text{input}}$ since both $t_{PP}^{\text{prefill}}$ and $t_{\text{prefill,local}}$ scale with the per-step token count.
 - **$t_{\text{LM,prefill,hw}}(B_{\text{prefill}})$** is the once-per-pass LM head roofline on stage $PP{-}1$, defined below. It is added outside the warmup because it fires once at the end of the prefill traversal (after the pipeline is filled), not per stage.
@@ -689,9 +689,19 @@ $$
 
 For prefill, $\text{mb}_{\text{prefill}}$ is large enough at typical $S$ that $\eta_{\text{TC}} \approx 1$; the term is included for consistency with decode and to capture small-$S$ corner cases.
 
+### Memory bandwidth derate
+
+By symmetry with the compute term, the memory term may be corrected for the $B$-dependent HBM sustained-bandwidth curve $\eta_\beta(B)$ from `decode.md §6.2` and `notation.md §20`:
+
+$$
+t_{\text{mem}}^{\text{eff}}(B_{\text{prefill}}) = \frac{t_{\text{mem}}(B_{\text{prefill}})}{\eta_\beta(B_{\text{prefill}})}
+$$
+
+For prefill the curve is typically inert: prefill is compute-bound at production $S_{\text{input}}$, so $t_{\text{mem}}$ is not on the critical path; and the dominant mechanism behind the curve (concurrent KV reads from many decode sequences) does not arise during prefill (KV is being **written**, not read). The term is included for symmetry with the decode formulation and to handle disaggregated chunked-prefill regimes where prefill chunks share a memory subsystem with concurrent decode traffic.
+
 ### SW composition
 
-The per-stage CPU dispatch budget $t_{\text{stage,sw}}$ is applied via the SW-overlap factor $\rho_{\text{SW}}$ in the same base + unhidden-overflow form as decode (`decode.md §7.1` and `§7.3`). Let $t_{\text{prefill,GPU}}(B_{\text{prefill}}) = \max\bigl(t_{\text{compute}}^{\text{eff}}(B_{\text{prefill}}),\, t_{\text{mem}}(B_{\text{prefill}})\bigr)$ denote the GPU-side roofline:
+The per-stage CPU dispatch budget $t_{\text{stage,sw}}$ is applied via the SW-overlap factor $\rho_{\text{SW}}$ in the same base + unhidden-overflow form as decode (`decode.md §7.1` and `§7.3`). Let $t_{\text{prefill,GPU}}(B_{\text{prefill}}) = \max\bigl(t_{\text{compute}}^{\text{eff}}(B_{\text{prefill}}),\, t_{\text{mem}}^{\text{eff}}(B_{\text{prefill}})\bigr)$ denote the GPU-side roofline:
 
 $$
 t_{\text{prefill,local}}(B_{\text{prefill}}) = t_{\text{prefill,GPU}}(B_{\text{prefill}}) + \max\!\bigl(0,\; t_{\text{stage,sw}} - \rho_{\text{SW}} \cdot t_{\text{prefill,GPU}}(B_{\text{prefill}})\bigr)
