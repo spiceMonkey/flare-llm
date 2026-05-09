@@ -115,6 +115,8 @@ The goodput framework was formalized by [ALPASERVE] (statistical multiplexing ac
 
 The TPOT-SLO bounds the per-step decode latency $t_{\mathrm{step,user}}(B)$, which in turn bounds the operating batch size $B$. The bound is non-trivial because $t_{\mathrm{step,user}}(B)$ is non-monotone-flat in $B$ — it sits at a memory-bound floor up to the crossover batch $B^\star$ from `decode.md §3.3`, then grows linearly past it. The TPOT-SLO either falls in the flat region (in which case the bound is loose and not binding), the linear region (in which case the bound is tight and gives a closed-form $B_{\max}$), or below the floor (in which case no $B$ satisfies the SLO at the current partition shape, and the partition is infeasible).
 
+> **Speculative-decoding extension.** When the deployment runs with speculative decoding enabled (Multi-Token Prediction (MTP) / EAGLE / Medusa, `decode.md §9`), the user-observed TPOT is $\mathrm{TPOT_{spec}}(B) = t_{\mathrm{step,user}}^{\text{verify}}(B) / N_{\text{tok/step}}$ rather than $t_{\mathrm{step,user}}(B)$. The SLO then bounds $\mathrm{TPOT_{spec}}$, and both the verify-step floor and the verify-step crossover $B^\star_{\text{spec}}$ from `decode.md §9.4` substitute for their vanilla counterparts in the analysis below. In the memory-bound regime — the dominant operating regime for MoE / MLA decode at production batch sizes — the substitution is a clean $1/N_{\text{tok/step}}$ scaling on TPOT and the §2.2 Zone 1 / Zone 2 / Zone 3 partition-feasibility argument carries through unchanged.
+
 ---
 
 ## 2.1 Inverting the Decode Roofline

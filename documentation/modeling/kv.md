@@ -212,6 +212,8 @@ Each TP rank holds $H_{kv}/TP$ of the head-channel dimension. Block allocation i
 
 Block size $\text{BLK}_{KV}$ is defined in terms of token positions (not channel elements), so it is invariant to TP degree. The fragmentation factor $\varphi$ is likewise independent of TP.
 
+> **Mode note (DP-attention).** Under DP-attention mode (`decode.md §8`) the head-sharded KV layout above is replaced by a sequence-sharded layout: each TP rank holds full-head KV for $1/TP$ of the active sequences instead of $1/TP$ heads of all sequences. Per-device KV bytes and per-device KV traffic are invariant under this swap (`decode.md §8.2`). The PagedAttention block accounting in this section applies to either layout — what changes is which sequences (vs which head-channels) live on a given device.
+
 ### Sequence Parallelism (SP)
 
 Each SP rank holds $S/SP$ contiguous token positions from the KV sequence. Block allocation is **per-SP-rank**: each rank manages an independent block pool covering its $S/SP$ token positions, with its own block table.

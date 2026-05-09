@@ -388,6 +388,39 @@ arXiv:2312.11514.
 
 ---
 
+## Speculative Decoding and DP-Attention
+
+**[LEVIATHAN]**  
+Leviathan, Y., Kalman, M., & Matias, Y. (2023).  
+*Fast Inference from Transformers via Speculative Decoding.*  
+ICML 2023. arXiv:2211.17192.  
+→ Original speculative-decoding paper; truncated geometric expected-acceptance-length derivation (their Eq. 5) consumed by `decode.md §9.2`.
+
+**[EAGLE]**  
+Li, Y., Wei, F., Zhang, C., & Zhang, H. (2024).  
+*EAGLE: Speculative Sampling Requires Rethinking Feature Uncertainty.*  
+ICML 2024. arXiv:2401.15077.  
+→ Feature-level autoregressive draft head; per-token acceptance ≈ 0.75–0.85 at draft depth 4. Source for the calibration ranges in `decode.md §9.5`.
+
+**[MEDUSA]**  
+Cai, T., Li, Y., Geng, Z., Peng, H., Lee, J.D., Chen, D., & Dao, T. (2024).  
+*Medusa: Simple LLM Inference Acceleration Framework with Multiple Decoding Heads.*  
+arXiv:2401.10774.  
+→ Parallel decoding heads (no separate draft model); empirical per-head acceptance ≈ 0.6–0.7 on Vicuna-13B. Source for the cross-architecture acceptance comparison in `decode.md §9.5`.
+
+**[DSV3]**  
+DeepSeek-AI, et al. (2024).  
+*DeepSeek-V3 Technical Report.*  
+arXiv:2412.19437.  
+→ Multi-Token Prediction (MTP) head architecture and training; reports per-token acceptance ≈ 0.85–0.90 at draft depth 1 (their §3.2). Also describes the DP-attention + EP production decode deployment (their §4); used in `decode.md §8` and §9.
+
+**[SGLANG-DPATTN]**  
+LMSYS (2024). *Achieving Faster Open-Source LLM Inference (DP-Attention Blog Post).*  
+https://lmsys.org/blog/  
+→ SGLang's `--enable-dp-attention` flag and the AR → AG swap pattern; empirical comm savings on DSv3 / R1 deployments. Cross-confirms the per-layer collective accounting in `decode.md §8.3`.
+
+---
+
 ## Original Modeling Contributions
 
 The following constants and models are **original to this document suite** and are not derived from a published paper. They should be marked as such in inline citations:

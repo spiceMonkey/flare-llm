@@ -209,6 +209,8 @@ FlashAttention [FA1, FA2] tiles the $S \times S$ attention matrix into SRAM-resi
 
 Parallelism distributes prefill FLOPs across devices following the same DP → PP → EP → TP → SP nesting as decode [MEGATRON, MEGATRON3].
 
+> **Mode note (DP-attention).** The expressions below assume the default TP-attention mode with attention TP-sharded by head. Under DP-attention mode the attention block's per-device FLOPs are invariant (the $/TP$ divisor reflects the per-device share regardless of whether the work is split by head or by token), but the attention weight footprint and the per-layer attention all-reduce change — see `decode.md §8.2` and `decode.md §8.3` for the substitutions, which apply identically here in prefill.
+
 ### PP sharding
 
 Pipeline parallelism assigns $L/PP$ layers to each stage. Since the prefill pass traverses all layers, each PP stage handles exactly its local layers:
@@ -573,7 +575,7 @@ $$
 t_{PP}^{\text{prefill}}(B_{\text{prefill}}) \;=\; \alpha_{PP} \;+\; \frac{B_{\text{prefill}} \cdot S_{\text{input}} \cdot (H/TP) \cdot b}{BW_{\text{PP}}}
 $$
 
-$\alpha_{PP}$ and $BW_{PP}$ are tier-aware: under the nested-layout convention (`DP → PP → EP → TP → SP`, fast axes inner), the PP boundary uses the fabric tier whose cumulative reach holds `PP × inner-axes-product`. See `decode.md §5.1` for the full convention; the `partition_layout.assign_tier_per_axis` helper resolves the tier index per partition.
+$\alpha_{PP}$ and $BW_{PP}$ are tier-aware: under the nested-layout convention (`DP → PP → EP → TP → SP`, fast axes inner), the PP boundary uses the fabric tier whose cumulative reach holds $PP \cdot \text{(inner-axes product)}$. See `decode.md §5.1` for the full convention.
 
 ### SP All-Gather (prefill)
 

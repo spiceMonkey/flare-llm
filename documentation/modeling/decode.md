@@ -50,6 +50,19 @@ LLM inference, Transformer, parallelism, tensor parallelism, expert parallelism,
   - [7.1 Kernel-launch overhead](#71-kernel-launch-overhead)
   - [7.2 User-observed step time and throughput](#72-user-observed-step-time-and-throughput)
 
+- [8. Attention Parallelism Modes (TP-attention vs DP-attention)](#8-attention-parallelism-modes-tp-attention-vs-dp-attention)
+  - [8.1 The two modes](#81-the-two-modes)
+  - [8.2 Per-device deltas under DP-attention](#82-per-device-deltas-under-dp-attention)
+  - [8.3 Communication accounting under DP-attention](#83-communication-accounting-under-dp-attention)
+  - [8.4 When DP-attention pays](#84-when-dp-attention-pays)
+
+- [9. Speculative Decoding (MTP / EAGLE / Medusa)](#9-speculative-decoding-mtp--eagle--medusa)
+  - [9.1 Verify-step setup](#91-verify-step-setup)
+  - [9.2 Acceptance model and expected accepted tokens](#92-acceptance-model-and-expected-accepted-tokens)
+  - [9.3 Verify-step roofline](#93-verify-step-roofline)
+  - [9.4 Effective TPOT under speculative decoding](#94-effective-tpot-under-speculative-decoding)
+  - [9.5 Where speculative decoding wins and loses](#95-where-speculative-decoding-wins-and-loses)
+
 ---
 
 <div style="page-break-before: always;"></div>
@@ -267,6 +280,8 @@ generated token, which is negligible relative to the full cache.
 ## 1.4 Per-device Memory Footprint After Parallelism Sharding
 
 So far we've completed the all the memory footprint estimation for a model layer. When we introduce different parallelism schemes, some of these memories would be sharded by one or more of these parallelism dimensions, resulting in a somewhat complicated memory aggregateion per device. We now describe how these parameters are distributed across devices under PP/EP/TP/SP, and then derive simple modeling approximations.
+
+> **Mode note (DP-attention).** The expressions in this section assume the default TP-attention mode with attention weights TP-sharded and KV head-sharded. Under DP-attention mode (DSv3 / SGLang convention) the attention weights are replicated across TP ranks and KV is sequence-sharded instead. Per-device KV bytes are invariant under the swap, but the attention weight footprint loses its $/TP$ divisor. Full per-device deltas in §8.2.
 
 ### Per-device Parameter Memory (TP, EP, PP)
 
@@ -519,6 +534,8 @@ Following Section 1, we use:
 - $P_{\text{FFN}}$: dense FFN (or non-expert MoE core) parameters  
 
 $P_{\text{emb}}$ is small (one row read per token) and absorbed into the embedding lookup overhead — we drop it from the steady-state traffic model. $P_{\text{lm}}$ is **kept** as a stage-PP-1-only term (see "LM head parameter traffic" below) — it can rival ~10% of the body for large $V$ and warrants explicit accounting.
+
+> **Mode note (DP-attention).** The attention parameter traffic below assumes the default TP-sharded placement. Under DP-attention mode the attention weights are replicated, dropping the $/TP$ divisor on the attention term — exact substitution in §8.2.
 
 ### Attention parameter traffic
 
@@ -1286,13 +1303,13 @@ $$
 
 The α-term (single point-to-point latency) is paid once per hop regardless of payload; only the β-term scales with $B$. This shard-preserving PP design avoids the extra TP collectives that would be required if stages exchanged full activations and then re-sharded them. Maintaining TP rank consistency across stages therefore yields a significantly faster pipeline, and is the standard strategy in modern LLM training and inference systems.
 
-**Tier-aware PP cost (nested-layout convention).** $\alpha_{PP}$ and $BW_{PP}$ above are *not* uniformly tier-0 fabric values. They are the latency and bandwidth of the **specific tier** the PP boundary physically crosses, which depends on where PP sits in the nested layout `DP → PP → EP → TP → SP` (innermost = highest-bandwidth tier). The framework's `partition_layout.assign_tier_per_axis` resolves a `(PartitionSpec, SystemSpec)` pair into a per-axis tier index by walking the fabric chain inner→outer, allocating each axis to the smallest tier whose cumulative reach holds the cumulative product of inner axes × this axis. For example, on d-Matrix squadrack (3-tier chain: 16 × 4 × 8):
+**Tier-aware PP cost (nested-layout convention).** $\alpha_{PP}$ and $BW_{PP}$ above are *not* uniformly tier-0 fabric values. They are the latency and bandwidth of the **specific tier** the PP boundary physically crosses, which depends on where PP sits in the nested layout `DP → PP → EP → TP → SP` (innermost = highest-bandwidth tier). The per-axis tier assignment walks the fabric chain inner→outer, allocating each axis to the smallest tier whose cumulative reach holds the cumulative product of inner axes × this axis. For example, on d-Matrix squadrack (3-tier chain: 16 × 4 × 8):
 
-- `PP=2, TP=8`: cumulative `8·2 = 16` ≤ tier-0 cap → **PP at tier 0** (pair-of-cards mesh, $\alpha=0.115$ μs, BW=64 GB/s).
-- `PP=8, TP=8`: cumulative `8·8 = 64` ≤ tier-1 cap → **PP at tier 1** (PCIe, $\alpha=0.65$ μs).
-- `PP=32, TP=8`: cumulative `8·32 = 256 > 64` → **PP at tier 2** (Ethernet, $\alpha=2.0$ μs, BW=50 GB/s).
+- $PP=2, TP=8$: cumulative $8 \cdot 2 = 16 \le$ tier-0 cap → **PP at tier 0** (pair-of-cards mesh, $\alpha=0.115$ μs, BW=64 GB/s).
+- $PP=8, TP=8$: cumulative $8 \cdot 8 = 64 \le$ tier-1 cap → **PP at tier 1** (PCIe, $\alpha=0.65$ μs).
+- $PP=32, TP=8$: cumulative $8 \cdot 32 = 256 > 64$ → **PP at tier 2** (Ethernet, $\alpha=2.0$ μs, BW=50 GB/s).
 
-On single-tier systems (e.g., NVL72), every axis collapses to tier 0 and the legacy tier-0 PP pricing is recovered exactly. The implementation is in `core/decode_model.py` and `core/prefill_model.py`; the helper lives at `core/primitives/partition_layout.py`. This is a worst-case-tier model — within a single PP cost call we use the *outermost* tier the boundary could possibly cross. A finer per-hop blend (some boundaries within tier 0, some across tier 1) is left as a future refinement; the worst-case form matches the conservative engineering view that "PP runs across servers" for sweeps where it does.
+On single-tier systems (e.g., NVL72), every axis collapses to tier 0 and the legacy tier-0 PP pricing is recovered exactly. This is a worst-case-tier model — within a single PP cost call the *outermost* tier the boundary could possibly cross is used. A finer per-hop blend (some boundaries within tier 0, some across tier 1) is left as a future refinement; the worst-case form matches the conservative engineering view that "PP runs across servers" for sweeps where it does.
 
 ---
 
@@ -1313,6 +1330,8 @@ $$
 ## 5.3 Tensor Parallel (TP) Communication
 
 TP groups compute each layer in parallel across $TP$ devices using column- and row-parallel linear layers [MEGATRON]. The dominant collective is an **All-Reduce** at the end of the MLP (Row Parallel) and Attention (Output) blocks to sum partial results across ranks.
+
+> **Mode note (DP-attention).** The attention output projection's all-reduce disappears under DP-attention mode and is replaced by a TP all-gather at the attention → FFN transition (one fewer net all-reduce per layer). Substitution and per-stage budget in §8.3.
 
 **Critical Note on Message Size:** unlike PP (which sends a shard), the TP All-Reduce operates on the **full hidden state vector** ($H$). Each device owns only a shard of the weights, but the partial output from Row Parallelism is a vector of size $H$ that must be reduced globally; the payload is $Hb$ bytes per token, not $(H/TP)b$. For a decode step of $B$ sequences the per-step payload is $B \cdot Hb$.
 
@@ -1718,6 +1737,8 @@ $$
 
 This is the full user-observed step time. At $B = 1, PP = 1$ with $t_{\text{stage,sw}} = 0$, it reduces to $t_{\text{stage,hw}}(1) + t_{\text{LM,hw}}(1)$ — single-stage body plus LM head, the non-pipelined decode model with a vocab projection at the end.
 
+> **Speculative-decoding extension.** The TPOT identity $\text{TPOT}(B) = t_{\text{step,user}}(B)$ holds for vanilla decode (one accepted token per sequence per step). Under speculative decoding (MTP / EAGLE / Medusa) each step costs more (the verify pass evaluates $n_{\text{tok,verify}}$ tokens per sequence) but emits more output ($N_{\text{tok/step}}$ accepted tokens per sequence on average). The effective TPOT is $t_{\text{step,user}}^{\text{verify}}(B) / N_{\text{tok/step}}$ — derivation and regime analysis in §9.
+
 ### Throughput (TPS, TTPS)
 
 A single DP replica emits one token per sequence per step, so it outputs $B$ tokens every $t_{\text{step,user}}(B)$:
@@ -1733,3 +1754,279 @@ TTPS(B) = DP \cdot TPS_{\text{single}}(B) = \frac{DP \cdot B}{t_{\text{step,user
 $$
 
 When $B \ge PP$ the bubble factor is unity and $TPS_{\text{single}}(B) = B / t_{\text{step,user}}^{\text{sat}}(B)$, recovering the classical "throughput is gated by the slowest stage" result — where the bottleneck stage is $PP{-}1$ and its cost is the SW-composed body plus the once-per-step LM head $t_{\text{LM,hw}}(B)$.
+
+---
+
+# 8. Attention Parallelism Modes (TP-attention vs DP-attention)
+
+Sections 1–7 derive the per-device decode roofline under the standard convention that **every linear layer in the model is tensor-parallel (TP) sharded** — including the four projections (Q, K, V, O) inside the attention block. This matches the original Megatron-LM partition strategy and is the default mode used everywhere in §1–§7. DeepSeek-V3 / R1 production deployments and SGLang / NVIDIA Dynamo introduced an alternative where attention weights are **replicated** across the TP ranks of a replica and tokens are partitioned instead — this is the **DP-attention** mode. DeepSeek-V3's Multi-head Latent Attention (MLA) shrinks attention parameters by an order of magnitude relative to multi-head attention (MHA), which makes replication cheap and removes the per-layer all-reduce (AR) after the attention output projection [DSV3, SGLANG-DPATTN].
+
+This section lays out both modes side by side and quantifies the per-device deltas. **Scope:** only the attention block changes — the dense FFN stays TP-sharded and the Mixture-of-Experts (MoE) FFN stays expert-parallel (EP) sharded under both modes, matching the production DSv3 / SGLang configuration.
+
+> **Topology assumption.** The derivations below preserve the orthogonal-axis layout of §1–§7: a replica spans $R = PP \cdot TP \cdot EP \cdot SP$ devices, with TP and EP mapped to **different** GPUs. The DP-attention mode here is mathematically correct for that orthogonal layout. It does **not** represent the DSv3 production deployment in which TP and EP share the same physical GPUs (TP=8 EP=8 on 8 GPUs, world size 8 not 64). That co-located pattern requires relaxing the orthogonality invariant — both `replica_size` and several per-device cost formulas would change shape. Co-located TP+EP is deferred to a future extension; this section's DP-attention math applies cleanly to deployments that keep TP and EP on disjoint GPU sets within a replica.
+
+## 8.1 The two modes
+
+Within a single decode replica of size $R = PP \cdot TP \cdot EP \cdot SP$ devices, processing $B$ active sequences in one step:
+
+| Quantity | TP-attention mode (default) | DP-attention mode |
+|---|---|---|
+| Q/K/V/O weight placement | sharded by head across $TP$ ranks | replicated on every TP rank |
+| KV cache placement | head-sharded across $TP$ ranks; every TP rank holds 1/$TP$ heads of all $B$ sequences | sequence-sharded across $TP$ ranks; every rank holds full-head KV for $B/TP$ sequences |
+| Tokens per TP rank in attention | $B$ (every rank computes its head slice for all sequences) | $B/TP$ (each rank owns a disjoint sequence subset) |
+| Collective after attention output | TP all-reduce on width-$H$ partial sums | none — tokens stay local |
+| Collective at attention → FFN transition | none (input already replicated) | TP all-gather to feed TP-sharded FFN inputs |
+| Dense FFN | TP-sharded (unchanged) | TP-sharded (unchanged) |
+| MoE FFN | EP-sharded (unchanged) | EP-sharded (unchanged) |
+
+The two modes differ only inside the attention block and at the attention → FFN boundary. The token-flow into the next attention layer is symmetric: under TP-attention the FFN's all-reduce produces a replicated full-token activation that the next attention layer consumes directly; under DP-attention the FFN's all-reduce produces the same replicated activation, then the next attention layer scatters it back to its 1/$TP$-of-tokens slice (a free metadata operation).
+
+## 8.2 Per-device deltas under DP-attention
+
+The four per-device quantities derived in §1.4 (memory footprint), §2.1 (parameter traffic), §2.3 (KV traffic), and §3.5 (FLOPs) all change inside the attention block under DP-attention mode. Three of the four are invariant in total per-device bytes; only the **attention weight footprint** truly grows.
+
+### Attention weight memory footprint
+
+Under TP-attention, attention weight bytes per device per layer are $(2H^2 + 2HH_{kv}) b / TP$ (§1.1, §1.4). Under DP-attention the same weights are replicated on every TP rank, dropping the $/TP$ divisor:
+
+$$
+M_{\text{attn,device}}^{\text{DP-attn}} = \frac{L}{PP} \cdot (2H^2 + 2HH_{kv}) \cdot b
+$$
+
+This is the only term that increases with DP-attention mode. The cost is $TP - 1$ extra copies of the attention weights per replica — typically small in absolute terms because attention parameters are a minority of total model parameters (≈8–15% for MHA dense models, ≈3–5% for MLA-equipped models like DSv3), so the absolute growth is bounded.
+
+### Attention weight memory traffic
+
+Attention weights are read once per decode step (amortized across all $B$ sequences). Under DP-attention each rank reads its full (replicated) attention weights instead of its $1/TP$ shard, so per-device parameter traffic from the attention block grows by the same $TP$ factor:
+
+$$
+T_{\text{attn},\theta,\text{device}}^{\text{DP-attn}} = \frac{L}{PP} \cdot (2H^2 + 2HH_{kv}) \cdot b
+$$
+
+Total $T_{\theta,\text{device}}$ in the §2.1 expression replaces the attention-only term with the above; the FFN parameter traffic terms are unchanged.
+
+### KV cache footprint and traffic
+
+Per-device KV bytes are **invariant** under the mode switch. Under TP-attention each rank holds $1/TP$ heads of every sequence's KV; under DP-attention each rank holds full-head KV for $1/TP$ of sequences. The total per-device storage is the same:
+
+$$
+M_{\text{KV,device}}^{\text{DP-attn}} = M_{\text{KV,device}}^{\text{TP-attn}} = \frac{L}{PP} \cdot \frac{2 S H_{kv} b}{TP \cdot SP} \cdot B
+$$
+
+Per-device KV read traffic per step is also invariant:
+
+$$
+T_{\text{KV,device}}^{\text{DP-attn}} = T_{\text{KV,device}}^{\text{TP-attn}}
+$$
+
+Same accounting argument: every KV byte stored on the device is read once per decode step regardless of which axis (head or sequence) was used to shard it.
+
+### Attention compute (FLOPs)
+
+Per-device attention FLOPs per step are **invariant**. Under TP-attention each rank does its head-slice of the attention compute for $B$ tokens; under DP-attention each rank does the full-head attention compute for $B/TP$ tokens. Both end up at the same total FLOP count per device per step:
+
+$$
+F_{\text{attn,device}}^{\text{DP-attn}} = F_{\text{attn,device}}^{\text{TP-attn}} = \frac{B \cdot L}{PP} \cdot \frac{(4H^2 + 4HH_{kv}) + 4 S H}{TP}
+$$
+
+The $/TP$ divisor reflects the per-device share of the attention work — under TP-attention via head sharding, under DP-attention via token sharding.
+
+### Dense FFN and MoE blocks
+
+Both blocks are unchanged under DP-attention mode. Dense FFN remains TP-sharded; MoE remains EP-sharded. The dense FFN's per-layer all-reduce on width $H$ activations still fires (it is the all-reduce that completes the row-parallel down-projection — see §5.3), and the MoE Dispatch + Combine all-to-alls still fire on MoE layers (§5.2). Only the attention block's collective changes.
+
+## 8.3 Communication accounting under DP-attention
+
+Section 5.3 prices the per-layer attention all-reduce as $t_{TP}(B)$ (TP all-reduce of the $B \cdot Hb$-byte output projection partial sums). Under DP-attention this all-reduce **disappears** — each TP rank already holds the complete attention output for its $B/TP$ sequences. In its place, a per-layer TP all-gather (AG) fires to redistribute tokens from the DP-attention slice back to the replicated form the TP-sharded FFN expects on input.
+
+The TP all-gather payload per rank is the rank's $B/TP$-token shard of width $H$, totaling $B \cdot Hb / TP$ per rank. The standard ring all-gather cost on a star fabric is (from `collectives/00_summary.md §4`):
+
+$$
+t_{TP,\text{AG}}^{\text{DP-attn}}(B) \;=\; (TP - 1)\,\alpha_{TP} \;+\; \frac{TP - 1}{TP} \cdot \frac{B \cdot H b}{BW_{\text{TP}}}
+$$
+
+Compare to the TP all-reduce that this replaces (from §5.3, ring algorithm):
+
+$$
+t_{TP,\text{AR}}(B) \;=\; 2(TP - 1)\,\alpha_{TP} \;+\; 2 \cdot \frac{TP - 1}{TP} \cdot \frac{B \cdot H b}{BW_{\text{TP}}}
+$$
+
+So the per-layer attention-collective swap saves:
+
+$$
+\Delta t_{\text{attn-comm}}^{\text{DP-attn}}(B) \;=\; t_{TP,\text{AR}}(B) - t_{TP,\text{AG}}^{\text{DP-attn}}(B) \;=\; (TP - 1)\,\alpha_{TP} \;+\; \frac{TP - 1}{TP} \cdot \frac{B \cdot H b}{BW_{\text{TP}}}
+$$
+
+— exactly one all-gather's worth of $\alpha$ + bandwidth cost saved per attention block per layer. Aggregated across the $L/PP$ layers per stage, the saved comm time is $L/PP \cdot \Delta t_{\text{attn-comm}}^{\text{DP-attn}}(B)$.
+
+Updated per-stage communication budget under DP-attention (substitute into §5.5):
+
+$$
+t_{\text{comm}}^{\text{DP-attn}}(B) \;=\; \frac{L}{PP} \bigl( t_{TP,\text{AG}}^{\text{DP-attn}}(B) + (n_{TP} - 1)\, t_{TP,\text{AR}}(B) + n_{SP}\, t_{SP}(B) \bigr) \;+\; \frac{L_{\text{moe}}}{PP} \, n_{EP}\, t_{EP}(B) \;+\; t_{PP}(B)
+$$
+
+The $n_{TP} - 1$ remaining all-reduces per layer cover the dense FFN output (and the MoE expert output projection on MoE layers, which is also TP-sharded). With the default $n_{TP} = 2$ this leaves one all-reduce per layer instead of two — exactly the DSv3 deployment description.
+
+## 8.4 When DP-attention pays
+
+DP-attention trades one all-reduce per layer for $TP - 1$ extra copies of the attention weights in HBM and one extra all-reduce-equivalent of attention weight memory traffic per step. The trade is favorable when:
+
+1. **Attention parameters are a small fraction of model size.** MLA (DSv3) shrinks $H_{kv}$ from a typical $\sim H$ in MHA down to $\sim H / 14$, dropping attention parameters from $\sim$15% of the model to $\sim$3%. Replicating 3% of the weights costs little; saving an all-reduce per layer is worth a lot when there are 60+ layers and the all-reduce sits on the critical path.
+2. **TP is large enough that $TP - 1$ all-reduces of $B \cdot Hb$ payload per stage dominate the latency budget.** At $TP = 8$ on NVLink-class fabric the savings are second-order; at $TP = 32$ on a multi-node setup they become first-order.
+3. **Memory-bound regime** ($B$ small relative to crossover $B^\star$ from §4). Here the extra attention weight traffic adds at most $\frac{(TP - 1)}{TP} \cdot \frac{M_{\text{attn,device}}^{\text{TP-attn}}}{M_{\theta,\text{device}}^{\text{TP-attn}}}$ to the per-step weight traffic — for an MLA-class model with attention parameters at $\sim$3% of total weights and $TP = 8$, that is a ~2.6% increase in $t_{\text{mem}}$. The per-layer AR savings from §8.3 typically dwarf this term, so the trade is favorable; in compute-bound regime the trade is closer to neutral because attention compute is invariant under the swap.
+
+For models with full MHA or grouped-query attention (GQA) where attention parameters are 8–15% of total weight, the calculus is closer; for models with MLA the trade essentially always favors DP-attention. The default TP-attention mode recovers §1–§7 identically; the DP-attention mode replaces four per-device quantities and one collective per attention block per layer as derived above.
+
+**Symbol summary (added by this section).**
+
+| Symbol | Definition | Where introduced |
+|--------|-----------|------------------|
+| Attention parallelism mode | Selector between TP-attention (default, §1–§7) and DP-attention (§8). | §8 |
+| $M_{\text{attn,device}}^{\text{DP-attn}}$ | Per-device attention weight bytes under DP-attention mode (§8.2). | §8.2 |
+| $T_{\text{attn},\theta,\text{device}}^{\text{DP-attn}}$ | Per-device attention parameter traffic per step under DP-attention mode (§8.2). | §8.2 |
+| $t_{TP,\text{AG}}^{\text{DP-attn}}(B)$ | Per-layer TP all-gather cost under DP-attention mode, replacing the attention all-reduce (§8.3). | §8.3 |
+| $\Delta t_{\text{attn-comm}}^{\text{DP-attn}}(B)$ | Per-layer comm time saved by the AR → AG swap (§8.3). | §8.3 |
+| $t_{\text{comm}}^{\text{DP-attn}}(B)$ | Per-stage total comm time under DP-attention mode, substituting into the §5.5 expression (§8.3). | §8.3 |
+
+---
+
+# 9. Speculative Decoding (MTP / EAGLE / Medusa)
+
+Sections 1–8 model the **vanilla decode** step: every active sequence advances by exactly one new token per step. **Speculative decoding** breaks this 1:1 mapping by having a cheap draft model propose multiple candidate tokens per sequence per step, then having the target model verify all of them in a single parallel pass — accepting a prefix of the draft based on per-token logit comparison and falling back to standard sampling for the first rejected position [LEVIATHAN]. The accepted tokens are emitted as the step's output. Because verification runs the target model **once per step regardless of how many tokens are accepted**, the per-step latency is bounded above by the target model's verify cost while the per-step output count can exceed one — yielding a TPOT speedup whenever the verification cost stays comparable to vanilla decode and acceptance is non-trivial.
+
+DeepSeek-V3 ships a built-in Multi-Token Prediction (MTP) head trained jointly with the base model that drafts $n_{\text{tok,draft}}$ additional tokens per step from shared base activations [DSV3]. EAGLE [EAGLE] and Medusa [MEDUSA] are alternative draft architectures (feature-level autoregressive draft and parallel decoding heads, respectively); from the cost model's perspective they differ only in the per-token acceptance probability $p_{\text{accept}}$ and the draft chain length $n_{\text{tok,draft}}$. The two parameters that fully determine the speculative-decoding TPOT model are:
+
+- $n_{\text{tok,draft}}$ — number of draft tokens proposed per verify step (typical 3–5; 1 disables speculation).
+- $p_{\text{accept}}$ — per-token draft acceptance probability ∈ [0, 1] (typical 0.6–0.85; calibrated against the deployment).
+
+A separate per-token verify-cost calibration constant is **not** introduced — the verify-step cost is derived from the roofline below rather than fitted.
+
+## 9.1 Verify-step setup
+
+A verify step processes $n_{\text{tok,verify}} = n_{\text{tok,draft}} + 1$ tokens per active sequence (the $n_{\text{tok,draft}}$ proposed tokens plus the target model's own next-token prediction, which is always accepted). For $B$ active sequences the verify step's effective token volume is $B \cdot n_{\text{tok,verify}}$ per stage. The verify step:
+
+1. **Runs the target model forward** on $B \cdot n_{\text{tok,verify}}$ query tokens, attending to each sequence's existing $S$-token KV cache plus the draft tokens themselves (the FlashAttention kernel batches the draft queries into a single attention pass per sequence per layer).
+2. **Compares draft logits to target logits** at each draft position; accepts the longest matching prefix; samples a corrective token from the distribution-difference at the first mismatch.
+3. **Emits between 1 and $n_{\text{tok,verify}}$ accepted tokens per sequence** and appends their KV entries to the cache.
+
+The draft model itself runs as a forward pass on the same accelerator; for MTP the draft is the target model's own MTP head and the draft cost is a small fixed surcharge (an extra projection per draft position from shared base activations), absorbed into the verify-step compute below. For EAGLE / Medusa with a separate draft model, the draft pass adds its own roofline cost — see §9.5.
+
+## 9.2 Acceptance model and expected accepted tokens
+
+Under independent per-token acceptance with success probability $p_{\text{accept}}$, the number of accepted draft tokens follows a truncated geometric distribution: the chain accepts position 1 with probability $p_{\text{accept}}$, positions 1–2 with probability $p_{\text{accept}}^2$, ..., positions 1–$n_{\text{tok,draft}}$ with probability $p_{\text{accept}}^{n_{\text{tok,draft}}}$. The expected number of accepted draft tokens per step is the closed-form sum [LEVIATHAN, eq. 5]:
+
+$$
+\mathbb{E}[N_{\text{accept,draft}}] \;=\; \sum_{d=1}^{n_{\text{tok,draft}}} p_{\text{accept}}^d \;=\; \frac{p_{\text{accept}} \, (1 - p_{\text{accept}}^{n_{\text{tok,draft}}})}{1 - p_{\text{accept}}}
+$$
+
+The always-accepted target prediction adds one more token per step, giving the **total expected accepted tokens per verify step**:
+
+$$
+N_{\text{tok/step}} \;=\; 1 + \mathbb{E}[N_{\text{accept,draft}}] \;=\; 1 + \frac{p_{\text{accept}} \, (1 - p_{\text{accept}}^{n_{\text{tok,draft}}})}{1 - p_{\text{accept}}}
+$$
+
+For $(n_{\text{tok,draft}}, p_{\text{accept}}) = (4, 0.7)$: $N_{\text{tok/step}} \approx 1 + 0.7 + 0.49 + 0.343 + 0.240 \approx 2.78$.
+
+The bound $1 \le N_{\text{tok/step}} \le n_{\text{tok,verify}}$ is tight: $p_{\text{accept}} = 0$ yields 1 (vanilla decode equivalent) and $p_{\text{accept}} = 1$ yields $n_{\text{tok,verify}}$ (every draft accepted). The independence assumption is empirically reasonable for MTP and EAGLE at moderate draft depths but breaks down at $n_{\text{tok,draft}} > 5$ as accepted-prefix correlations grow [EAGLE §4]; calibrate $p_{\text{accept}}$ against the deployment rather than treating it as an architectural constant.
+
+## 9.3 Verify-step roofline
+
+The verify step runs the same model as vanilla decode but with $n_{\text{tok,verify}}$ tokens per sequence instead of 1. Three of the per-step cost components scale with this multiplier; one does not:
+
+- **Compute scales linearly with $n_{\text{tok,verify}}$.** Every Q/K/V/O projection, every attention score, every FFN GEMM does $n_{\text{tok,verify}}$ times more work per sequence: $F_{\text{token,device}}^{\text{verify}} = n_{\text{tok,verify}} \cdot F_{\text{token,device}}$.
+- **Communication payload scales linearly with $n_{\text{tok,verify}}$.** Each per-layer TP all-reduce (and TP all-gather under DP-attention from §8) carries $n_{\text{tok,verify}}$ times the activations: per-rank message size is $B \cdot n_{\text{tok,verify}} \cdot H b$ instead of $B \cdot Hb$. The MoE Dispatch + Combine all-to-alls scale identically.
+- **Weight traffic is unchanged.** Weights load once per verify step, exactly as in vanilla decode: $T_{\theta,\text{device}}^{\text{verify}} = T_{\theta,\text{device}}$.
+- **KV-cache read traffic is approximately unchanged.** Each sequence's existing $S$-token KV is read once per layer per step regardless of how many query tokens piggyback on the read (FlashAttention's standard batched-Q kernel pattern). The draft tokens add at most $n_{\text{tok,draft}}$ positions to the per-sequence KV scan, which is negligible at $S \gg n_{\text{tok,draft}}$ — typical decode contexts have $S$ in the thousands and $n_{\text{tok,draft}}$ ≤ 5: $T_{\text{KV,device}}^{\text{verify}} \approx T_{\text{KV,device}}$.
+
+Threading these through the §6.2 / §7.2 composition, the verify-step compute time, memory time, and roofline are:
+
+$$
+t_{\text{compute}}^{\text{verify}}(B) \;=\; n_{\text{tok,verify}} \cdot t_{\text{compute}}(B), \qquad
+t_{\text{mem}}^{\text{verify}}(B) \;\approx\; t_{\text{mem}}(B)
+$$
+
+$$
+t_{\text{local}}^{\text{verify}}(B) \;=\; \max\bigl( n_{\text{tok,verify}} \cdot t_{\text{compute}}(B),\; t_{\text{mem}}(B) \bigr)
+$$
+
+The communication budget per stage scales by the same multiplier on every payload-bearing term:
+
+$$
+t_{\text{comm}}^{\text{verify}}(B) \;=\; \text{(\S5.5 expression with all per-layer message sizes scaled by } n_{\text{tok,verify}}\text{)}
+$$
+
+The α-side terms (per-collective startup latencies $(EP - 1)\alpha_{EP}$, $2(TP - 1)\alpha_{TP}$, etc.) are unchanged — one collective per layer fires regardless of payload size.
+
+> **Composition with DP-attention.** When DP-attention mode (§8) and speculative decoding are both enabled — the DSv3 production configuration — the two extensions compose orthogonally: §8.3's AR → AG swap fires on every verify step, and the per-layer AG payload becomes $B \cdot n_{\text{tok,verify}} \cdot Hb / TP$ (the §8.3 expression scaled by $n_{\text{tok,verify}}$). All other §8 deltas (attention weight footprint, KV invariance, attention FLOPs invariance) carry through unchanged because they are independent of the per-step token count.
+
+The verify-step user-observed step time is then the §7.2 composition with the verify-step quantities substituted in:
+
+$$
+t_{\text{step,user}}^{\text{verify}}(B) \;=\; \gamma_{\text{pp}} \cdot \bigl[ t_{\text{stage,hw}}^{\text{verify}}(B) + \max(0, t_{\text{stage,sw}} - \rho_{\text{SW}} \cdot t_{\text{stage,hw}}^{\text{verify}}(B)) \bigr] + t_{\text{LM,hw}}^{\text{verify}}(B)
+$$
+
+where the verify-step LM head follows the same roofline-of-compute-and-memory shape as elsewhere in the model — its compute scales linearly with $n_{\text{tok,verify}}$ (each verify-step query needs its own logits to compare against the draft) but the $V \times H$ projection matrix loads once per step regardless of query count:
+
+$$
+t_{\text{LM,hw}}^{\text{verify}}(B) \;=\; \max\!\bigl( n_{\text{tok,verify}} \cdot t_{\text{LM,compute}}(B),\; t_{\text{LM,mem}}(B) \bigr)
+$$
+
+For DSv3-class vocab and FP4 quantization the LM head sits at the memory-bound floor across the typical decode-batch range and $t_{\text{LM,hw}}^{\text{verify}}(B) \approx t_{\text{LM,hw}}(B)$; only at large $B$ does the compute term cross over and the linear $n_{\text{tok,verify}}$ scaling kick in.
+
+## 9.4 Effective TPOT under speculative decoding
+
+Each verify step costs $t_{\text{step,user}}^{\text{verify}}(B)$ wall-clock time and emits $N_{\text{tok/step}}$ accepted tokens per sequence on average. The effective per-output-token latency is:
+
+$$
+\mathrm{TPOT_{spec}}(B) \;=\; \frac{t_{\text{step,user}}^{\text{verify}}(B)}{N_{\text{tok/step}}}
+$$
+
+In the **memory-bound regime** ($n_{\text{tok,verify}} \cdot t_{\text{compute}}(B) < t_{\text{mem}}(B)$, common at small-to-moderate $B$ for MoE / MLA decode), the verify step is roofline-equivalent to the vanilla decode step ($t_{\text{local}}^{\text{verify}} \approx t_{\text{local}}$) and TPOT collapses to a clean speedup:
+
+$$
+\mathrm{TPOT_{spec}}(B) \;\approx\; \frac{\text{TPOT}(B)}{N_{\text{tok/step}}} \qquad \text{(memory-bound regime)}
+$$
+
+For DSv3 / R1 on GB200 NVL72 at typical decode batch sizes, this is the operative regime — measurements show MTP rows at 0.4–0.6× the baseline TPOT, consistent with $N_{\text{tok/step}} \approx 1.7$–$2.5$.
+
+In the **compute-bound regime** ($n_{\text{tok,verify}} \cdot t_{\text{compute}}(B) > t_{\text{mem}}(B)$, large $B$), the verify step grows by the full $n_{\text{tok,verify}}$ multiplier and the speedup ratio becomes:
+
+$$
+\frac{\mathrm{TPOT_{spec}}(B)}{\text{TPOT}(B)} \;\approx\; \frac{n_{\text{tok,verify}}}{N_{\text{tok/step}}} \qquad \text{(compute-bound regime)}
+$$
+
+This ratio is $\ge 1$ because $N_{\text{tok/step}} \le n_{\text{tok,verify}}$ — speculative decoding **does not help** in the strict compute-bound regime and ties at $p_{\text{accept}} = 1$ (every draft accepted, no wasted compute).
+
+The compute-bound crossover under speculation shifts down by $\approx n_{\text{tok,verify}}$ relative to vanilla decode (§4): the verify step hits compute-bound at:
+
+$$
+B^\star_{\text{spec}} \;\approx\; \frac{T_{\theta,\text{device}} \cdot R_{\text{GPU}}}{n_{\text{tok,verify}} \cdot F_{\text{token,device}} \cdot BW_{\text{mem}} - T_{\text{KV,device}} \cdot R_{\text{GPU}}}
+$$
+
+For typical MoE decode where $B^\star$ from §4 is in the hundreds-to-thousands range, $B^\star_{\text{spec}}$ at $n_{\text{tok,verify}} = 5$ falls to the tens-to-hundreds range — speculation buys back compute headroom that the vanilla decode roofline left on the table.
+
+## 9.5 Where speculative decoding wins and loses
+
+The TPOT-vs-batch curve under speculation has three operating regimes:
+
+1. **Memory-bound win** ($B \ll B^\star_{\text{spec}}$): $\mathrm{TPOT_{spec}} \approx \text{TPOT} / N_{\text{tok/step}}$. Speedup ≈ $N_{\text{tok/step}}$ (typically 1.7–3×). This is the regime where MTP / EAGLE / Medusa pay off and where production deployments operate.
+2. **Crossover band** ($B \approx B^\star_{\text{spec}}$): partial speedup; the verify step is starting to be compute-limited but $N_{\text{tok/step}}$ amortization still wins. Calibrate $p_{\text{accept}}$ to the deployment to predict the exact crossover.
+3. **Compute-bound break-even or loss** ($B \gg B^\star_{\text{spec}}$): $\mathrm{TPOT_{spec}} \approx (n_{\text{tok,verify}} / N_{\text{tok/step}}) \cdot \text{TPOT}$. The ratio is $\ge 1$ — at best a tie ($p_{\text{accept}} \to 1$), at worst a slowdown of up to $n_{\text{tok,verify}}$ at $p_{\text{accept}} \to 0$. The framework's speculation-on default should be disabled or $n_{\text{tok,draft}}$ reduced when sweeping into this regime.
+
+**Separate draft model (EAGLE / Medusa, not MTP).** The above derivation folds the draft cost into the verify pass under the assumption that drafts come from the target model itself (MTP). For a separate draft model whose forward cost is a non-trivial fraction of the verify step, add the draft latency as a serial term: $t_{\text{step}}^{\text{spec,sep}}(B) = t_{\text{draft}}(B) + t_{\text{step,user}}^{\text{verify}}(B)$. EAGLE's draft is $\approx$10% of the target verify cost; Medusa's parallel heads add a small constant per head. We omit a detailed draft-model roofline here — the cost is workload-specific and best calibrated rather than derived.
+
+**Acceptance-rate calibration.** $p_{\text{accept}}$ is **not** a per-architecture constant — it depends on the model, the draft method, the temperature, the corpus, and the position in the sequence. Reported empirical values at temperature 0: MTP on DSv3 ≈ 0.85–0.90 per-token at draft depth 1 [DSV3]; EAGLE on Llama-3 70B ≈ 0.75–0.85 at depth 4 [EAGLE]; Medusa-2 on Vicuna-13B ≈ 0.6–0.7 across heads [MEDUSA]. The framework treats $p_{\text{accept}}$ as a tuning knob to be measured on the target deployment.
+
+**Symbol summary (added by this section).**
+
+| Symbol | Definition | Where introduced |
+|--------|-----------|------------------|
+| $n_{\text{tok,draft}}$ | Number of draft tokens proposed per verify step. | §9 |
+| $n_{\text{tok,verify}}$ | $n_{\text{tok,draft}} + 1$; tokens evaluated per verify step per sequence. | §9.1 |
+| $p_{\text{accept}}$ | Per-token draft acceptance probability ∈ [0, 1]. | §9 |
+| $\mathbb{E}[N_{\text{accept,draft}}]$ | Expected accepted draft tokens per step (truncated geometric). | §9.2 |
+| $N_{\text{tok/step}}$ | Total expected accepted tokens per verify step (1 + $\mathbb{E}[N_{\text{accept,draft}}]$). | §9.2 |
+| $t_{\text{compute}}^{\text{verify}}(B)$, $t_{\text{mem}}^{\text{verify}}(B)$, $t_{\text{local}}^{\text{verify}}(B)$ | Verify-step roofline components (§9.3). | §9.3 |
+| $t_{\text{comm}}^{\text{verify}}(B)$, $t_{\text{step,user}}^{\text{verify}}(B)$ | Verify-step communication budget and user-observed step time (§9.3). | §9.3 |
+| $\mathrm{TPOT_{spec}}(B)$ | Effective TPOT under speculative decoding (§9.4). | §9.4 |
+| $B^\star_{\text{spec}}$ | Verify-step compute-bound crossover batch (§9.4). | §9.4 |

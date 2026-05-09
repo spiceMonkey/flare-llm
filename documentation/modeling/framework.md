@@ -33,7 +33,7 @@ The table below catalogs the CPU / software-stack overhead terms, organized by t
 | Request scheduling / batch assembly | Serving | $t_{\text{sched}}$ | ~10–200 µs |
 | Response streaming / detokenization | Decode per-token | $t_{\text{detok}}$ | ~1–10 µs/token |
 
-> **Out of scope for this document.** Kernel-launch / CUDA-Graph dispatch overhead is folded into the per-stage HW model and lives in `decode.md §7.1` (the $t_{\text{stage,sw}}$ term, composed inside $t_{\text{step,user}}$). The LM head $H \to V$ projection plus the post-LM-head sampling kernel (softmax + optional top-$k$/top-$p$ + multinomial draw) are similarly GPU-side per-step work and are modeled inside the per-step HW roofline as the once-per-step $t_{\text{LM,hw}}$ term on the last PP stage (`decode.md §2.1 / §3 / §6.2 / §7.2`). Disaggregated KV transfer latency (an α–β network-fabric term) is derived in `prefill.md §6.4`. Memory-traffic calibration constants used by the decode traffic model live in `decode.md` (implemented in `core/decode_model.py`).
+> **Out of scope for this document.** Kernel-launch / CUDA-Graph dispatch overhead is folded into the per-stage HW model and lives in `decode.md §7.1` (the $t_{\text{stage,sw}}$ term, composed inside $t_{\text{step,user}}$). The LM head $H \to V$ projection plus the post-LM-head sampling kernel (softmax + optional top-$k$/top-$p$ + multinomial draw) are similarly GPU-side per-step work and are modeled inside the per-step HW roofline as the once-per-step $t_{\text{LM,hw}}$ term on the last PP stage (`decode.md §2.1 / §3 / §6.2 / §7.2`). Disaggregated KV transfer latency (an α–β network-fabric term) is derived in `prefill.md §6.4`. Memory-traffic calibration constants used by the decode traffic model live in `decode.md`.
 
 ---
 
