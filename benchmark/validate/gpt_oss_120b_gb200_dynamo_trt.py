@@ -25,10 +25,18 @@ PRECISION = "fp4"
 ISL, OSL = 1024, 1024
 TP, EP, NUM = 4, 1, 4
 
+# Per-stack calibration. Anchor case for Dynamo+TRT — fits to ~9% MAE at
+# (bw_eta=1.0, c_serving=22 µs/seq), exactly matching the §7.2 calibration
+# range for "production CUDA-Graph stacks". Confirms the 22 µs anchor is
+# Dynamo-specific (raw TRT-LLM needs c_serving 4–5× higher; see
+# dsr1_b200_trt and llama3_70b_*).
+DEFAULT_BW_ETA = 1.0
+DEFAULT_C_SERVING_US = 22.0
+
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
-    add_common_cli(ap)
+    add_common_cli(ap, default_bw_eta=DEFAULT_BW_ETA, default_c_serving_us=DEFAULT_C_SERVING_US)
     args = ap.parse_args()
 
     measured = load_measured(

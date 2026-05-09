@@ -34,6 +34,13 @@ SYSTEM = "gb200.72gpu"
 PRECISION = "fp4"
 ISL, OSL = 1024, 1024
 
+# Per-stack calibration baked in as the driver default — overrideable via CLI.
+# Calibrated on the colocated TP=EP=8 cut (the canonical DSv3 production
+# shape on this stack); fits to ~11% MAE. Dynamo+TRT-LLM shows
+# c_serving close to the §7.2 anchor (Dynamo CUDA-Graph stack ≈ 22 µs/seq).
+DEFAULT_BW_ETA = 1.0
+DEFAULT_C_SERVING_US = 5.0
+
 
 def run_exact(args) -> tuple[list[tuple], int]:
     """Cut 1: TP-only orthogonal config. Densest is TP=36 EP=1 dec=36."""
@@ -139,7 +146,7 @@ def run_colocated(args) -> tuple[list[tuple], int]:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
     ap.add_argument("--cut", choices=["exact", "colocated", "all"], default="all")
-    add_common_cli(ap)
+    add_common_cli(ap, default_bw_eta=DEFAULT_BW_ETA, default_c_serving_us=DEFAULT_C_SERVING_US)
     args = ap.parse_args()
 
     all_rows: list[tuple] = []

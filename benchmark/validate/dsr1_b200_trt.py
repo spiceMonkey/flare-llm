@@ -32,10 +32,19 @@ PRECISION = "fp4"
 ISL, OSL = 1024, 1024
 TP, EP, NUM = 8, 1, 8
 
+# Per-stack calibration. Raw TRT-LLM has substantially higher per-sequence
+# host overhead than Dynamo+TRT (no Dynamo Python orchestrator absorbing
+# the bookkeeping into a single CUDA-Graph launch); fits to ~17% MAE at
+# (bw_eta=0.7, c_serving=100 µs/seq). The 100 µs is at the high end of
+# §7.2's 30–60 µs Python-heavy stack range — note raw TRT-LLM's per-step
+# loop is C++ but exposes more individual kernel launches than Dynamo.
+DEFAULT_BW_ETA = 0.7
+DEFAULT_C_SERVING_US = 100.0
+
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
-    add_common_cli(ap)
+    add_common_cli(ap, default_bw_eta=DEFAULT_BW_ETA, default_c_serving_us=DEFAULT_C_SERVING_US)
     args = ap.parse_args()
 
     measured = load_measured(

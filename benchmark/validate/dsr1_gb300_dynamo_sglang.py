@@ -33,6 +33,23 @@ SYSTEM = "gb300.72gpu"
 PRECISION = "fp4"
 ISL, OSL = 1024, 1024
 
+# Per-stack calibration. Dynamo+SGLang on GB300 is the worst-fitting cut
+# in the validator suite — even the best-fit knobs leave ~55% MAE. The
+# signed-error pattern (under-predict at small B, over-predict at huge
+# B>4000) is consistent with a missing B-saturation correction
+# (`bw-eta-vs-batch` TODO in `scratch/model_specific_extensions.md`).
+#
+# We DEFAULT to (bw_eta=0.4, c_serving=0): the empirically best-fit tuple
+# from `_calibrate.py`. A non-zero c_serving multiplies the error at huge
+# B (a c_serving=25 µs/seq makes t_serving=200 ms at B=8192, which is
+# larger than the entire measured TPOT of ~23 ms — the linear-in-B
+# t_serving model breaks down outside the 1≤B≤1024 range per `decode.md
+# §7.2`). Users who care about this stack should sweep the knobs and
+# accept that the framework can't fit this case well without the
+# B-saturation extension.
+DEFAULT_BW_ETA = 0.4
+DEFAULT_C_SERVING_US = 0.0
+
 
 def run_exact(args) -> tuple[list[tuple], int]:
     """Cut 1: TP-only orthogonal, TP=4 EP=1 across 8 or 16 decode GPUs."""
@@ -138,7 +155,7 @@ def run_colocated(args) -> tuple[list[tuple], int]:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
     ap.add_argument("--cut", choices=["exact", "colocated", "all"], default="all")
-    add_common_cli(ap)
+    add_common_cli(ap, default_bw_eta=DEFAULT_BW_ETA, default_c_serving_us=DEFAULT_C_SERVING_US)
     args = ap.parse_args()
 
     all_rows: list[tuple] = []

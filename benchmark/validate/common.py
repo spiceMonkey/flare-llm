@@ -433,14 +433,36 @@ def plot_tpot_vs_B(
 # ────────────────────────────────────────────────────────────────────────────
 
 
-def add_common_cli(ap: argparse.ArgumentParser) -> None:
-    """Register the four CLI args every driver should support."""
-    ap.add_argument("--flops-eta", type=float, default=1.0,
-                    help="Discount factor on device.peak_flops_TF (sustained / nameplate). Default 1.0 (no derate).")
-    ap.add_argument("--bw-eta", type=float, default=1.0,
-                    help="Discount factor on every memory tier's bandwidth_GBps. Default 1.0 (no derate).")
-    ap.add_argument("--c-serving-us", type=float, default=0.0,
-                    help="Per-sequence serving runtime overhead c_serving (µs/seq). Default 0 (off).")
+def add_common_cli(
+    ap: argparse.ArgumentParser,
+    *,
+    default_flops_eta: float = 1.0,
+    default_bw_eta: float = 1.0,
+    default_c_serving_us: float = 0.0,
+) -> None:
+    """Register the standard CLI args every driver should support.
+
+    Drivers may override the *defaults* (not the surface) to bake in
+    per-stack calibration. The CLI arg names stay uniform so users can sweep
+    by overriding on the command line (e.g. `--bw-eta 1.0` to disable a
+    baked-in derate). The defaults reflect the per-(model, hardware,
+    framework) calibration that lands within reasonable MAE; running with
+    `--flops-eta 1.0 --bw-eta 1.0 --c-serving-us 0` reverts to the peak
+    roofline.
+
+    The c_serving knob is primarily framework-bound (serving stack: Python
+    interpreter weight, CUDA-Graph replay, fused vs Python sampling); see
+    `validate/README.md` for the framework × HW knob structure.
+    """
+    ap.add_argument("--flops-eta", type=float, default=default_flops_eta,
+                    help=f"Discount factor on device.peak_flops_TF (sustained / nameplate). "
+                         f"Driver default: {default_flops_eta}.")
+    ap.add_argument("--bw-eta", type=float, default=default_bw_eta,
+                    help=f"Discount factor on every memory tier's bandwidth_GBps. "
+                         f"Driver default: {default_bw_eta}.")
+    ap.add_argument("--c-serving-us", type=float, default=default_c_serving_us,
+                    help=f"Per-sequence serving runtime overhead c_serving (µs/seq). "
+                         f"Driver default: {default_c_serving_us}.")
     ap.add_argument("--out-dir", type=Path, default=DEFAULT_RESULTS_DIR,
                     help="Where to write plots (default: benchmark/results/).")
     ap.add_argument("--check", type=float, default=None, metavar="MAE_PCT",

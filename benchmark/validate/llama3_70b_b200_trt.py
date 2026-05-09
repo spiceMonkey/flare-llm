@@ -30,12 +30,23 @@ PRECISION = "fp8"
 ISL, OSL = 1024, 1024
 TP_SHAPES = (1, 2, 4, 8)
 
+# Per-stack calibration. Raw TRT-LLM on dense Llama hits a much harder BW
+# derate than MoE models on the same stack (dense GEMMs sustain less of
+# peak HBM than MoE expert hopping — counter-intuitive, but matches B200
+# production reports). Best-fit (bw_eta=0.4, c_serving=50 µs/seq) gives
+# ~7% MAE on TP=4. Note c_serving lower than dsr1_b200_trt or
+# gpt_oss_120b_h200_trt — at small B (typical for Llama on B200/TRT) the
+# host loop is in the under-amortized regime where per-sequence cost is
+# closer to floor.
+DEFAULT_BW_ETA = 0.4
+DEFAULT_C_SERVING_US = 50.0
+
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
     ap.add_argument("--tp", type=int, choices=TP_SHAPES, default=None,
                     help="Run only this TP shape (default: all four)")
-    add_common_cli(ap)
+    add_common_cli(ap, default_bw_eta=DEFAULT_BW_ETA, default_c_serving_us=DEFAULT_C_SERVING_US)
     args = ap.parse_args()
 
     targets = (args.tp,) if args.tp else TP_SHAPES

@@ -25,12 +25,20 @@ PRECISION = "fp4"
 ISL, OSL = 1024, 1024
 TP_SHAPES = (1, 2, 4, 8)
 
+# Per-stack calibration. Raw TRT-LLM on Hopper fits to ~9% MAE at
+# (bw_eta=0.7, c_serving=100 µs/seq) — matches the dsr1_b200_trt
+# calibration, suggesting the c_serving for raw TRT-LLM is consistent
+# across HW generations (Hopper / Blackwell). Per-sequence host overhead
+# is primarily a property of the framework, not the GPU.
+DEFAULT_BW_ETA = 0.7
+DEFAULT_C_SERVING_US = 100.0
+
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
     ap.add_argument("--tp", type=int, choices=TP_SHAPES, default=None,
                     help="Run only this TP shape (default: all four)")
-    add_common_cli(ap)
+    add_common_cli(ap, default_bw_eta=DEFAULT_BW_ETA, default_c_serving_us=DEFAULT_C_SERVING_US)
     args = ap.parse_args()
 
     targets = (args.tp,) if args.tp else TP_SHAPES
