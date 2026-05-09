@@ -171,3 +171,20 @@ class TuningSpec:
     n_tok_draft: int = 0
     p_accept: float = 0.0
 
+    # ── Per-sequence serving runtime overhead (decode.md §7.2) ─────────
+    # Host-side per-step work that scales with the active-sequence count B:
+    # PagedAttention block-table gather, continuous-batching scheduler
+    # decisions, per-sequence sampling (top-k/top-p/multinomial), token
+    # append + KV bookkeeping. Distinct from `kernel_launch_us` (per-kernel
+    # dispatch, near-constant in B) — this term is per-sequence per-step
+    # and grows linearly with B.
+    #
+    #   t_serving = t_serving_per_seq_us · B · 1e-6     [seconds]
+    #
+    # Added additively to t_step_user (no overlap; the host work sits on the
+    # critical path between consecutive forward passes). Default 0.0
+    # preserves the pre-extension behavior. Representative anchors:
+    # ~10 µs/seq for fused C++ stacks, ~20-30 µs/seq for production
+    # CUDA-Graph stacks, ~30-60 µs/seq for Python-heavy stacks.
+    t_serving_per_seq_us: float = 0.0
+
