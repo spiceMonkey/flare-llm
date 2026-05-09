@@ -35,6 +35,11 @@ from .primitives import (
     p2p_hop,
     assign_tier_per_axis,
     tier_at,
+    D_kv,
+    D_emb,
+    G_TP,
+    G_EP,
+    N_replica,
 )
 
 
@@ -136,10 +141,10 @@ def _t_SW_per_microbatch(
         return 0.0
     k_c = tuner.kernels_per_layer_compute
     k_coll = tuner.kernels_per_collective_call
-    n_TP_calls = tuner.n_TP_collectives if partition.TP > 1 else 0
+    n_TP_calls = tuner.n_TP_collectives if G_TP(partition) > 1 else 0
     # n_EP_collectives counts NCCL API calls directly (dispatch + combine
     # = 2 per MoE layer); each costs one single-direction A2A in dispatch.py.
-    n_EP_calls = tuner.n_EP_collectives if max(1, partition.EP) > 1 else 0
+    n_EP_calls = tuner.n_EP_collectives if G_EP(partition) > 1 else 0
     n_SP_calls = tuner.n_SP_collectives if partition.SP > 1 else 0
     PP = max(1, partition.PP)
     layers_per_stage = L / PP
@@ -203,7 +208,7 @@ class LatencyResults:
     B: int
     TPOT: float
     B_star: float
-    # Speculative-decoding extension (decode.md §9). When tuner.n_tok_draft = 0
+    # Speculative-decoding extension (decode.md §8). When tuner.n_tok_draft = 0
     # (vanilla decode, default), N_tok_per_step = 1.0 and TPOT_spec == TPOT.
     # When speculation is enabled, t_step_user_verify is the verify-step
     # latency (compute + comm scaled by n_tok_verify; t_mem ≈ unchanged) and
@@ -229,15 +234,14 @@ def compute_flops(
     L = model.L
     H = model.H
     PP = partition.PP
-    TP = partition.TP
     SP = partition.SP
     S = tuner.S_decode
     B = tuner.B_decode
 
     # Linear FLOPs per token (proj + FFN + MoE router)
     F_linear_per_token = linear_flops_per_token(model, partition)
-    # Decode attention: 4·S·H/(TP·SP) per token per layer
-    F_attn_per_token = (L / PP) * (4 * S * H) / (TP * SP)
+    # Decode attention: 4·S·H/(D_kv·SP) per token per layer
+    F_attn_per_token = (L / PP) * (4 * S * H) / (D_kv(partition) * SP)
 
     F_token_device = F_linear_per_token + F_attn_per_token
     F_layer_per_device = F_token_device / (L / PP) if L > 0 else 0.0
@@ -295,12 +299,16 @@ def compute_comm(
     H_kv = model.H_kv()
     L = model.L
     PP = partition.PP
-    TP = partition.TP
-    EP = max(1, partition.EP)
     SP = partition.SP
     S = tuner.S_decode
     B = max(1, tuner.B_decode)
     b = model.bytes_per_param
+
+    # Collective group sizes (notation.md §1; equal to TP and EP across all
+    # three production-relevant configurations, but threaded via helpers for
+    # consistency with the abstract divisor symbols D_kv / D_emb).
+    g_TP = G_TP(partition)
+    g_EP = G_EP(partition)
 
     n_TP = tuner.n_TP_collectives
     n_EP = tuner.n_EP_collectives
@@ -308,10 +316,10 @@ def compute_comm(
 
     if model.moe is not None:
         N_exp = max(1, model.moe.n_experts)
-        EP = min(EP, N_exp)
+        g_EP = min(g_EP, N_exp)
         k = model.moe.k_active
     else:
-        EP = 1
+        g_EP = 1
         k = 1
 
     # Decode reads the per-phase fields; falls back to legacy single-knob
@@ -337,7 +345,7 @@ def compute_comm(
             inc_enabled=inc_enabled,
         )
 
-    # PP: shard-preserving hop of B tokens × (H/TP) activation bytes.
+    # PP: shard-preserving hop of B tokens × (H/D_kv) activation bytes.
     # A single-stage pipeline has no inter-stage forward.
     #
     # Cost the hop at the *correct* fabric tier under nested-layout rule
@@ -346,8 +354,9 @@ def compute_comm(
     # under nested layout, PP boundaries can cross outer tiers (PCIe / IB)
     # when PP × inner-axes (TP, EP, SP) exceeds an inner tier's reach.
     # `assign_tier_per_axis` resolves the right tier per partition.
+    d_kv = D_kv(partition)
     if PP > 1:
-        msg_PP = B * (H / TP) * b
+        msg_PP = B * (H / d_kv) * b
         pp_tier_idx = assign_tier_per_axis(partition, system, role="PP")["PP"]
         pp_tier = tier_at(system, "PP", pp_tier_idx)
         bw_Bps = pp_tier.bw_per_port_GBps * 1e9
@@ -358,35 +367,36 @@ def compute_comm(
         t_PP = 0.0
 
     # EP: 2-pass all-to-all (Dispatch + Combine) over k·H activation bytes
-    if EP > 1:
+    if g_EP > 1:
         msg_EP = B * k * H * b
-        t_EP = _cost("EP", "moe_a2a", msg_EP, EP, alg=ep_algorithm)
+        t_EP = _cost("EP", "moe_a2a", msg_EP, g_EP, alg=ep_algorithm)
     else:
         t_EP = 0.0
         msg_EP = 0.0
 
     # TP: 2-pass all-reduce of B·H activation bytes
-    if TP > 1:
+    if g_TP > 1:
         msg_TP = B * H * b
-        t_TP = _cost("TP", "all_reduce", msg_TP, TP, alg=tp_algorithm)
+        t_TP = _cost("TP", "all_reduce", msg_TP, g_TP, alg=tp_algorithm)
     else:
         t_TP = 0.0
         msg_TP = 0.0
 
-    # DP-attention swap (decode.md §8.3): under attention_mode="dp", the
-    # per-layer attention TP all-reduce is replaced by a single TP all-gather
-    # at the attention → FFN transition. The FFN's TP all-reduce remains.
-    # Here we precompute the AG cost; the per-stage adjustment happens after
-    # aggregate_per_stage below.
-    if TP > 1 and getattr(partition, "attention_mode", "tp") == "dp":
-        t_TP_AG = _cost("TP", "all_gather", msg_TP, TP)
+    # DP-attention swap (decode.md §5.3 + notation.md §1 lookup): under
+    # attention_mode="dp", the per-layer attention TP all-reduce is replaced
+    # by a single TP all-gather at the attention → FFN transition. The FFN's
+    # TP all-reduce remains. Here we precompute the AG cost; the per-stage
+    # adjustment happens after aggregate_per_stage below.
+    if g_TP > 1 and partition.attention_mode == "dp":
+        t_TP_AG = _cost("TP", "all_gather", msg_TP, g_TP)
     else:
         t_TP_AG = 0.0
 
     # SP: 1-pass ring all-gather over the full KV (per-rank gathered
     # output convention — collective_cost.py §6 calls this "M = G·shard").
+    # KV head-or-seq divisor uses D_kv from notation.md §1.
     if SP > 1:
-        msg_SP = B * S * (2 * H_kv / TP) * b
+        msg_SP = B * S * (2 * H_kv / d_kv) * b
         t_SP = _cost("SP", "all_gather", msg_SP, SP)
     else:
         t_SP = 0.0
@@ -405,7 +415,7 @@ def compute_comm(
         t_PP=t_PP,
     )
 
-    # DP-attention adjustment (decode.md §8.3): one of the n_TP per-layer
+    # DP-attention adjustment (decode.md §5.3 + §5.5): one of the n_TP per-layer
     # all-reduces is the attention output AR — under attention_mode="dp",
     # replace it with the (cheaper) AG. Saving per layer = (t_TP_AR − t_TP_AG);
     # applied across L/PP layers per stage.
@@ -518,17 +528,18 @@ def compute_latency(
     BW_top = tiers[0].bandwidth_GBps * tiers[0].eta_beta * GB_TO_BYTES
 
     # LM head one-shot on stage PP-1 (decode.md §6.2 / §7.2):
-    #   F_LM,step = 2·B·H·V / TP
-    #   T_LM,step = HVb/TP (weights, sharded by TP) + B·V·b (logits output, replicated)
+    #   F_LM,step = 2·B·H·V / D_emb
+    #   T_LM,step = HVb/D_emb (weights, sharded by D_emb) + B·V·b (logits, replicated)
     #   t_LM = max(F_LM/R_gpu, T_LM/BW_top)
     # Added outside γ_pp because the LM head fires once per step regardless of
-    # bubble depth (it is not pipelined across PP stages).
+    # bubble depth (it is not pipelined across PP stages). D_emb = TP across all
+    # three layout/attention-mode configurations (notation.md §1).
     V = model.vocab_size
-    TP = max(1, partition.TP)
+    d_emb = D_emb(partition)
     b = model.bytes_per_param
     B_eff = max(1, B)
-    F_lm = 2.0 * B_eff * model.H * V / TP
-    T_lm = (model.H * V * b) / TP + B_eff * V * b
+    F_lm = 2.0 * B_eff * model.H * V / d_emb
+    T_lm = (model.H * V * b) / d_emb + B_eff * V * b
     t_lm_compute = F_lm / R_gpu if R_gpu > 0 else 0.0
     t_lm_mem = T_lm / BW_top if BW_top > 0 else 0.0
     t_LM = max(t_lm_compute, t_lm_mem)
@@ -543,7 +554,10 @@ def compute_latency(
 
     TPS_single = B / t_step_user if t_step_user > 0 else 0.0
 
-    replica_size = partition.PP * partition.TP * max(1, partition.EP) * partition.SP
+    # Replica size depends on layout (notation.md §1): orthogonal uses the full
+    # product PP·TP·EP·SP; co-located uses PP·max(TP,EP)·SP since TP and EP
+    # share the same physical GPU set.
+    replica_size = N_replica(partition)
     DP = system.num_devices // replica_size
     TTPS = DP * TPS_single
 
@@ -554,9 +568,9 @@ def compute_latency(
     denom = flops.F_token_device * BW_top - traffic.T_kv * R_gpu
     B_star = (traffic.T_theta * R_gpu / denom) if denom > 0 else float("inf")
 
-    # Speculative-decoding extension (decode.md §9). Compose verify-step
+    # Speculative-decoding extension (decode.md §8). Compose verify-step
     # quantities by scaling compute and comm payloads by n_tok_verify;
-    # weight traffic and KV traffic stay invariant (decode.md §9.3). When
+    # weight traffic and KV traffic stay invariant (decode.md §8.3). When
     # n_tok_draft = 0, the verify quantities reduce to the vanilla ones.
     n_tok_draft = max(0, tuner.n_tok_draft)
     p_accept = max(0.0, min(1.0, tuner.p_accept))
@@ -575,7 +589,7 @@ def compute_latency(
 
     if n_tok_verify > 1:
         # Verify-step roofline: compute scales by n_tok_verify, memory
-        # invariant (FlashAttention batched-Q assumption; decode.md §9.3).
+        # invariant (FlashAttention batched-Q assumption; decode.md §8.3).
         t_compute_verify_eff = t_compute_eff * n_tok_verify
         t_local_verify = max(t_compute_verify_eff, t_mem)
         # Communication payload scales linearly with n_tok_verify; α-side
@@ -586,7 +600,7 @@ def compute_latency(
         t_stage_verify = t_local_verify + max(0.0, t_comm_verify - rho * t_local_verify)
         t_stage_with_SW_verify = t_stage_verify + max(0.0, t_SW - rho_SW * t_stage_verify)
         # LM head: compute scales by n_tok_verify (one logits projection
-        # per query token), memory invariant. Per decode.md §9.3 this is
+        # per query token), memory invariant. Per decode.md §8.3 this is
         # max(...) of the two — at typical FP4 vocab sizes the LM head
         # often stays memory-bound through small B even under speculation.
         t_lm_compute_verify = t_lm_compute * n_tok_verify

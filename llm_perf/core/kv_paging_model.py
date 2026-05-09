@@ -7,6 +7,7 @@ from ..specs.partition_spec import PartitionSpec
 from ..specs.tuner_spec import TuningSpec
 from ..utils import GB_TO_BYTES
 from .memory_model import MemoryResults
+from .primitives import D_kv
 
 
 @dataclass
@@ -42,13 +43,16 @@ def compute_kv_paging(
     b = model.bytes_per_param
     S = tuner.S_decode
     PP = partition.PP
-    TP = partition.TP
     SP = partition.SP
+
+    # KV head/seq divisor (notation.md §1) — TP under orthogonal layout,
+    # max(TP, EP) under co-located. Composes with SP for per-device KV bytes.
+    d_kv = D_kv(partition)
 
     block_size = paging.block_size
 
-    # Per-block KV footprint: block_size tokens × 2 (K+V) × H_kv × b × (L/PP) / (TP*SP)
-    M_block = block_size * 2 * H_kv * b * (L / PP) / (TP * SP)
+    # Per-block KV footprint: block_size tokens × 2 (K+V) × H_kv × b × (L/PP) / (D_kv*SP)
+    M_block = block_size * 2 * H_kv * b * (L / PP) / (d_kv * SP)
 
     # Blocks per sequence
     N_blocks_per_seq = math.ceil(S / block_size)
@@ -67,7 +71,7 @@ def compute_kv_paging(
     max_sequences = int(M_HBM_KV_avail / M_per_seq) if M_per_seq > 0 else 0
 
     # Max context length for a single sequence (with paging fragmentation)
-    M_per_token_kv = 2 * H_kv * b * (L / PP) / (TP * SP)
+    M_per_token_kv = 2 * H_kv * b * (L / PP) / (d_kv * SP)
     S_max = M_HBM_KV_avail / (M_per_token_kv * phi_avg) if M_per_token_kv > 0 else 0.0
 
     return KVPagingResults(
