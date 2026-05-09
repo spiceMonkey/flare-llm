@@ -1,0 +1,57 @@
+{
+  "api_base": "https://inferencex.semianalysis.com/api/v1/benchmarks",
+  "attribution_required": true,
+  "fetched_at_utc": "2026-05-09T21:26:04.071170+00:00",
+  "license": "Apache-2.0 (see LICENSE)",
+  "models": [
+    {
+      "flat_path": "data/flat/DeepSeek-R1-0528.csv",
+      "model": "DeepSeek-R1-0528",
+      "raw_path": "data/raw/DeepSeek-R1-0528.json",
+      "rows": 1737
+    },
+    {
+      "flat_path": "data/flat/DeepSeek-V4-Pro.csv",
+      "model": "DeepSeek-V4-Pro",
+      "raw_path": "data/raw/DeepSeek-V4-Pro.json",
+      "rows": 448
+    },
+    {
+      "flat_path": "data/flat/GLM-5.csv",
+      "model": "GLM-5",
+      "raw_path": "data/raw/GLM-5.json",
+      "rows": 248
+    },
+    {
+      "flat_path": "data/flat/Kimi-K2.5.csv",
+      "model": "Kimi-K2.5",
+      "raw_path": "data/raw/Kimi-K2.5.json",
+      "rows": 234
+    },
+    {
+      "flat_path": "data/flat/Llama-3.3-70B-Instruct-FP8.csv",
+      "model": "Llama-3.3-70B-Instruct-FP8",
+      "raw_path": "data/raw/Llama-3.3-70B-Instruct-FP8.json",
+      "rows": 681
+    },
+    {
+      "flat_path": "data/flat/MiniMax-M2.5.csv",
+      "model": "MiniMax-M2.5",
+      "raw_path": "data/raw/MiniMax-M2.5.json",
+      "rows": 525
+    },
+    {
+      "flat_path": "data/flat/Qwen-3.5-397B-A17B.csv",
+      "model": "Qwen-3.5-397B-A17B",
+      "raw_path": "data/raw/Qwen-3.5-397B-A17B.json",
+      "rows": 462
+    },
+    {
+      "flat_path": "data/flat/gpt-oss-120b.csv",
+      "model": "gpt-oss-120b",
+      "raw_path": "data/raw/gpt-oss-120b.json",
+      "rows": 617
+    }
+  ],
+  "total_rows": 4952
+}

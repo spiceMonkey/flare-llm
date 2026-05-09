@@ -1,0 +1,31 @@
+InferenceX™ benchmark data — attribution and provenance
+
+The benchmark rows under `data/` are sourced from InferenceX™ (formerly
+InferenceMAX), an open-source continuous-inference benchmark platform
+maintained by SemiAnalysis LLC.
+
+  Source repository: https://github.com/SemiAnalysisAI/InferenceX
+  Live dashboard:    https://inferencex.com/
+  Public API:        https://inferencex.semianalysis.com/api/v1/benchmarks
+  License:           Apache License 2.0 (see LICENSE in this directory)
+  Copyright:         Copyright 2026 SemiAnalysis LLC
+
+Per Apache 2.0 §4 attribution requirement and the upstream's explicit
+attribution policy, any work derived from this data must:
+
+  1. Preserve the LICENSE and this NOTICE file with redistribution.
+  2. Cite InferenceX™ as the data source in publications and dashboards.
+  3. Use the official SemiAnalysisAI/InferenceX repo as the canonical
+     reference; explicitly label any third-party reproductions as
+     "Unofficial" if not from the upstream repo.
+
+This subdirectory of llm_perf vendors a snapshot of the public API for
+offline analysis. The snapshot is regenerated from upstream via
+`fetch.py`. No InferenceX source code is vendored here — only the
+publicly published benchmark measurement rows. Snapshots are not edited
+in place; if InferenceX corrects or backfills a measurement, re-run
+`fetch.py` to refresh.
+
+Local-only adapters (model-spec mappings, comparison scripts) live
+elsewhere in the llm_perf tree (e.g., `sandbox/`) and are not part of
+the InferenceX dataset.
