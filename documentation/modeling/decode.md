@@ -46,9 +46,10 @@ LLM inference, Transformer, parallelism, tensor parallelism, expert parallelism,
   - [6.1 Model Partition Strategy from HBM Constraints](#61-model-partition-strategy-from-hbm-constraints)
   - [6.2 Local and Networking Per-Token Latency](#62-local-and-networking-per-token-latency)
 
-- [7. Kernel-Launch Overhead, Pipeline Bubble, and Throughput](#7-kernel-launch-overhead-pipeline-bubble-and-throughput)
+- [7. Host-Side Overheads and Throughput](#7-host-side-overheads-and-throughput)
   - [7.1 Kernel-launch overhead](#71-kernel-launch-overhead)
-  - [7.2 User-observed step time and throughput](#72-user-observed-step-time-and-throughput)
+  - [7.2 Per-sequence serving runtime overhead](#72-per-sequence-serving-runtime-overhead)
+  - [7.3 User-observed step time and throughput](#73-user-observed-step-time-and-throughput)
 
 - [8. Attention Parallelism Modes (TP-attention vs DP-attention)](#8-attention-parallelism-modes-tp-attention-vs-dp-attention)
   - [8.1 The two modes](#81-the-two-modes)
@@ -1658,19 +1659,20 @@ Because the LM head lives on stage $PP{-}1$ only (not divided by $PP$, $EP$, or 
 
 <div style="page-break-before: always;"></div>
 
-# 7. Kernel-Launch Overhead and Throughput
+# 7. Host-Side Overheads and Throughput
 
 §6.2 produced $t_{\text{stage,hw}}(B)$ (per-stage body) and $t_{\text{LM,hw}}(B)$ (one-shot LM head on stage $PP{-}1$) — the **hardware-intrinsic** per-step time pieces at batch size $B$, the lower bound set by tensor-core compute, HBM bandwidth, and on-/off-chip interconnect. Two derived quantities follow directly from them:
 
-- **Per-replica throughput bottleneck** $\max_j t_{\text{stage,hw},j}(B) + t_{\text{LM,hw}}(B)$ — sets the steady-state output rate (tokens/s per replica): once the pipeline is full, the bottleneck stage (always $PP{-}1$ under uniform body) finishes a step every $t_{\text{stage,hw}}(B) + t_{\text{LM,hw}}(B)$ seconds, so the user-observed token rate is gated by the slowest stage. This is the quantity that drives **TPS** in §7.2.
+- **Per-replica throughput bottleneck** $\max_j t_{\text{stage,hw},j}(B) + t_{\text{LM,hw}}(B)$ — sets the steady-state output rate (tokens/s per replica): once the pipeline is full, the bottleneck stage (always $PP{-}1$ under uniform body) finishes a step every $t_{\text{stage,hw}}(B) + t_{\text{LM,hw}}(B)$ seconds, so the user-observed token rate is gated by the slowest stage. This is the quantity that drives **TPS** in §7.3.
 - **Pipeline traversal time** $\sum_{j=1}^{PP} t_{\text{stage,hw},j}(B) + t_{\text{LM,hw}}(B)$ — the cost a token pays to walk all $PP$ stages once and then through the LM head. The *first* token of any sequence always pays this (the pipeline starts empty before prefill), so it is the primary HW-side contribution to **TTFT** (covered in prefill.md); subsequent decode steps pay only the bottleneck-stage cost once the pipeline is filled.
 
-A real serving step does not run at this lower bound. Two SW/framework costs accrue on every token generation step on top of $t_{\text{stage,hw}}(B)$:
+A real serving step does not run at this lower bound. Three additional costs accrue on every token generation step on top of $t_{\text{stage,hw}}(B)$ — the first two are **host-side overheads** (CPU work and command-processor dispatch sitting outside the GPU pipeline), the third is a scheduling inefficiency:
 
-1. **Kernel-launch overhead** — the host-CPU dispatch budget for the layer + collective + PP-hop kernels that fire each microbatch. Whether this is hidden by GPU work or surfaces as a hard floor depends on how well async dispatch overlaps with the GPU. §7.1 derives this as $t_{\text{stage,sw}}$ — same per-step per-stage units as $t_{\text{stage,hw}}$, so the two compose into one effective per-stage cost. Note that $t_{\text{stage,sw}}$ is **independent of $B$** — kernel launches pay $\tau_{\text{launch}}$ once per launch event, regardless of payload.
-2. **Pipeline bubble** when the pipeline is underfilled — a scheduling-driven inefficiency that scales with $PP/B$ when $B < PP$. The bubble factor $\gamma_{\text{pp}}$ is a **global multiplier** on whatever per-stage cost dominates the round (HW or SW), so it sits *outside* the HW/SW composition rather than as a per-axis correction.
+1. **Kernel-launch overhead** (per microbatch, ~constant in $B$) — the host-side dispatch budget for the layer + collective + PP-hop kernels that fire each microbatch. Each kernel launch pays a fixed $\tau_{\text{launch}}$ regardless of payload size, so the term scales with kernel count, not with $B$. Whether it is hidden by GPU work or surfaces as a hard floor depends on async dispatch overlap. §7.1 derives this as $t_{\text{stage,sw}}$ in the same per-step per-stage units as $t_{\text{stage,hw}}$.
+2. **Per-sequence serving runtime overhead** (per sequence, linear in $B$) — host-side bookkeeping the runtime must perform once per active sequence per step: PagedAttention block-table assembly, continuous-batching scheduler decisions, sampling glue, token-append. The term scales as $O(B)$ and sits on the critical path of every step (it cannot overlap with GPU work). §7.2 derives this as $t_{\text{serving}}(B)$.
+3. **Pipeline bubble** when the pipeline is underfilled — a scheduling-driven inefficiency that scales with $PP/B$ when $B < PP$. The bubble factor $\gamma_{\text{pp}}$ is a **global multiplier** on whatever per-stage body cost dominates the round, so it sits *outside* the per-axis composition rather than as a per-axis correction.
 
-§7.2 assembles $t_{\text{stage,hw}}(B)$, $t_{\text{stage,sw}}$, and $\gamma_{\text{pp}}$ into the user-observed step time $t_{\text{step,user}}(B)$ and the throughput metrics TPS / TTPS.
+The two host-side overheads are distinct in three ways: scaling with $B$ (constant vs linear), where the cost is paid (per microbatch dispatch vs once-per-step head-node bookkeeping), and whether they can overlap with GPU work (yes, partially, for kernel-launch via CUDA Graphs / async pipelining; no, not for serving runtime work since it sits between consecutive forward passes). §7.3 assembles $t_{\text{stage,hw}}(B)$, $t_{\text{stage,sw}}$, $t_{\text{serving}}(B)$, and $\gamma_{\text{pp}}$ into the user-observed step time $t_{\text{step,user}}(B)$ and the throughput metrics TPS / TTPS.
 
 ## 7.1 Kernel-launch overhead
 
@@ -1692,27 +1694,59 @@ $t_{\text{stage,sw}}$ is composed with the GPU-side $t_{\text{stage,hw}}$ via th
 
 A separate Tensor Core efficiency term $\eta_{\text{TC}}(\text{mb})$ derates the compute roofline at small microbatch; with the default $\eta_{\text{TC}} = 1$ (no curve set in the tuner) this term is a no-op.
 
-## 7.2 User-observed step time and throughput
+## 7.2 Per-sequence serving runtime overhead
+
+The kernel-launch budget of §7.1 captures the cost of getting one microbatch's worth of GPU kernels dispatched. A separate class of host-side overhead is **per active sequence** rather than per microbatch: work the runtime must perform once for each of the $B$ in-flight sequences on every decode step, regardless of payload size. Production inference serving stacks (vLLM, TensorRT-LLM, SGLang, NVIDIA Dynamo) all incur this overhead [VLLM, ORCA, DYNAMO]; four components dominate it:
+
+- **Block-table gather and metadata marshaling.** PagedAttention stores each sequence's key-value (KV) cache as a list of fixed-size blocks; on every step the runtime assembles the per-sequence block table (one indirection per active sequence) and ships it to the attention kernel as a metadata buffer. The per-sequence cost is small but unavoidable, and the total scales as $O(B)$.
+- **Continuous-batching scheduler decisions.** Iteration-level scheduling (the ORCA / vLLM design [ORCA]) re-evaluates the active set on every step: admit any newly arrived request that fits, evict any sequence that just finished, decide whether prefills can piggyback this step. The decision logic is per-sequence and runs on the CPU between two consecutive forward passes.
+- **Per-sequence sampling glue.** Greedy / top-$k$ / top-$p$ / multinomial sampling runs one decision per sequence per step. The logits-softmax-then-sample kernel itself is GPU-side and is absorbed into $t_{\text{LM,hw}}(B)$, but the host wraps each sampling decision in per-sequence Python / C++ glue (penalty application, stop-token checks, output-token append, end-of-sequence (EOS) / stop-string detection) that is genuinely $O(B)$ on the CPU.
+- **Token-append and KV-write bookkeeping.** Append the newly sampled token to the per-sequence output buffer, advance the per-sequence position counter, allocate a new block on overflow, write the block-table update — one bookkeeping pass per active sequence per step.
+
+This per-sequence work is distinct from two other overheads tracked elsewhere:
+
+- The kernel-launch dispatch budget $t_{\text{stage,sw}}$ from §7.1 is **per microbatch per stage** and is essentially independent of $B$. Each NCCL or `cudaLaunchKernel` event fires once per layer regardless of the per-call payload; the per-event cost models GPU-command-processor latency or eager-mode CPU API time, not host-side per-sequence work.
+- The per-request scheduler latency $t_{\text{sched}}$ tracked in framework.md §1 fires **once per request** when the request enters the system, not on every decode step. The bookkeeping captured here is the recurring delta on top of $t_{\text{sched}}$ that fires every step the request remains active.
+
+Because the four components above are each per-sequence inner loops on the CPU, the aggregate cost is modeled as linear in $B$ with a single per-sequence calibration constant $c_{\mathrm{serving}}$:
+
+$$
+t_{\text{serving}}(B) = c_{\mathrm{serving}} \cdot B
+$$
+
+with units of seconds per sequence per step (the framework parameterizes $c_{\mathrm{serving}}$ in microseconds for ergonomics). A more elaborate non-linear form (piecewise-linear in $B$ to capture cache-line effects in the block-table gather, $B \log B$ from per-step sorting) is possible but unnecessary for the typical 1 ≤ $B$ ≤ 1024 operating range; the linear fit captures the dominant scaling for all four components.
+
+Unlike $t_{\text{stage,sw}}$ — which can hide behind the previous step's GPU work via CUDA-Graph replay or eager pipelining — the serving runtime work sits on the **critical path** of every step. Block tables must be built before the attention kernel needs them; sampling and token-append must finish before the next step's input embeddings can be assembled. The term is therefore composed **additively** with the GPU-side step cost (no overlap), and it sits **outside** the pipeline-bubble multiplier $\gamma_{\text{pp}}$ since it fires once per step on the head node regardless of how the body is pipelined across stages.
+
+$c_{\mathrm{serving}}$ is a **stack-dependent** calibration constant — it captures the constant factor in the per-sequence inner loop, which differs across serving frameworks (Python-heavy vs C++/CUDA-Graph-heavy), runtime configurations (eager mode vs CUDA Graphs, Python sampling vs fused-CUDA sampling), and PagedAttention block sizes. Treating it as a tuning knob avoids hard-coding a number that would be wrong for any specific deployment. Representative ranges from published serving-stack characterizations:
+
+- **Aggressively fused C++ stacks** (TensorRT-LLM with fused sampling): lower bound ≈ 10 µs/seq, achievable when the sampling kernel fuses penalty application + multinomial draw + token-append in a single CUDA invocation per batch.
+- **Production CUDA-Graph stacks** (TensorRT-LLM, NVIDIA Dynamo): typically ≈ 20–30 µs/seq.
+- **Python-heavy stacks** (vLLM, SGLang in eager mode): ≈ 30–60 µs/seq, dominated by the Python interpreter wrapping the per-sequence sampling decision; CUDA-Graph replay does not help because the CPU work is **between** graph launches.
+
+When $c_{\mathrm{serving}} = 0$ (the default), $t_{\text{serving}}(B) = 0$ and the §7.3 user-observed step time recovers the pre-extension formula exactly — the term is opt-in and does not change predictions for callers who have not calibrated it.
+
+## 7.3 User-observed step time and throughput
 
 ### Saturated step time (no bubble)
 
-When the pipeline is **fully saturated** ($B \ge PP$), every stage holds a different microbatch on every step and all $PP$ stages run in parallel. The user-observed step time then collapses to the slowest per-stage cost — the assembled HW + SW cost on the bottleneck stage, plus the LM head surcharge on stage $PP{-}1$, with no bubble penalty.
+When the pipeline is **fully saturated** ($B \ge PP$), every stage holds a different microbatch on every step and all $PP$ stages run in parallel. The user-observed step time then collapses to the slowest per-stage cost — the assembled HW + kernel-launch cost on the bottleneck stage, plus the LM head surcharge on stage $PP{-}1$ and the per-sequence serving overhead on the head node, with no bubble penalty.
 
-Composing $t_{\text{stage,hw}}(B)$ (§6.2) and $t_{\text{stage,sw}}$ (§7.1) follows the same overlap pattern as the compute/comm overlap in §6.2: GPU work runs as the base, host dispatch overlaps for a fraction $\rho_{\text{SW}}$ of it, and any unhidden remainder serializes after. The LM head term $t_{\text{LM,hw}}(B)$ from §6.2 then adds on top, since it fires once per step on stage $PP{-}1$ and is not hidden by the body roofline:
+Composing $t_{\text{stage,hw}}(B)$ (§6.2) and $t_{\text{stage,sw}}$ (§7.1) follows the same overlap pattern as the compute/comm overlap in §6.2: GPU work runs as the base, host dispatch overlaps for a fraction $\rho_{\text{SW}}$ of it, and any unhidden remainder serializes after. The LM head term $t_{\text{LM,hw}}(B)$ from §6.2 and the per-sequence serving overhead $t_{\text{serving}}(B)$ from §7.2 then add on top — neither is hidden by the body roofline (the LM head fires once per step on the bottleneck stage; serving runtime work is on the critical path between consecutive forward passes):
 
 $$
-t_{\text{step,user}}^{\text{sat}}(B) = t_{\text{stage,hw}}(B) + \max\!\bigl(0,\; t_{\text{stage,sw}} - \rho_{\text{SW}} \cdot t_{\text{stage,hw}}(B)\bigr) + t_{\text{LM,hw}}(B)
+t_{\text{step,user}}^{\text{sat}}(B) = t_{\text{stage,hw}}(B) + \max\!\bigl(0,\; t_{\text{stage,sw}} - \rho_{\text{SW}} \cdot t_{\text{stage,hw}}(B)\bigr) + t_{\text{LM,hw}}(B) + t_{\text{serving}}(B)
 $$
 
-Under the uniform-stage assumption (all $PP$ stages have identical body cost), the bottleneck stage is $PP{-}1$ and the additive $t_{\text{LM,hw}}(B)$ exactly captures its extra workload. For $PP = 1$, this also collapses to "single-stage body + LM head".
+Under the uniform-stage assumption (all $PP$ stages have identical body cost), the bottleneck stage is $PP{-}1$ and the additive $t_{\text{LM,hw}}(B)$ exactly captures its extra workload. For $PP = 1$, this also collapses to "single-stage body + LM head + serving overhead".
 
 **Regimes (assuming $\rho_{\text{SW}} = 1$, the default):**
 
-- $t_{\text{stage,hw}}(B) \ge t_{\text{stage,sw}}$: the overflow term is 0, $t_{\text{step,user}}^{\text{sat}}(B) = t_{\text{stage,hw}}(B) + t_{\text{LM,hw}}(B)$ (HW-bound — async dispatch fully hidden by GPU work). This is the typical regime for moderate-to-large $B$ on production stacks.
-- $t_{\text{stage,hw}}(B) < t_{\text{stage,sw}}$: $t_{\text{step,user}}^{\text{sat}}(B) = t_{\text{stage,sw}} + t_{\text{LM,hw}}(B)$ (SW-bound on the body — CPU cannot feed the GPU or kernel cannot run fast enough; common at small $B$ on dense decode where $t_{\text{stage,hw}}(B)$ shrinks below the fixed launch budget).
-- $\rho_{\text{SW}} = 0$: no overlap, costs add: $t_{\text{step,user}}^{\text{sat}}(B) = t_{\text{stage,hw}}(B) + t_{\text{stage,sw}} + t_{\text{LM,hw}}(B)$.
+- $t_{\text{stage,hw}}(B) \ge t_{\text{stage,sw}}$: the kernel-launch overflow term is 0, $t_{\text{step,user}}^{\text{sat}}(B) = t_{\text{stage,hw}}(B) + t_{\text{LM,hw}}(B) + t_{\text{serving}}(B)$ (HW-bound on the body — async dispatch fully hidden by GPU work). This is the typical regime for moderate-to-large $B$ on production stacks.
+- $t_{\text{stage,hw}}(B) < t_{\text{stage,sw}}$: $t_{\text{step,user}}^{\text{sat}}(B) = t_{\text{stage,sw}} + t_{\text{LM,hw}}(B) + t_{\text{serving}}(B)$ (kernel-launch-bound on the body — CPU cannot feed the GPU or per-microbatch dispatch dominates; common at small $B$ on dense decode where $t_{\text{stage,hw}}(B)$ shrinks below the fixed launch budget).
+- $\rho_{\text{SW}} = 0$: no kernel-launch overlap, costs add: $t_{\text{step,user}}^{\text{sat}}(B) = t_{\text{stage,hw}}(B) + t_{\text{stage,sw}} + t_{\text{LM,hw}}(B) + t_{\text{serving}}(B)$.
 
-When $t_{\text{stage,sw}} = 0$ this is just $t_{\text{stage,hw}}(B) + t_{\text{LM,hw}}(B)$ (legacy roofline behavior plus the LM-head term).
+In all three regimes $t_{\text{serving}}(B)$ is additive — it sits on the critical path and never overlaps with the body. When $t_{\text{stage,sw}} = 0$ and $c_{\mathrm{serving}} = 0$ (host-overhead-free roofline) this collapses to $t_{\text{stage,hw}}(B) + t_{\text{LM,hw}}(B)$.
 
 ### Pipeline bubble correction
 
@@ -1729,13 +1763,13 @@ $$
 \gamma_{\text{pp}} = \max\left(1,\; \frac{PP}{B}\right)
 $$
 
-At $B \ge PP$, $\gamma_{\text{pp}} = 1$ and the bubble vanishes. At $B = 1, PP > 1$ it equals $PP$. At $B = 1, PP = 1$ it also reduces to unity, recovering the non-pipelined decode model. Because $\gamma_{\text{pp}}$ scales the per-stage body costs (HW and SW) identically, it multiplies the body composition only; the LM head fires once per step on stage $PP{-}1$ regardless of bubble depth, so it is added outside $\gamma_{\text{pp}}$:
+At $B \ge PP$, $\gamma_{\text{pp}} = 1$ and the bubble vanishes. At $B = 1, PP > 1$ it equals $PP$. At $B = 1, PP = 1$ it also reduces to unity, recovering the non-pipelined decode model. Because $\gamma_{\text{pp}}$ scales the per-stage body costs (HW and kernel-launch) identically, it multiplies the body composition only; the LM head fires once per step on stage $PP{-}1$ regardless of bubble depth, and the per-sequence serving overhead fires once per step on the head node regardless of how the body is pipelined — both are added outside $\gamma_{\text{pp}}$:
 
 $$
-t_{\text{step,user}}(B) = \gamma_{\text{pp}} \cdot \bigl[ t_{\text{stage,hw}}(B) + \max\!\bigl(0,\; t_{\text{stage,sw}} - \rho_{\text{SW}} \cdot t_{\text{stage,hw}}(B)\bigr) \bigr] + t_{\text{LM,hw}}(B)
+t_{\text{step,user}}(B) = \gamma_{\text{pp}} \cdot \bigl[ t_{\text{stage,hw}}(B) + \max\!\bigl(0,\; t_{\text{stage,sw}} - \rho_{\text{SW}} \cdot t_{\text{stage,hw}}(B)\bigr) \bigr] + t_{\text{LM,hw}}(B) + t_{\text{serving}}(B)
 $$
 
-This is the full user-observed step time. At $B = 1, PP = 1$ with $t_{\text{stage,sw}} = 0$, it reduces to $t_{\text{stage,hw}}(1) + t_{\text{LM,hw}}(1)$ — single-stage body plus LM head, the non-pipelined decode model with a vocab projection at the end.
+This is the full user-observed step time. At $B = 1, PP = 1$ with $t_{\text{stage,sw}} = 0$ and $c_{\mathrm{serving}} = 0$, it reduces to $t_{\text{stage,hw}}(1) + t_{\text{LM,hw}}(1)$ — single-stage body plus LM head, the non-pipelined decode model with a vocab projection at the end and no host-side overheads.
 
 > **Speculative-decoding extension.** The TPOT identity $\text{TPOT}(B) = t_{\text{step,user}}(B)$ holds for vanilla decode (one accepted token per sequence per step). Under speculative decoding (MTP / EAGLE / Medusa) each step costs more (the verify pass evaluates $n_{\text{tok,verify}}$ tokens per sequence) but emits more output ($N_{\text{tok/step}}$ accepted tokens per sequence on average). The effective TPOT is $t_{\text{step,user}}^{\text{verify}}(B) / N_{\text{tok/step}}$ — derivation and regime analysis in §9.
 
@@ -1938,7 +1972,7 @@ The verify step runs the same model as vanilla decode but with $n_{\text{tok,ver
 - **Weight traffic is unchanged.** Weights load once per verify step, exactly as in vanilla decode: $T_{\theta,\text{device}}^{\text{verify}} = T_{\theta,\text{device}}$.
 - **KV-cache read traffic is approximately unchanged.** Each sequence's existing $S$-token KV is read once per layer per step regardless of how many query tokens piggyback on the read (FlashAttention's standard batched-Q kernel pattern). The draft tokens add at most $n_{\text{tok,draft}}$ positions to the per-sequence KV scan, which is negligible at $S \gg n_{\text{tok,draft}}$ — typical decode contexts have $S$ in the thousands and $n_{\text{tok,draft}}$ ≤ 5: $T_{\text{KV,device}}^{\text{verify}} \approx T_{\text{KV,device}}$.
 
-Threading these through the §6.2 / §7.2 composition, the verify-step compute time, memory time, and roofline are:
+Threading these through the §6.2 / §7.3 composition, the verify-step compute time, memory time, and roofline are:
 
 $$
 t_{\text{compute}}^{\text{verify}}(B) \;=\; n_{\text{tok,verify}} \cdot t_{\text{compute}}(B), \qquad
@@ -1959,10 +1993,10 @@ The α-side terms (per-collective startup latencies $(EP - 1)\alpha_{EP}$, $2(TP
 
 > **Composition with DP-attention.** When DP-attention mode (§8) and speculative decoding are both enabled — the DSv3 production configuration — the two extensions compose orthogonally: §8.3's AR → AG swap fires on every verify step, and the per-layer AG payload becomes $B \cdot n_{\text{tok,verify}} \cdot Hb / TP$ (the §8.3 expression scaled by $n_{\text{tok,verify}}$). All other §8 deltas (attention weight footprint, KV invariance, attention FLOPs invariance) carry through unchanged because they are independent of the per-step token count.
 
-The verify-step user-observed step time is then the §7.2 composition with the verify-step quantities substituted in:
+The verify-step user-observed step time is then the §7.3 composition with the verify-step quantities substituted in. The per-sequence serving overhead $t_{\text{serving}}(B)$ from §7.2 fires once per verify step (not once per accepted token) and is added before the $1 / N_{\text{tok/step}}$ amortization of §9.4:
 
 $$
-t_{\text{step,user}}^{\text{verify}}(B) \;=\; \gamma_{\text{pp}} \cdot \bigl[ t_{\text{stage,hw}}^{\text{verify}}(B) + \max(0, t_{\text{stage,sw}} - \rho_{\text{SW}} \cdot t_{\text{stage,hw}}^{\text{verify}}(B)) \bigr] + t_{\text{LM,hw}}^{\text{verify}}(B)
+t_{\text{step,user}}^{\text{verify}}(B) \;=\; \gamma_{\text{pp}} \cdot \bigl[ t_{\text{stage,hw}}^{\text{verify}}(B) + \max(0, t_{\text{stage,sw}} - \rho_{\text{SW}} \cdot t_{\text{stage,hw}}^{\text{verify}}(B)) \bigr] + t_{\text{LM,hw}}^{\text{verify}}(B) + t_{\text{serving}}(B)
 $$
 
 where the verify-step LM head follows the same roofline-of-compute-and-memory shape as elsewhere in the model — its compute scales linearly with $n_{\text{tok,verify}}$ (each verify-step query needs its own logits to compare against the draft) but the $V \times H$ projection matrix loads once per step regardless of query count:

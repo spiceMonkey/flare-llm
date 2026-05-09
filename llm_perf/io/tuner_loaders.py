@@ -186,6 +186,9 @@ def tuning_spec_from_json_dict(cfg: Dict[str, Any]) -> TuningSpec:
         kernel_launch_us=float(cfg.get("kernel_launch_us", _defaults.kernel_launch_us)),
         sw_overlap_factor=float(cfg.get("sw_overlap_factor", _defaults.sw_overlap_factor)),
         tensor_core_efficiency=eta_TC if eta_TC is not None else _defaults.tensor_core_efficiency,
+        n_tok_draft=int(cfg.get("n_tok_draft", _defaults.n_tok_draft)),
+        p_accept=float(cfg.get("p_accept", _defaults.p_accept)),
+        t_serving_per_seq_us=float(cfg.get("t_serving_per_seq_us", _defaults.t_serving_per_seq_us)),
     )
 
 

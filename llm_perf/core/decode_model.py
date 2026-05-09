@@ -211,6 +211,9 @@ class LatencyResults:
     N_tok_per_step: float = 1.0
     t_step_user_verify: float = 0.0
     TPOT_spec: float = 0.0
+    # Per-sequence serving runtime overhead (decode.md §7.2). Linear in B,
+    # additive (no overlap). Zero when tuner.t_serving_per_seq_us == 0.
+    t_serving: float = 0.0
 
 
 # ────────────────────────────────────────────────────────────
@@ -440,13 +443,15 @@ def compute_latency(
     The per-stage roofline gives the cost of one pipeline stage processing
     the current batch. For a user observing inter-token latency we apply a
     pipeline-bubble correction when B < PP:
-        t_step_user = max(t_stage_GPU, t_SW) · max(1, PP / B).
+        t_step_user = max(t_stage_GPU, t_SW) · max(1, PP / B) + t_LM + t_serving.
 
     `t_stage_GPU` is the GPU-side compute + comm time (with optional Tensor
     Core efficiency derate at small microbatch). `t_SW` is the per-round
     CPU dispatch budget (kernel_launch_overhead.md §5). The two are
     composed via `sw_overlap_factor` ρ_SW: ρ_SW=1 means SW is fully hidden
     by GPU work (just `max`), ρ_SW=0 means strict serialization.
+    `t_serving` is the per-sequence serving runtime overhead (decode.md §7.2),
+    linear in B and additive (not overlapped with GPU work).
     """
     B = tuner.B_decode
     PP = partition.PP
@@ -528,7 +533,12 @@ def compute_latency(
     t_lm_mem = T_lm / BW_top if BW_top > 0 else 0.0
     t_LM = max(t_lm_compute, t_lm_mem)
 
-    t_step_user = t_stage_with_SW * pp_bubble_factor + t_LM
+    # Per-sequence serving runtime overhead (decode.md §7.2): host-side work
+    # that scales linearly with active-sequence count B (block-table gather,
+    # sampling, scheduler). Additive — not overlapped with GPU work.
+    t_serving = tuner.t_serving_per_seq_us * max(1, B) * 1e-6
+
+    t_step_user = t_stage_with_SW * pp_bubble_factor + t_LM + t_serving
     TPOT = t_step_user
 
     TPS_single = B / t_step_user if t_step_user > 0 else 0.0
@@ -581,7 +591,8 @@ def compute_latency(
         # often stays memory-bound through small B even under speculation.
         t_lm_compute_verify = t_lm_compute * n_tok_verify
         t_LM_verify = max(t_lm_compute_verify, t_lm_mem)
-        t_step_user_verify = t_stage_with_SW_verify * pp_bubble_factor + t_LM_verify
+        # t_serving is per-step CPU work, fires once per verify step too.
+        t_step_user_verify = t_stage_with_SW_verify * pp_bubble_factor + t_LM_verify + t_serving
         TPOT_spec = t_step_user_verify / N_tok_per_step
     else:
         t_step_user_verify = t_step_user
@@ -607,4 +618,5 @@ def compute_latency(
         N_tok_per_step=N_tok_per_step,
         t_step_user_verify=t_step_user_verify,
         TPOT_spec=TPOT_spec,
+        t_serving=t_serving,
     )
