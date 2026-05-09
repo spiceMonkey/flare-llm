@@ -48,6 +48,10 @@ TP splits matrices within each expert or dense block. After TP, each rank holds 
 
 SP shards the **KV cache** (activation state), not model parameters. Only after DP/PP/EP/TP are fixed can the KV sequence dimension be partitioned.
 
+### Per-block deviation: DP-attention
+
+The strict orthogonal layout above describes how parameters and KV are placed at the partition level. A separate per-block mode selector, the **attention parallelism mode**, modifies what the TP ranks of a replica hold *inside the attention block only*: under DP-attention mode the attention weights are replicated on every TP rank and tokens are partitioned along the sequence dimension instead of sharding heads. The dense and MoE blocks remain TP- and EP-sharded as above. See §17 below and `decode.md §8` for the full derivation. The default mode (TP-attention) preserves the orthogonal-layout derivations of §1–§14.
+
 ---
 
 ## 2. Parallelism Dimensions
@@ -133,7 +137,7 @@ _(→ decode.md; → dram3d.md for 3D DRAM extensions)_
 ## 7. Networking
 _(→ decode.md; → `collectives/00_summary.md` §4–§7 for the shipped-primitive cost table consumed by decode.md / prefill.md; → `collectives/05_contention_and_congestion.md` §4 for dynamic η_α / η_β)_
 
-The system model names physical networks as **fabrics** (`FabricSpec`); each fabric is an ordered list of switching tiers, innermost first. A collective (TP / EP / SP / PP) declares an ordered **fabric chain** via `SystemSpec.collective_fabrics[collective]`. Walking that chain innermost-first yields a single flattened tier list; a collective of group size $G$ spans tiers $0..k$ where $k$ is the smallest index with $\prod_{i=0}^{k} P_i \ge G$.
+The system model names physical networks as **fabrics**; each fabric is an ordered list of switching tiers, innermost first. A collective (TP / EP / SP / PP) declares an ordered **fabric chain** — the named sequence of fabrics that collective traverses from inner-most to outer-most. Walking that chain innermost-first yields a single flattened tier list; a collective of group size $G$ spans tiers $0..k$ where $k$ is the smallest index with $\prod_{i=0}^{k} P_i \ge G$.
 
 - $P_{role,i}$ — Reach at tier $i$ along the $role$ collective's fabric chain (ranks reachable within that tier from any single rank). Topology-dependent: crossbar $P_i$ = switch radix; torus $P_i = \prod_j D_j$.
 - $\alpha_{role,i}$ — Per-traversal startup latency of tier $i$ along the $role$ collective's fabric chain (μs).
@@ -158,7 +162,7 @@ The system model names physical networks as **fabrics** (`FabricSpec`); each fab
 
 **Single-tier shorthand.** A chain with one crossbar fabric and one crossbar tier collapses to the flat pair $\alpha_{role} \equiv \alpha_{role,0}$, $BW_{role} \equiv BW_{role,0}$, independent of $G$. The decode/prefill equations in decode.md and prefill.md are written against this flat pair; multi-tier and torus analyses substitute the appropriate span quantity (or torus-native formula) with $G$ set by the role-specific group size (e.g. $G = \text{TP}$ for TP collectives, $G = \text{EP}$ for EP). For PP point-to-point hops, the tier is selected via the **nested-layout convention** below — *not* by `G = 2`, which would always pick tier 0. See `collectives/00_summary.md §4–§7` for the shipped-primitive cost table (ring / DBT AR on star, dim-decomposed ring on torus, hierarchical RS → sub-AR → AG, in-network reduction via NVLS / Quantum SHARP / Tomahawk Ultra) consumed by decode.md §5 and prefill.md §3.2; `collectives/05_contention_and_congestion.md` for $\eta_\alpha / \eta_\beta$ application.
 
-**Nested-layout convention.** Per-axis tier assignment under the production-standard layout `DP → PP → EP → TP → SP` (innermost = highest-bandwidth). Walk the fabric chain inner→outer; for each axis (in inner-to-outer order: SP, TP, EP, PP), assign the smallest tier whose cumulative reach $\prod_{i \le t} P_i$ holds the cumulative product of inner axes × this axis. Example on d-Matrix squadrack (3-tier chain $P = (16, 4, 8)$, cumulative $(16, 64, 512)$): `TP=8, EP=1, PP=2` → TP at tier 0 (8 ≤ 16), PP at tier 0 (16 ≤ 16); `TP=8, PP=8` → PP at tier 1 (64 ≤ 64); `TP=8, PP=32` → PP at tier 2 (256 ≤ 512). Single-tier systems (e.g., NVL72) collapse all axes to tier 0. Implemented by `core/primitives/partition_layout.assign_tier_per_axis(partition, system)`.
+**Nested-layout convention.** Per-axis tier assignment under the production-standard layout `DP → PP → EP → TP → SP` (innermost = highest-bandwidth). Walk the fabric chain inner→outer; for each axis (in inner-to-outer order: SP, TP, EP, PP), assign the smallest tier whose cumulative reach $\prod_{i \le t} P_i$ holds the cumulative product of inner axes × this axis. Example on d-Matrix squadrack (3-tier chain $P = (16, 4, 8)$, cumulative $(16, 64, 512)$): $TP=8, EP=1, PP=2$ → TP at tier 0 ($8 \le 16$), PP at tier 0 ($16 \le 16$); $TP=8, PP=8$ → PP at tier 1 ($64 \le 64$); $TP=8, PP=32$ → PP at tier 2 ($256 \le 512$). Single-tier systems (e.g., NVL72) collapse all axes to tier 0.
 
 **Collective-primitive coefficients** (`collectives/00_summary.md §4–§7`):
 - $n_\alpha$ — Coefficient on $\alpha$ in a shipped-primitive cost formula (number of startup traversals). Per-primitive values in `collectives/00_summary.md §4` (or full derivations in `collectives/01_collective_algorithms.md`).
@@ -419,7 +423,7 @@ Placement:
 - $T_{\theta,i}$ — Weight bytes residing on tier $i$; $\sum_i T_{\theta,i} = T_{\theta,\text{device}}$.
 - $T_{\text{KV},i}$ — Per-request KV bytes residing on tier $i$; $\sum_i T_{\text{KV},i} = T_{\text{KV,device}}$.
 - Capacity constraint per tier: $T_{\theta,i} + B \cdot T_{\text{KV},i} \le C_i$ (sram.md §1.3; uses the per-device, per-request $T_{\text{KV,device}}$ from `decode.md §2.3`, which already bakes in $TP \cdot SP$ and the context length $S$).
-- `auto_priority` — Greedy tiebreaker when both `weights_tier` and `kv_tier` are `auto`: `"weights"` (default) fills weights into the fastest tier first, then KV gets remainder; `"kv"` flips the order. Inert when either class is explicitly pinned.
+- **Greedy priority** — Tiebreaker when neither weights nor KV is explicitly pinned to a tier: weights-first (default) fills weights into the fastest tier and gives KV the remainder; KV-first flips the order. Inert when either class is explicitly pinned.
 
 Multi-tier roofline (sram.md §2.1) — full $\alpha$–$\beta$ form:
 $$t_{\text{mem}}(B) = \sum_i \left[\, \alpha_i + \frac{T_{\theta,i} + B \cdot T_{\text{KV},i}}{BW_{\text{eff},i}} \,\right]$$
@@ -430,3 +434,45 @@ $$t_{\text{mem}}(B) = \sum_i \frac{T_{\theta,i} + B \cdot T_{\text{KV},i}}{BW_{\
 Two-tier crossover (sram.md §2.2; weights pinned to tier $W$, KV to tier $K$):
 $$B^*_{W,K} = \frac{R_{\text{GPU}} \cdot T_{\theta,\text{device}} / BW_{\text{eff},W}}{F_{\text{token,device}} - R_{\text{GPU}} \cdot T_{\text{KV,device}} / BW_{\text{eff},K}}$$
 - Reduces to the single-tier $B^\star$ of §10 when $W = K$.
+
+---
+
+## 17. Attention Parallelism Modes
+_(→ decode.md §8)_
+
+The default partition derivation in §1–§14 assumes the strict orthogonal layout `DP → PP → EP → TP → SP` with attention weights tensor-parallel (TP) sharded by head. DSv3 / R1 production deployments support an alternative mode in which the attention block's weights are replicated across the TP ranks of a replica and tokens are partitioned instead — derivation in `decode.md §8`. This affects only the attention block; the dense FFN and MoE FFN are unchanged.
+
+- **Attention parallelism mode** — Selector between TP-attention (default; preserves §1–§14) and DP-attention (activates the per-device deltas in `decode.md §8.2` and the comm accounting in `decode.md §8.3`).
+- $M_{\text{attn,device}}^{\text{DP-attn}}$ — Per-device attention weight memory bytes under DP-attention mode (`decode.md §8.2`):
+  $$M_{\text{attn,device}}^{\text{DP-attn}} = \frac{L}{PP} \cdot (2H^2 + 2HH_{kv}) \cdot b$$
+- $T_{\text{attn},\theta,\text{device}}^{\text{DP-attn}}$ — Per-device attention parameter traffic per step under DP-attention mode (`decode.md §8.2`); same expression as the memory footprint above (weights load once per step).
+- $t_{TP,\text{AG}}^{\text{DP-attn}}(B)$ — Per-layer TP all-gather (AG) cost replacing the attention all-reduce (AR) under DP-attention mode (`decode.md §8.3`):
+  $$t_{TP,\text{AG}}^{\text{DP-attn}}(B) = (TP - 1)\,\alpha_{TP} + \frac{TP - 1}{TP} \cdot \frac{B \cdot Hb}{BW_{TP}}$$
+- $\Delta t_{\text{attn-comm}}^{\text{DP-attn}}(B)$ — Per-layer comm time saved by the AR → AG swap (`decode.md §8.3`):
+  $$\Delta t_{\text{attn-comm}}^{\text{DP-attn}}(B) = (TP - 1)\,\alpha_{TP} + \frac{TP - 1}{TP} \cdot \frac{B \cdot Hb}{BW_{TP}}$$
+- $t_{\text{comm}}^{\text{DP-attn}}(B)$ — Per-stage total communication budget under DP-attention mode; substitutes for the §5.5 expression with one fewer attention all-reduce per layer (`decode.md §8.3`).
+
+KV cache footprint and per-device KV traffic are **invariant** under the mode switch — see `decode.md §8.2` for the accounting argument (head-sharded vs sequence-sharded gives the same per-device byte count).
+
+---
+
+## 18. Speculative Decoding (MTP / EAGLE / Medusa)
+_(→ decode.md §9)_
+
+Speculative decoding breaks the 1:1 token-per-step mapping of vanilla decode by running a cheap draft head to propose multiple candidate tokens, then verifying all of them in a single target-model pass. Per-step output count exceeds 1 on average; per-step cost grows by the verify multiplier. Symbols introduced in `decode.md §9`.
+
+- $n_{\text{tok,draft}}$ — Number of draft tokens proposed per verify step (typical 3–5; 1 disables speculation).
+- $n_{\text{tok,verify}} = n_{\text{tok,draft}} + 1$ — Tokens evaluated per verify step per sequence (the proposed tokens plus the target's always-accepted next prediction).
+- $p_{\text{accept}}$ — Per-token draft acceptance probability ∈ [0, 1] (calibrate against the deployment).
+- $\mathbb{E}[N_{\text{accept,draft}}]$ — Expected accepted draft tokens per step under independent acceptance (truncated geometric, `decode.md §9.2`):
+  $$\mathbb{E}[N_{\text{accept,draft}}] = \sum_{d=1}^{n_{\text{tok,draft}}} p_{\text{accept}}^d = \frac{p_{\text{accept}} \, (1 - p_{\text{accept}}^{n_{\text{tok,draft}}})}{1 - p_{\text{accept}}}$$
+- $N_{\text{tok/step}} = 1 + \mathbb{E}[N_{\text{accept,draft}}]$ — Total expected accepted tokens per verify step. Bound: $1 \le N_{\text{tok/step}} \le n_{\text{tok,verify}}$.
+- $t_{\text{compute}}^{\text{verify}}(B) = n_{\text{tok,verify}} \cdot t_{\text{compute}}(B)$ — Verify-step compute time (FLOPs scale linearly with $n_{\text{tok,verify}}$; `decode.md §9.3`).
+- $t_{\text{mem}}^{\text{verify}}(B) \approx t_{\text{mem}}(B)$ — Verify-step memory time (weights amortize once per step; KV reads piggyback under FlashAttention-style batched-Q kernels; `decode.md §9.3`).
+- $t_{\text{local}}^{\text{verify}}(B) = \max\bigl( n_{\text{tok,verify}} \cdot t_{\text{compute}}(B),\; t_{\text{mem}}(B) \bigr)$ — Verify-step roofline local time.
+- $t_{\text{comm}}^{\text{verify}}(B)$ — Verify-step communication budget; §5.5 expression with all per-layer message sizes scaled by $n_{\text{tok,verify}}$ (α-side terms unchanged).
+- $t_{\text{step,user}}^{\text{verify}}(B)$ — Verify-step user-observed step time; §7.2 composition with the verify-step quantities substituted in.
+- $\mathrm{TPOT_{spec}}(B) = t_{\text{step,user}}^{\text{verify}}(B) / N_{\text{tok/step}}$ — Effective TPOT under speculative decoding (`decode.md §9.4`).
+- $B^\star_{\text{spec}}$ — Verify-step compute-bound crossover batch (`decode.md §9.4`):
+  $$B^\star_{\text{spec}} \approx \frac{T_{\theta,\text{device}} \cdot R_{\text{GPU}}}{n_{\text{tok,verify}} \cdot F_{\text{token,device}} \cdot BW_{\text{mem}} - T_{\text{KV,device}} \cdot R_{\text{GPU}}}$$
+  Falls below the vanilla $B^\star$ of §10 by approximately $n_{\text{tok,verify}}$.

@@ -134,7 +134,7 @@ $$
 BW_{\text{conservative}} \;\le\; BW_{\text{mem}} \;\le\; BW_{\text{optimistic}}
 $$
 
-**Which model to use.** The AccelStack paper (§III-C2) does not resolve this question definitively [ACCELSTACK]. Practical 3D DRAM designs, including the Samsung HBM4 roadmap and near-term HBM4E architectures, indicate that the conservative model is more realistic: the bottom die becomes the bandwidth bottleneck and upper dies primarily add capacity. The conservative model is therefore the **default for `SystemSpec`**; the optimistic model serves as a research upper bound for future fully-disaggregated 3D integration.
+**Which model to use.** The AccelStack paper (§III-C2) does not resolve this question definitively [ACCELSTACK]. Practical 3D DRAM designs, including the Samsung HBM4 roadmap and near-term HBM4E architectures, indicate that the conservative model is more realistic: the bottom die becomes the bandwidth bottleneck and upper dies primarily add capacity. The conservative model is therefore the **recommended default**; the optimistic model serves as a research upper bound for future fully-disaggregated 3D integration.
 
 ## 2.5 Effective Bandwidth Is Always Discounted from Peak
 
@@ -310,6 +310,6 @@ Symbols introduced in this document; consolidated into `notation.md` §15.
 - **[SOIC-UHD]** — Chen et al., ECTC 2020. Sub-micron pitch hybrid bonding at ≥1.2 M bonds/mm²; upper-bound datapoint for §1 and Scenario 3 (§3.3).
 - **[SEMIANALYSIS-HB]** — SemiAnalysis cross-section analysis of Nvidia A100: ~130 µm C4, ~50 µm copper pillars. Industry-press reference for the §1 pitch table.
 - **[HBM-SPEC]** — JEDEC JESD235D: HBM2E / HBM3 / HBM3E pin bandwidth and capacity specs. Used for calibration in Scenario 1 (§3.1) and latency baseline in §4.
-- **[H100-SPEC]** — NVIDIA H100 whitepaper: 3.35 TB/s HBM3 bandwidth per GPU. Used as reference point for SystemSpec reconciliation in §5.
+- **[H100-SPEC]** — NVIDIA H100 whitepaper: 3.35 TB/s HBM3 bandwidth per GPU. Used as the per-device reconciliation reference point in §5.
 
 _Full bibliographic entries for all tags are in `references.md`._

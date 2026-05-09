@@ -158,3 +158,16 @@ class TuningSpec:
     # tile-floor argument that motivates this curve.
     tensor_core_efficiency: Optional[Dict[int, float]] = None
 
+    # ── Speculative decoding (decode.md §9) ────────────────────────────
+    # n_tok_draft = 0 disables speculation (vanilla decode, default).
+    # n_tok_draft > 0 enables a Multi-Token Prediction (MTP) / EAGLE / Medusa
+    # style verify pass that processes n_tok_verify = n_tok_draft + 1 tokens
+    # per sequence per step and emits N_tok_per_step accepted tokens on
+    # average. p_accept is the per-token draft acceptance probability ∈ [0,1].
+    # Both must be set non-trivially for speculation to take effect; the
+    # latency model derives N_tok_per_step from the truncated geometric
+    # acceptance distribution (decode.md §9.2) and TPOT_spec from the
+    # verify-step roofline (decode.md §9.3, §9.4).
+    n_tok_draft: int = 0
+    p_accept: float = 0.0
+
