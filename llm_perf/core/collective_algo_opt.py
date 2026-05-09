@@ -43,7 +43,7 @@ from ..specs.model_spec import LlmModelSpec
 from ..specs.partition_spec import PartitionSpec
 from ..specs.system_spec import SystemSpec, TierSpec
 from ..specs.tuner_spec import TuningSpec
-from .primitives import enumerate_options
+from .primitives import G_EP, G_TP, enumerate_options
 
 
 def optimize_collective_algorithms(
@@ -79,7 +79,7 @@ def optimize_collective_algorithms(
             tier_chain=system.get_tier_chain("TP"),
             op="all_reduce",
             M=tuner.B_decode * H * b,
-            G=partition.TP,
+            G=G_TP(partition),
             inc_enabled=inc_enabled,
         )
     # Decode EP A2A: M = B_decode · k · H · b, G = EP.
@@ -88,7 +88,7 @@ def optimize_collective_algorithms(
             tier_chain=system.get_tier_chain("EP"),
             op="moe_a2a",
             M=tuner.B_decode * k_active * H * b,
-            G=partition.EP,
+            G=G_EP(partition),
             inc_enabled=inc_enabled,
         )
 
@@ -102,7 +102,7 @@ def optimize_collective_algorithms(
             tier_chain=system.get_tier_chain("TP"),
             op="all_reduce",
             M=tokens_prefill * H * b,
-            G=partition.TP,
+            G=G_TP(partition),
             inc_enabled=inc_enabled,
         )
     # Prefill EP A2A: M = tokens · k · H · b.
@@ -111,7 +111,7 @@ def optimize_collective_algorithms(
             tier_chain=system.get_tier_chain("EP"),
             op="moe_a2a",
             M=tokens_prefill * k_active * H * b,
-            G=partition.EP,
+            G=G_EP(partition),
             inc_enabled=inc_enabled,
         )
 

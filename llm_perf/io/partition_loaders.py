@@ -23,8 +23,16 @@ def partition_spec_from_json_dict(cfg: Dict[str, Any]) -> PartitionSpec:
           "PP": 4,
           "TP": 4,
           "EP": 8,
-          "SP": 2
+          "SP": 2,
+          "attention_mode": "tp",       (optional; default "tp"; "tp" or "dp")
+          "layout":         "orthogonal" (optional; default "orthogonal";
+                                          "orthogonal" or "co_located")
         }
+
+    Co-located layout requires `attention_mode = "dp"` and `TP == EP`
+    (DSv3 / SGLang / NVIDIA Dynamo production decode pattern); see
+    `notation.md §1` and `decode.md §6.3`. PartitionSpec.__post_init__
+    enforces these invariants and raises ValueError on violation.
     """
     schema = cfg.get("schema", "llm_perf.partition")
     if not schema.startswith("llm_perf.partition"):
@@ -42,6 +50,8 @@ def partition_spec_from_json_dict(cfg: Dict[str, Any]) -> PartitionSpec:
         TP=int(cfg["TP"]),
         EP=int(cfg["EP"]),
         SP=int(cfg["SP"]),
+        attention_mode=str(cfg.get("attention_mode", "tp")),
+        layout=str(cfg.get("layout", "orthogonal")),
     )
 
 
