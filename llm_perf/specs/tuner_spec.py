@@ -158,6 +158,22 @@ class TuningSpec:
     # tile-floor argument that motivates this curve.
     tensor_core_efficiency: Optional[Dict[int, float]] = None
 
+    # B-dependent sustained HBM bandwidth curve η_β(B) for memory roofline.
+    # Maps active-sequence count B to a derate factor in (0, 1] applied
+    # multiplicatively on top of the per-tier `eta_beta` and the constant
+    # `bw_eta` calibration knob. Piecewise-linear interpolation between
+    # adjacent keys; B values below the minimum key clamp to that key's
+    # efficiency, B values above the maximum clamp to that key's value.
+    # When None, η_β(B) = 1.0 always (legacy behavior — no B-dependent
+    # derate; the constant `bw_eta` and per-tier `eta_beta` continue to
+    # apply unchanged).
+    # Representative HBM3e ramp on Blackwell production stacks:
+    #     {1: 0.92, 64: 0.85, 512: 0.75, 4096: 0.55}
+    # Mirrors the `tensor_core_efficiency` shape exactly. See
+    # documentation/modeling/decode.md §6.2 for the derivation and
+    # documentation/modeling/notation.md §20 for the symbol register.
+    bw_efficiency: Optional[Dict[int, float]] = None
+
     # ── Speculative decoding (decode.md §8) ────────────────────────────
     # n_tok_draft = 0 disables speculation (vanilla decode, default).
     # n_tok_draft > 0 enables a Multi-Token Prediction (MTP) / EAGLE / Medusa

@@ -81,25 +81,39 @@ def effective_peak_flops_TF(system: SystemSpec, bytes_per_param: float) -> float
 # SW-overhead helpers (kernel_launch_overhead.md §5)
 # ────────────────────────────────────────────────────────────
 
-def _eta_TC_at_mb(curve: Optional[Dict[int, float]], mb: float) -> float:
-    """Piecewise-linear lookup of Tensor Core efficiency at microbatch `mb`.
+def _piecewise_linear_lookup(curve: Optional[Dict[int, float]], x: float) -> float:
+    """Piecewise-linear interpolation of `curve` at point `x`.
 
-    None ⇒ 1.0 always (legacy: no compute derate).
-    `mb` clamps to the curve's [min_key, max_key] range.
+    None ⇒ 1.0 always (legacy: no derate).
+    `x` clamps to the curve's [min_key, max_key] range.
     """
     if curve is None or not curve:
         return 1.0
     keys = sorted(curve.keys())
-    if mb <= keys[0]:
+    if x <= keys[0]:
         return float(curve[keys[0]])
-    if mb >= keys[-1]:
+    if x >= keys[-1]:
         return float(curve[keys[-1]])
     for i in range(len(keys) - 1):
         lo, hi = keys[i], keys[i + 1]
-        if lo <= mb <= hi:
-            t = (mb - lo) / (hi - lo)
+        if lo <= x <= hi:
+            t = (x - lo) / (hi - lo)
             return float(curve[lo]) + t * (float(curve[hi]) - float(curve[lo]))
     return 1.0  # unreachable; defensive
+
+
+def _eta_TC_at_mb(curve: Optional[Dict[int, float]], mb: float) -> float:
+    """Tensor Core efficiency at microbatch `mb` (compute roofline derate)."""
+    return _piecewise_linear_lookup(curve, mb)
+
+
+def _eta_beta_at_B(curve: Optional[Dict[int, float]], B: float) -> float:
+    """B-dependent sustained HBM bandwidth at active-sequence count `B`.
+
+    Multiplicative derate on top of constant `bw_eta` and per-tier `eta_beta`.
+    None ⇒ 1.0 always (legacy: no B-dependent derate). See decode.md §6.2.
+    """
+    return _piecewise_linear_lookup(curve, B)
 
 
 def _t_SW_per_microbatch(
@@ -496,7 +510,13 @@ def compute_latency(
     eta_TC = _eta_TC_at_mb(tuner.tensor_core_efficiency, mb)
     t_compute_eff = t_compute / eta_TC if eta_TC > 0 else float("inf")
 
-    t_mem = t_mem_from_placement(placement, B=max(1, B), tiers=tiers)
+    # B-dependent HBM sustained bandwidth derate (decode.md §6.2; opt-in
+    # via tuner.bw_efficiency, otherwise η_β(B) = 1 and t_mem is unchanged).
+    eta_beta_B = _eta_beta_at_B(tuner.bw_efficiency, max(1, B))
+    t_mem = t_mem_from_placement(
+        placement, B=max(1, B), tiers=tiers,
+        eta_beta_curve_factor=eta_beta_B,
+    )
     t_local = max(t_compute_eff, t_mem)
 
     t_comm = comm.t_comm_stage

@@ -6,7 +6,7 @@ from ..specs.system_spec import SystemSpec
 from ..specs.partition_spec import PartitionSpec
 from ..specs.tuner_spec import TuningSpec
 from ..utils import GB_TO_BYTES, TB_TO_FLOPS
-from .decode_model import _eta_TC_at_mb, effective_peak_flops_TF
+from .decode_model import _eta_TC_at_mb, _eta_beta_at_B, effective_peak_flops_TF
 from .memory_placement import resolve_placement, t_mem_from_placement
 from .primitives import (
     dense_weight_bytes,
@@ -406,7 +406,11 @@ def compute_prefill_latency(
             tiers=tiers,
             placement=tuner.placement,
         )
-        return t_mem_from_placement(plc, B=max(1, B), tiers=tiers)
+        eta_beta_B = _eta_beta_at_B(tuner.bw_efficiency, max(1, B))
+        return t_mem_from_placement(
+            plc, B=max(1, B), tiers=tiers,
+            eta_beta_curve_factor=eta_beta_B,
+        )
 
     # ── Single-request prefill (§3) ──────────────────────
 
