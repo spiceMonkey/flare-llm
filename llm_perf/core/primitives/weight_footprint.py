@@ -31,10 +31,27 @@ def _split_layers(model: LlmModelSpec) -> tuple[int, int, int, int, int]:
     return L_dense, L_moe, N_exp, I_moe
 
 
+def _attn_divisor(partition: PartitionSpec) -> int:
+    """Effective denominator for the attention weight term.
+
+    Under the default TP-attention mode the attention weights are
+    head-sharded across TP ranks (divisor = TP). Under DP-attention mode
+    the attention weights are replicated on every TP rank (divisor = 1);
+    see decode.md §8.2.
+    """
+    if getattr(partition, "attention_mode", "tp") == "dp":
+        return 1
+    return partition.TP
+
+
 def dense_weight_bytes(model: LlmModelSpec, partition: PartitionSpec) -> float:
     """Per-device weight bytes for the dense-layer slice of the model.
 
-        M_theta_dense = (L_dense / PP) · ((2H² + 2HH_kv)/TP + 3HI_dense/TP) · b
+        M_theta_dense = (L_dense / PP) · ((2H² + 2HH_kv)/attn_div + 3HI_dense/TP) · b
+
+    where attn_div = TP under TP-attention mode (default) and 1 under
+    DP-attention mode (decode.md §8.2). The dense FFN remains TP-sharded
+    in both modes.
     """
     L = model.L
     if model.moe is not None:
@@ -49,19 +66,23 @@ def dense_weight_bytes(model: LlmModelSpec, partition: PartitionSpec) -> float:
     b = model.bytes_per_param
     PP = partition.PP
     TP = partition.TP
+    attn_div = _attn_divisor(partition)
 
     return (L_dense / PP) * (
-        (2 * H**2 + 2 * H * H_kv) / TP + (3 * H * I_dense) / TP
+        (2 * H**2 + 2 * H * H_kv) / attn_div + (3 * H * I_dense) / TP
     ) * b
 
 
 def moe_weight_bytes(model: LlmModelSpec, partition: PartitionSpec) -> float:
     """Per-device weight bytes for the MoE-layer slice of the model.
 
-        M_theta_moe = (L_moe / PP) · ((2H² + 2HH_kv)/TP + 3HI_moe·N_exp/(TP·EP)) · b
+        M_theta_moe = (L_moe / PP) · ((2H² + 2HH_kv)/attn_div + 3HI_moe·N_exp/(TP·EP)) · b
 
     Returns 0.0 for dense-only models. EP is clamped by N_exp to match
     the existing convention (EP > N_exp collapses to EP = N_exp).
+    `attn_div = TP` under TP-attention mode (default), `1` under
+    DP-attention mode (decode.md §8.2). Expert weights remain TP·EP-sharded
+    in both modes.
     """
     if model.moe is None:
         return 0.0
@@ -77,9 +98,10 @@ def moe_weight_bytes(model: LlmModelSpec, partition: PartitionSpec) -> float:
     PP = partition.PP
     TP = partition.TP
     EP = min(max(1, partition.EP), N_exp)
+    attn_div = _attn_divisor(partition)
 
     return (L_moe / PP) * (
-        (2 * H**2 + 2 * H * H_kv) / TP + (3 * H * I_moe * N_exp) / (TP * EP)
+        (2 * H**2 + 2 * H * H_kv) / attn_div + (3 * H * I_moe * N_exp) / (TP * EP)
     ) * b
 
 

@@ -203,6 +203,14 @@ class LatencyResults:
     B: int
     TPOT: float
     B_star: float
+    # Speculative-decoding extension (decode.md §9). When tuner.n_tok_draft = 0
+    # (vanilla decode, default), N_tok_per_step = 1.0 and TPOT_spec == TPOT.
+    # When speculation is enabled, t_step_user_verify is the verify-step
+    # latency (compute + comm scaled by n_tok_verify; t_mem ≈ unchanged) and
+    # TPOT_spec = t_step_user_verify / N_tok_per_step.
+    N_tok_per_step: float = 1.0
+    t_step_user_verify: float = 0.0
+    TPOT_spec: float = 0.0
 
 
 # ────────────────────────────────────────────────────────────
@@ -362,6 +370,16 @@ def compute_comm(
         t_TP = 0.0
         msg_TP = 0.0
 
+    # DP-attention swap (decode.md §8.3): under attention_mode="dp", the
+    # per-layer attention TP all-reduce is replaced by a single TP all-gather
+    # at the attention → FFN transition. The FFN's TP all-reduce remains.
+    # Here we precompute the AG cost; the per-stage adjustment happens after
+    # aggregate_per_stage below.
+    if TP > 1 and getattr(partition, "attention_mode", "tp") == "dp":
+        t_TP_AG = _cost("TP", "all_gather", msg_TP, TP)
+    else:
+        t_TP_AG = 0.0
+
     # SP: 1-pass ring all-gather over the full KV (per-rank gathered
     # output convention — collective_cost.py §6 calls this "M = G·shard").
     if SP > 1:
@@ -383,6 +401,13 @@ def compute_comm(
         n_EP=n_EP, t_EP=t_EP,
         t_PP=t_PP,
     )
+
+    # DP-attention adjustment (decode.md §8.3): one of the n_TP per-layer
+    # all-reduces is the attention output AR — under attention_mode="dp",
+    # replace it with the (cheaper) AG. Saving per layer = (t_TP_AR − t_TP_AG);
+    # applied across L/PP layers per stage.
+    if t_TP_AG > 0.0 and t_TP > 0.0:
+        t_comm_stage += (L / PP) * (t_TP_AG - t_TP)
 
     return CommResults(
         msg_PP_bytes=msg_PP,
@@ -519,6 +544,49 @@ def compute_latency(
     denom = flops.F_token_device * BW_top - traffic.T_kv * R_gpu
     B_star = (traffic.T_theta * R_gpu / denom) if denom > 0 else float("inf")
 
+    # Speculative-decoding extension (decode.md §9). Compose verify-step
+    # quantities by scaling compute and comm payloads by n_tok_verify;
+    # weight traffic and KV traffic stay invariant (decode.md §9.3). When
+    # n_tok_draft = 0, the verify quantities reduce to the vanilla ones.
+    n_tok_draft = max(0, tuner.n_tok_draft)
+    p_accept = max(0.0, min(1.0, tuner.p_accept))
+    n_tok_verify = n_tok_draft + 1
+    if n_tok_draft > 0 and p_accept > 0.0:
+        # Truncated geometric expected accepted draft tokens (Leviathan eq. 5):
+        #   E[N_accept] = Σ_{d=1..n_draft} p^d = p(1 - p^n_draft) / (1 - p)
+        # plus 1 for the always-accepted target prediction.
+        if p_accept < 1.0:
+            E_accept = p_accept * (1.0 - p_accept ** n_tok_draft) / (1.0 - p_accept)
+        else:
+            E_accept = float(n_tok_draft)
+        N_tok_per_step = 1.0 + E_accept
+    else:
+        N_tok_per_step = 1.0
+
+    if n_tok_verify > 1:
+        # Verify-step roofline: compute scales by n_tok_verify, memory
+        # invariant (FlashAttention batched-Q assumption; decode.md §9.3).
+        t_compute_verify_eff = t_compute_eff * n_tok_verify
+        t_local_verify = max(t_compute_verify_eff, t_mem)
+        # Communication payload scales linearly with n_tok_verify; α-side
+        # startup terms are unchanged. The §5.5 cost is dominated by the
+        # β-side at production batch sizes, so this scaling captures the
+        # leading-order effect.
+        t_comm_verify = t_comm * n_tok_verify
+        t_stage_verify = t_local_verify + max(0.0, t_comm_verify - rho * t_local_verify)
+        t_stage_with_SW_verify = t_stage_verify + max(0.0, t_SW - rho_SW * t_stage_verify)
+        # LM head: compute scales by n_tok_verify (one logits projection
+        # per query token), memory invariant. Per decode.md §9.3 this is
+        # max(...) of the two — at typical FP4 vocab sizes the LM head
+        # often stays memory-bound through small B even under speculation.
+        t_lm_compute_verify = t_lm_compute * n_tok_verify
+        t_LM_verify = max(t_lm_compute_verify, t_lm_mem)
+        t_step_user_verify = t_stage_with_SW_verify * pp_bubble_factor + t_LM_verify
+        TPOT_spec = t_step_user_verify / N_tok_per_step
+    else:
+        t_step_user_verify = t_step_user
+        TPOT_spec = TPOT
+
     return LatencyResults(
         t_compute=t_compute,
         t_compute_eff=t_compute_eff,
@@ -536,4 +604,7 @@ def compute_latency(
         B=B,
         TPOT=TPOT,
         B_star=B_star,
+        N_tok_per_step=N_tok_per_step,
+        t_step_user_verify=t_step_user_verify,
+        TPOT_spec=TPOT_spec,
     )
