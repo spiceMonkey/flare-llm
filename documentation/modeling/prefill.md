@@ -45,10 +45,12 @@ Prefill processes the entire input sequence in a **single forward pass**, produc
   - [5.2 Total Prefill Time Under Chunking](#52-total-prefill-time-under-chunking)
   - [5.3 Throughput Benefit and Head-of-Line Blocking Reduction](#53-throughput-benefit-and-head-of-line-blocking-reduction)
 
-- [6. Disaggregated Prefill](#6-disaggregated-prefill)
-  - [6.1 Architecture and Motivation](#61-architecture-and-motivation)
-  - [6.2 KV Cache Transfer Latency](#62-kv-cache-transfer-latency)
-  - [6.3 Hardware Prefill Latency for Disaggregated Systems](#63-hardware-prefill-latency-for-disaggregated-systems)
+- [6. Prefill→Decode KV Handoff](#6-prefill-decode-kv-handoff)
+  - [6.1 Architecture Variants](#61-architecture-variants)
+  - [6.2 KV Cache Volume (shared)](#62-kv-cache-volume-shared)
+  - [6.3 Co-located Handoff: KV Layout Transition](#63-co-located-handoff-kv-layout-transition)
+  - [6.4 Disaggregated Handoff: Inter-Cluster KV Transfer](#64-disaggregated-handoff-inter-cluster-kv-transfer)
+  - [6.5 Hardware Prefill Latency (unified)](#65-hardware-prefill-latency-unified)
 
 ---
 
@@ -207,39 +209,45 @@ FlashAttention [FA1, FA2] tiles the $S \times S$ attention matrix into SRAM-resi
 
 ## 1.5 Per-Device Total FLOPs Under Parallelism
 
-Parallelism distributes prefill FLOPs across devices following the same DP → PP → EP → TP → SP nesting as decode [MEGATRON, MEGATRON3].
+Parallelism distributes prefill FLOPs across devices following the same canonical nesting as decode (`DP → PP → EP → TP → SP` under the orthogonal layout) [MEGATRON, MEGATRON3]. The same per-component effective sharding factors $D_{\text{attn}}$, $D_{\text{exp}}$, $D_{\text{kv}}$, $D_{\text{emb}}$ from `notation.md §1` apply here so a single expression covers all three production-relevant configurations. Resolving the abstract factors:
 
-> **Mode note (DP-attention / TP+EP co-location).** The expressions below are written against the orthogonal + TP-attention default. The unified deployment-knob abstraction in `notation.md §1` (per-component effective sharding factors $D_{\text{attn}}$, $D_{\text{exp}}$, $D_{\text{kv}}$, $D_{\text{emb}}$, plus the AR ↔ AG swap encoded on $G_{TP}$) carries through identically here in prefill: substitute the abstract divisors per the §1 lookup table for the desired `(layout, attention_mode)` configuration. Per-device FLOPs are invariant under the TP-attn ↔ DP-attn swap; attention weight footprint and the per-layer attention TP collective change as derived in `decode.md §1.4` and `decode.md §5.3` respectively.
+| configuration | $D_{\text{attn}}$ | $D_{\text{exp}}$ (MoE) | $D_{\text{kv}}$ | $D_{\text{emb}}$ |
+|---|---|---|---|---|
+| orthogonal + TP-attn | $TP$ | $TP \cdot EP$ | $TP$ (head) | $TP$ |
+| orthogonal + DP-attn | $1$ | $TP \cdot EP$ | $TP$ (seq) | $TP$ |
+| co-located + DP-attn | $1$ | $EP$ | $\max(TP, EP)$ (seq) | $TP$ |
+
+Dense FFN always uses $D_{\text{exp}} = TP$. The KV-attention compute term carries an additional $/SP$ factor on top of $D_{\text{kv}}$ when sequence parallelism is enabled. Prefill per-device FLOPs are **invariant** under the TP-attn ↔ DP-attn swap (the per-rank work is the same whether split by head or by sequence — both reduce to a $1/D_{\text{attn}}$ or $1/D_{\text{kv}}$ share); attention weight footprint and the per-layer attention TP collective primitive (AR vs AG) change as derived in `decode.md §1.4` / `§5.3`. Formulas below use the abstract factors directly without further repetition of the table.
 
 ### PP sharding
 
 Pipeline parallelism assigns $L/PP$ layers to each stage. Since the prefill pass traverses all layers, each PP stage handles exactly its local layers:
 
 $$
-F_{\text{layer,prefill,device}} = \frac{L}{PP} \cdot F_{\text{layer,prefill}}^{\text{sharded by TP/EP/SP}}
+F_{\text{layer,prefill,device}} = \frac{L}{PP} \cdot F_{\text{layer,prefill}}^{\text{sharded by D-factors and SP}}
 $$
 
-### TP sharding
+### Tensor sharding (projections, FFN GEMMs)
 
-Tensor parallelism splits weight matrices. Each device computes $1/TP$ of the projection and FFN GEMMs. The attention KV term is also split by TP (heads are distributed):
+The Q/K/V/O projection FLOPs follow the attention divisor; the FFN GEMMs follow the expert divisor:
 
-- Projections: $(4H^2 + 4 H H_{kv} + 6 H I_{\text{eff}}) S_{\text{input}} / TP$
-- Attention KV (score + value): attention heads are split across TP ranks, so $4 S_{\text{input}}^2 H / TP$
+- Projections: $(4H^2 + 4 H H_{kv}) S_{\text{input}} / D_{\text{attn}}$
+- FFN: $6 H I_{\text{eff}} S_{\text{input}} / D_{\text{exp}}$
 
-### SP sharding
+### KV-attention sharding
 
-Sequence parallelism partitions $S_{\text{input}}$ across SP devices for the attention computation. Each SP rank computes attention over $S_{\text{input}} / SP$ query positions attending to the full context (via ring KV passing), but executes $1/SP$ of the attention score FLOPs:
-
-$$
-F_{\text{attn,KV,prefill,device}} = \frac{4 S_{\text{input}}^2 H}{TP \cdot SP}
-$$
-
-### EP sharding (MoE)
-
-For MoE layers, expert parallelism distributes expert weights so each device computes $1/EP$ of the FFN work:
+The per-token attention score / value FLOPs scale as $4 S_{\text{input}}^2 H$ per layer. They are sharded by the same divisor that shards the KV cache itself ($D_{\text{kv}}$ — head shard under TP-attn or sequence shard under DP-attn). Sequence parallelism (SP) further partitions the $S_{\text{input}}$ query positions across SP ranks (each SP rank computes attention over $S_{\text{input}}/SP$ queries via ring KV passing):
 
 $$
-F_{\text{ffn,prefill,device}}^{\text{MoE}} = \frac{6 H I_{\text{eff}} S_{\text{input}}}{TP \cdot EP}
+F_{\text{attn,KV,prefill,device}} = \frac{4 S_{\text{input}}^2 H}{D_{\text{kv}} \cdot SP}
+$$
+
+### Expert sharding (MoE only)
+
+For MoE layers, expert weights are sharded by $D_{\text{exp}}$ (the abstract divisor encodes the orthogonal $TP \cdot EP$ shard or the co-located $EP$-only shard):
+
+$$
+F_{\text{ffn,prefill,device}}^{\text{MoE}} = \frac{6 H k I_{\text{moe}} S_{\text{input}}}{D_{\text{exp}}}
 $$
 
 ### Full per-device expression
@@ -250,31 +258,33 @@ $$
 F_{\text{prefill,device}} =
 \frac{L_{\text{dense}}}{PP}
 \underbrace{\left[
-\frac{(4H^2 + 4 H H_{kv} + 6 H I_{\text{dense}}) S_{\text{input}}}{TP} +
-\frac{4 S_{\text{input}}^2 H}{TP \cdot SP}
+\frac{(4H^2 + 4 H H_{kv}) S_{\text{input}}}{D_{\text{attn}}} +
+\frac{6 H I_{\text{dense}} S_{\text{input}}}{TP} +
+\frac{4 S_{\text{input}}^2 H}{D_{\text{kv}} \cdot SP}
 \right]}_{\text{dense layer}}
 \;+\;
 \frac{L_{\text{moe}}}{PP}
 \underbrace{\left[
-\frac{(4H^2 + 4 H H_{kv}) S_{\text{input}}}{TP} +
-\frac{6 H k I_{\text{moe}} S_{\text{input}}}{TP \cdot EP} +
-\frac{4 S_{\text{input}}^2 H}{TP \cdot SP} +
+\frac{(4H^2 + 4 H H_{kv}) S_{\text{input}}}{D_{\text{attn}}} +
+\frac{6 H k I_{\text{moe}} S_{\text{input}}}{D_{\text{exp}}} +
+\frac{4 S_{\text{input}}^2 H}{D_{\text{kv}} \cdot SP} +
 2 H N_{\text{exp}} S_{\text{input}}
 \right]}_{\text{MoE layer (router unsharded)}}
 $$
 
-For a **pure dense model** ($L_{\text{moe}} = 0$, $EP = 1$):
+For a **pure dense model** ($L_{\text{moe}} = 0$, $EP = 1$, so $D_{\text{exp}} = TP$):
 
 $$
 F_{\text{prefill,device}}^{\text{dense}} =
-\frac{L}{PP \cdot TP}
+\frac{L}{PP}
 \left[
-(4H^2 + 4 H H_{kv} + 6 H I_{\text{dense}}) S_{\text{input}} +
-\frac{4 S_{\text{input}}^2 H}{SP}
+\frac{(4H^2 + 4 H H_{kv}) S_{\text{input}}}{D_{\text{attn}}} +
+\frac{6 H I_{\text{dense}} S_{\text{input}}}{TP} +
+\frac{4 S_{\text{input}}^2 H}{D_{\text{kv}} \cdot SP}
 \right]
 $$
 
-For a **pure MoE model** ($L_{\text{dense}} = 0$), the router term $2 H N_{\text{exp}} S_{\text{input}}$ stays outside the $TP$ sharding — it is replicated on every TP rank (§1.3.5).
+For a **pure MoE model** ($L_{\text{dense}} = 0$), the router term $2 H N_{\text{exp}} S_{\text{input}}$ stays unsharded — it is replicated on every TP rank (§1.3.5).
 
 ### Per-step (batched) FLOPs
 
@@ -290,10 +300,10 @@ This is the per-step, per-device FLOP count consumed in the §3 roofline. All do
 
 ### LM head FLOPs (prefill)
 
-To emit the first generated token of each prefilled request, the model runs the LM head ($H \to V$ projection) on the **last position's hidden state only** — the intermediate positions' logits are not needed by the sampler. The LM head is **column-parallel sharded by TP** along the vocab dimension and **lives only on the last PP stage** (stage $PP{-}1$); it is not divided by $L$, $PP$, $EP$, or $SP$, mirroring the decode treatment in `decode.md §3`.
+To emit the first generated token of each prefilled request, the model runs the LM head ($H \to V$ projection) on the **last position's hidden state only** — the intermediate positions' logits are not needed by the sampler. The LM head is sharded by $D_{\text{emb}}$ along the vocab dimension and **lives only on the last PP stage** (stage $PP{-}1$); it is not divided by $L$, $PP$, $EP$, or $SP$, mirroring the decode treatment in `decode.md §3`.
 
 $$
-F_{\text{LM,prefill,step,device}}(B_{\text{prefill}}) = \frac{2 \, B_{\text{prefill}} \, H \, V}{TP} \quad \text{(stage } PP{-}1 \text{ only)}
+F_{\text{LM,prefill,step,device}}(B_{\text{prefill}}) = \frac{2 \, B_{\text{prefill}} \, H \, V}{D_{\text{emb}}} \quad \text{(stage } PP{-}1 \text{ only)}
 $$
 
 **Scaling note.** Unlike the prefill body — which scales with $B_{\text{prefill}} \cdot S_{\text{input}}$ — the LM head scales with **only $B_{\text{prefill}}$**, since one $H \to V$ projection per request suffices. For typical $S_{\text{input}} \gtrsim 100$, the LM head is well under 1% of body FLOPs and is included for symmetry with decode rather than because it materially shifts TTFT.
@@ -301,10 +311,10 @@ $$
 LM head weight + output traffic on stage $PP{-}1$ (mirroring decode's $T_{\text{LM},\theta,\text{device}}$):
 
 $$
-T_{\text{LM,prefill,step,device}}(B_{\text{prefill}}) = \frac{H V \, b}{TP} + B_{\text{prefill}} \, V \, b \quad \text{(stage } PP{-}1 \text{ only)}
+T_{\text{LM,prefill,step,device}}(B_{\text{prefill}}) = \frac{H V \, b}{D_{\text{emb}}} + B_{\text{prefill}} \, V \, b \quad \text{(stage } PP{-}1 \text{ only)}
 $$
 
-The first term is the TP-sharded weight read; the second is the $B_{\text{prefill}}$ logit rows written to HBM. Both terms feed the LM head roofline introduced in §3.4.
+The first term is the $D_{\text{emb}}$-sharded weight read; the second is the $B_{\text{prefill}}$ logit rows written to HBM. Both terms feed the LM head roofline introduced in §3.4.
 
 ---
 
@@ -332,13 +342,13 @@ Arithmetic intensity (OI) is the ratio of FLOPs to bytes moved from HBM during t
 
 ### Weight-dominated regime (linear projections)
 
-For the projection and FFN GEMMs, the weight matrices are read once per prefill pass. The weight traffic per layer is $T_{\theta,\text{layer}} = (P_{\text{attn}} + P_{\text{FFN}}/EP) \cdot b / TP$ bytes. The projection and FFN FLOPs are $(4H^2 + 4 H H_{kv} + 6 H I_{\text{eff}} / EP) \cdot S_{\text{input}} / TP$.
+For the projection and FFN GEMMs, the weight matrices are read once per prefill pass. The weight traffic per layer is $T_{\theta,\text{layer}} = (P_{\text{attn}} / D_{\text{attn}} + P_{\text{FFN}} / D_{\text{exp}}) \cdot b$ bytes. The projection and FFN FLOPs are $\bigl((4H^2 + 4 H H_{kv})/D_{\text{attn}} + 6 H I_{\text{eff}} / D_{\text{exp}}\bigr) \cdot S_{\text{input}}$.
 
-Since every weight matrix contributes FLOPs $= 2 \times$ params (the $6HI$ convention matches the $3HI$ parameter count exactly):
+Since every weight matrix contributes FLOPs $= 2 \times$ params (the $6HI$ convention matches the $3HI$ parameter count exactly), the per-component divisors cancel and the OI is layout-invariant:
 
 $$
 \text{OI}_{\text{prefill,proj}} =
-\frac{(4H^2 + 4 H H_{kv} + 6 H I_{\text{eff}} / EP) S_{\text{input}}}{(2H^2 + 2 H H_{kv} + 3 H I_{\text{eff}} N_{\text{exp}}/EP)\, b} =
+\frac{\bigl((4H^2 + 4 H H_{kv})/D_{\text{attn}} + 6 H I_{\text{eff}} / D_{\text{exp}}\bigr) S_{\text{input}}}{\bigl((2H^2 + 2 H H_{kv})/D_{\text{attn}} + 3 H I_{\text{eff}} N_{\text{exp}}/D_{\text{exp}}\bigr)\, b} =
 \frac{2 S_{\text{input}}}{b}
 $$
 
@@ -346,7 +356,7 @@ The arithmetic intensity of the linear projection stage **scales linearly with $
 
 ### Attention computation regime
 
-For the attention score and value computation, the "weights" are the $Q$, $K$, $V$ activations themselves (all loaded from HBM or kept in SRAM with FlashAttention). Without FlashAttention, the traffic is $O(S_{\text{input}}^2)$ (storing the full attention matrix); with FlashAttention [FA1, FA2], the $S \times S$ matrix is tiled and never fully materialized, reducing traffic to $O(S_{\text{input}})$. In both cases the FLOPs are $4 S_{\text{input}}^2 H / (TP \cdot SP)$.
+For the attention score and value computation, the "weights" are the $Q$, $K$, $V$ activations themselves (all loaded from HBM or kept in SRAM with FlashAttention). Without FlashAttention, the traffic is $O(S_{\text{input}}^2)$ (storing the full attention matrix); with FlashAttention [FA1, FA2], the $S \times S$ matrix is tiled and never fully materialized, reducing traffic to $O(S_{\text{input}})$. In both cases the FLOPs are $4 S_{\text{input}}^2 H / (D_{\text{kv}} \cdot SP)$.
 
 For performance modeling, we treat FlashAttention as the default and note that the attention computation is generally compute-bound in the prefill regime (the tiled SRAM reuse pattern achieves high OI within each tile).
 
@@ -486,8 +496,8 @@ T_{\theta,\text{device}}
 \approx
 \frac{L}{PP}
 \left(
-\frac{(2H^2 + 2 H H_{kv})b}{TP} +
-\frac{3 H I_{\text{eff}} N_{\text{exp}} b}{TP \cdot EP}
+\frac{(2H^2 + 2 H H_{kv})b}{D_{\text{attn}}} +
+\frac{3 H I_{\text{eff}} N_{\text{exp}} b}{D_{\text{exp}}}
 \right)
 $$
 
@@ -497,7 +507,7 @@ $$
 T_{\text{KV,write,device}} =
 \frac{L}{PP}
 \cdot
-\frac{2 S_{\text{input}} H_{kv}\, b}{TP \cdot SP}
+\frac{2 S_{\text{input}} H_{kv}\, b}{D_{\text{kv}} \cdot SP}
 \quad \text{(per request)}
 $$
 
@@ -541,61 +551,70 @@ $$
 
 **Delegation to the `collectives/` explainer subseries.** Shipped-primitive cost formulas (ring AR, DBT AR, ring AG / RS, pairwise A2A on star; dim-decomposed ring and bisection-bound A2A on torus; hierarchical RS → sub-AR → AG; in-network reduction via NVLS / Quantum SHARP / Tomahawk Ultra) are documented in `collectives/01_collective_algorithms.md` (per-algorithm derivations) and `collectives/02_topology_mapping.md` (star / torus / mesh specializations), with hierarchical composition in `collectives/03_hierarchical_topologies.md`, in-network primitives in `collectives/04_in_network_collectives.md`, and contention coefficients $(\eta_\alpha, \eta_\beta)$ in `collectives/05_contention_and_congestion.md`. The cheatsheet at `collectives/00_summary.md` indexes all of these. This section substitutes the prefill per-rank message sizes (scaled by $B_{\text{prefill}} \cdot S_{\text{input}}$) into those primitives; the $\alpha_{XP}$ and $BW_{XP}$ values are fabric-chain span quantities per `notation.md §7`.
 
-### TP All-Reduce (prefill)
+### TP collectives (prefill)
 
-The TP All-Reduce synchronizes the partial hidden-state outputs after Row-Parallel matrix multiplications. During prefill, the output has shape $[B_{\text{prefill}} \cdot S_{\text{input}} \times H]$, so the message size is $M_{TP}^{\text{prefill}}(B_{\text{prefill}}) = B_{\text{prefill}} \cdot S_{\text{input}} \cdot H \cdot b$ (vs. $H \cdot b$ during single-token decode). NCCL ships ring (large-$M$) and DBT (small-$M$) AR on a star fabric, selected via `tuner.ar_algorithm` (`collectives/02_topology_mapping.md §2`). Substituting $M_{TP}^{\text{prefill}}(B_{\text{prefill}})$ into the star AR cost form:
-
-$$
-t_{TP}^{\text{prefill,ring}}(B_{\text{prefill}}) \;=\; 2(TP-1)\,\alpha_{TP} \;+\; 2 \cdot \frac{TP-1}{TP} \cdot \frac{B_{\text{prefill}} \cdot S_{\text{input}} \cdot H \cdot b}{BW_{\text{TP}}}
-$$
+The per-layer TP collective synchronizes the partial hidden-state outputs after Row-Parallel matrix multiplications (the **all-reduce (AR)** under TP-attention or under any FFN block) or redistributes per-rank sequence-shards to the TP-sharded form expected by the downstream FFN (the **all-gather (AG)** at the attention → FFN boundary under DP-attention). During prefill, the post-projection output has shape $[B_{\text{prefill}} \cdot S_{\text{input}} \times H]$, so the per-call logical message size is $M_{TP}^{\text{prefill}}(B_{\text{prefill}}) = B_{\text{prefill}} \cdot S_{\text{input}} \cdot H \cdot b$ (vs. $H \cdot b$ during single-token decode). The collective group size is $G_{TP}$ from `notation.md §1` (equal to $TP$ across all three configurations). NCCL ships ring (large-$M$) and DBT (small-$M$) variants for both AR and AG on a star fabric, selected via `tuner.ar_algorithm` (`collectives/02_topology_mapping.md §2`). The per-call costs:
 
 $$
-t_{TP}^{\text{prefill,DBT}}(B_{\text{prefill}}) \;=\; 2\,\lceil \log_2 TP \rceil \cdot \alpha_{TP} \;+\; 2 \cdot \frac{TP-1}{TP} \cdot \frac{B_{\text{prefill}} \cdot S_{\text{input}} \cdot H \cdot b}{BW_{\text{TP}}}
+t_{TP,\text{AR}}^{\text{prefill,ring}}(B_{\text{prefill}}) \;=\; 2(G_{TP}-1)\,\alpha_{TP} \;+\; 2 \cdot \frac{G_{TP}-1}{G_{TP}} \cdot \frac{B_{\text{prefill}} \cdot S_{\text{input}} \cdot H \cdot b}{BW_{\text{TP}}}
 $$
 
-Torus TP fabrics (dim-decomposed ring, TPU / Trainium) use the torus AR form of `collectives/02_topology_mapping.md §3` with the same $M_{TP}^{\text{prefill}}(B_{\text{prefill}})$. The $B_{\text{prefill}} \cdot S_{\text{input}}$ factor in the bandwidth term means TP communication during prefill is substantially larger than during decode — for $S_{\text{input}} = 4096$ and $B_{\text{prefill}} = 4$, the per-collective payload is $\sim 16{,}000\times$ that of single-token decode.
+$$
+t_{TP,\text{AG}}^{\text{prefill,ring}}(B_{\text{prefill}}) \;=\; (G_{TP}-1)\,\alpha_{TP} \;+\; \frac{G_{TP}-1}{G_{TP}} \cdot \frac{B_{\text{prefill}} \cdot S_{\text{input}} \cdot H \cdot b}{BW_{\text{TP}}}
+$$
+
+The AG cost is half the AR cost (one ring pass instead of the AR's two: reduce-scatter then all-gather). The DBT variants substitute $2\lceil \log_2 G_{TP}\rceil \cdot \alpha_{TP}$ (AR) or $\lceil \log_2 G_{TP}\rceil \cdot \alpha_{TP}$ (AG) for the $\alpha$-side coefficient; the $\beta$-side terms are unchanged. Torus TP fabrics (dim-decomposed ring, TPU / Trainium) use the torus AR / AG forms of `collectives/02_topology_mapping.md §3` with the same $M_{TP}^{\text{prefill}}(B_{\text{prefill}})$. The $B_{\text{prefill}} \cdot S_{\text{input}}$ factor in the bandwidth term means TP communication during prefill is substantially larger than during decode — for $S_{\text{input}} = 4096$ and $B_{\text{prefill}} = 4$, the per-collective payload is $\sim 16{,}000\times$ that of single-token decode.
+
+The per-layer TP cost depends on attention mode: under TP-attention the attention output fires an AR; under DP-attention it fires an AG. The FFN / MoE expert output projection always fires an AR (TP-sharded under both modes). The per-layer aggregate is assembled in the per-stage budget below (§3.2 "Total per-stage communication").
 
 > **Implementation note — tiled prefill and $\alpha_{TP}$ accumulation:** In practice, large-$S_{\text{input}}$ prefill is often processed in $k$ sub-sequence tiles (e.g., to fit within SRAM or network buffer limits). Each tile launches an independent all-reduce, accumulating the $\alpha_{TP}$ startup latency $k$ times. The total un-hidden $\alpha$ overhead is $k \times \max(0,\, \alpha_{TP} - \rho \cdot t_{\text{tile,compute}})$, where $t_{\text{tile,compute}}$ is the compute time for a single tile. For fine-grained tiling with small tiles, each tile's compute-to-communication ratio mirrors the full-sequence overlap structure, so the $\rho$ factor still absorbs the hiding benefit. However, for very large $S_{\text{input}}$ and small tile sizes, the accumulated $k \cdot \alpha_{TP}$ term can become non-negligible even when each individual $\alpha_{TP}$ is fully hidden. The formulas above model a single collective per layer; the tiling multiplier $k$ can be incorporated when tile size is a known design parameter.
 
 ### EP All-to-All (prefill, MoE)
 
-For MoE layers, the Dispatch + Combine payload per direction is $B_{\text{prefill}} \cdot S_{\text{input}} \cdot k \cdot H \cdot b$ (vs. $k \cdot H \cdot b$ during single-token decode). The shipped A2A primitive is pairwise direct-send (NCCL on star; bisection-bound pairwise on torus) — see `collectives/01_collective_algorithms.md §7`. Substituting $M_{EP}^{\text{prefill}}(B_{\text{prefill}}) = B_{\text{prefill}} \cdot S_{\text{input}} \cdot k H \cdot b$ into the star pairwise form (the $\times 2$ Dispatch + Combine factor is recovered via $n_{EP} = 2$ in the per-layer accumulator below):
+For MoE layers, the Dispatch + Combine payload per direction is $B_{\text{prefill}} \cdot S_{\text{input}} \cdot k \cdot H \cdot b$ (vs. $k \cdot H \cdot b$ during single-token decode). The collective group size is $G_{EP}$ from `notation.md §1` (equal to $EP$ across all three configurations). The shipped A2A primitive is pairwise direct-send (NCCL on star; bisection-bound pairwise on torus) — see `collectives/01_collective_algorithms.md §7`. Substituting $M_{EP}^{\text{prefill}}(B_{\text{prefill}}) = B_{\text{prefill}} \cdot S_{\text{input}} \cdot k H \cdot b$ into the star pairwise form (the $\times 2$ Dispatch + Combine factor is recovered via $n_{EP} = 2$ in the per-layer accumulator below):
 
 $$
-t_{EP}^{\text{prefill}}(B_{\text{prefill}}) \;=\; (EP-1)\,\alpha_{EP} \;+\; \frac{EP-1}{EP} \cdot \frac{B_{\text{prefill}} \cdot S_{\text{input}} \cdot k H \cdot b}{BW_{\text{EP}}}
+t_{EP}^{\text{prefill}}(B_{\text{prefill}}) \;=\; (G_{EP}-1)\,\alpha_{EP} \;+\; \frac{G_{EP}-1}{G_{EP}} \cdot \frac{B_{\text{prefill}} \cdot S_{\text{input}} \cdot k H \cdot b}{BW_{\text{EP}}}
 $$
 
 For torus EP fabrics, use the torus A2A form of `collectives/02_topology_mapping.md §3` with $M = B_{\text{prefill}} \cdot S_{\text{input}} \cdot k H \cdot b$.
 
 ### PP Hop (prefill)
 
-The PP hop forwards the hidden-state shard to the next stage. With TP rank alignment, each device forwards its local shard of shape $[B_{\text{prefill}} \cdot S_{\text{input}} \times H/TP]$; this is a single point-to-point transfer (see `decode.md §5.1` for the p2p rationale):
+The PP hop forwards the hidden-state shard to the next stage. With cross-section rank alignment, each device forwards its local share of shape $[B_{\text{prefill}} \cdot S_{\text{input}} \times H/D_{\text{kv}}]$; this is a single point-to-point transfer (see `decode.md §5.1` for the p2p rationale and the unified $D_{\text{kv}}$-based per-rank payload):
 
 $$
-t_{PP}^{\text{prefill}}(B_{\text{prefill}}) \;=\; \alpha_{PP} \;+\; \frac{B_{\text{prefill}} \cdot S_{\text{input}} \cdot (H/TP) \cdot b}{BW_{\text{PP}}}
+t_{PP}^{\text{prefill}}(B_{\text{prefill}}) \;=\; \alpha_{PP} \;+\; \frac{B_{\text{prefill}} \cdot S_{\text{input}} \cdot (H / D_{\text{kv}}) \cdot b}{BW_{\text{PP}}}
 $$
 
-$\alpha_{PP}$ and $BW_{PP}$ are tier-aware: under the nested-layout convention (`DP → PP → EP → TP → SP`, fast axes inner), the PP boundary uses the fabric tier whose cumulative reach holds $PP \cdot \text{(inner-axes product)}$. See `decode.md §5.1` for the full convention.
+$\alpha_{PP}$ and $BW_{PP}$ are tier-aware: under the orthogonal layout (`DP → PP → EP → TP → SP`, fast axes inner), the PP boundary uses the fabric tier whose cumulative reach holds $PP \cdot \text{(inner-axes product)}$. See `decode.md §5.1` for the full convention; the same tier-allocation logic carries over to co-located layouts with $\max(TP, EP)$ substituted for $TP \cdot EP$ in the cumulative reach.
 
 ### SP All-Gather (prefill)
 
-During prefill with SP, each SP rank holds $S_{\text{input}}/SP$ of each request's input sequence. Ring Attention circulates KV shards so each device's query block can attend to the full input; the shipped primitive is ring AG per `collectives/01_collective_algorithms.md §6`. Each batched request streams its own KV shard, so the per-rank payload is $M_{SP}^{\text{prefill}}(B_{\text{prefill}}) = B_{\text{prefill}} \cdot (S_{\text{input}} / SP) \cdot (2 H_{kv} / TP) \cdot b$:
+During prefill with SP, each SP rank holds $S_{\text{input}}/SP$ of each request's input sequence. Ring Attention circulates KV shards so each device's query block can attend to the full input; the shipped primitive is ring AG per `collectives/01_collective_algorithms.md §6`. Each batched request streams its own KV shard, so the per-rank payload is $M_{SP}^{\text{prefill}}(B_{\text{prefill}}) = B_{\text{prefill}} \cdot (S_{\text{input}} / SP) \cdot (2 H_{kv} / D_{\text{kv}}) \cdot b$ (the KV shard composes the $D_{\text{kv}}$ partition with the SP sequence partition):
 
 $$
-t_{SP}^{\text{prefill}}(B_{\text{prefill}}) \;=\; (SP-1)\,\alpha_{SP} \;+\; (SP-1) \cdot \frac{B_{\text{prefill}} \cdot (S_{\text{input}} / SP) \cdot (2 H_{kv} / TP) \cdot b}{BW_{\text{SP}}}
+t_{SP}^{\text{prefill}}(B_{\text{prefill}}) \;=\; (SP-1)\,\alpha_{SP} \;+\; (SP-1) \cdot \frac{B_{\text{prefill}} \cdot (S_{\text{input}} / SP) \cdot (2 H_{kv} / D_{\text{kv}}) \cdot b}{BW_{\text{SP}}}
 $$
 
 For torus SP fabrics, use the torus AG form of `collectives/02_topology_mapping.md §3` with the same $M_{SP}^{\text{prefill}}(B_{\text{prefill}})$.
 
 ### Total per-stage communication time (prefill)
 
-Following the same structure as `decode.md §5.5`, collectives within each layer are sequential, and the per-axis call counts $n_{TP}, n_{EP}, n_{SP}$ are the same NCCL API call counts used by decode (see `decode.md §5.5`):
+Following the same structure as `decode.md §5.5`, collectives within each layer are sequential. The per-layer TP cost is the sum of one attention TP collective (AR under TP-attention or AG under DP-attention) and one FFN TP all-reduce (always AR):
+
+$$
+t_{TP}^{\text{prefill,layer}}(B_{\text{prefill}}) \;=\; t_{TP}^{\text{prefill,attn}}(B_{\text{prefill}}) \;+\; t_{TP,\text{AR}}^{\text{prefill}}(B_{\text{prefill}}), \qquad
+t_{TP}^{\text{prefill,attn}}(B_{\text{prefill}}) \;=\; \begin{cases} t_{TP,\text{AR}}^{\text{prefill}}(B_{\text{prefill}}) & \text{TP-attention} \\ t_{TP,\text{AG}}^{\text{prefill}}(B_{\text{prefill}}) & \text{DP-attention} \end{cases}
+$$
+
+The per-axis NCCL API call counts $n_{TP} = 2$, $n_{EP} = 2$, $n_{SP} = 1$ are the same as decode (`decode.md §5.5`). The total per-stage prefill comm is:
 
 $$
 t_{\text{prefill,comm}}(B_{\text{prefill}}) =
 \frac{L}{PP}
 \bigl(
-n_{TP}\, t_{TP}^{\text{prefill}}(B_{\text{prefill}}) +
+t_{TP}^{\text{prefill,layer}}(B_{\text{prefill}}) +
 n_{SP}\, t_{SP}^{\text{prefill}}(B_{\text{prefill}})
 \bigr) +
 \frac{L_{\text{moe}}}{PP}
@@ -605,7 +624,7 @@ n_{EP}\, t_{EP}^{\text{prefill}}(B_{\text{prefill}})
 t_{PP}^{\text{prefill}}(B_{\text{prefill}})
 $$
 
-where $n_{TP} = 2$ (attention + FFN), $n_{SP} = 1$ (attention), $n_{EP} = 2$ for MoE layers (Dispatch + Combine, each costing one single-direction A2A) and $0$ for dense.
+where $n_{EP} = 2$ for MoE layers (Dispatch + Combine, each costing one single-direction A2A) and $0$ for dense; $n_{SP} = 1$ when SP is enabled, $0$ otherwise.
 
 ---
 
@@ -653,8 +672,8 @@ Mirroring `decode.md §6.2`, the LM head $H \to V$ projection is a per-pass one-
 $$
 t_{\text{LM,prefill,hw}}(B_{\text{prefill}}) =
 \max\!\left(
-  \frac{2 B_{\text{prefill}} H V / TP}{R_{\text{GPU}}},\;
-  \frac{H V b / TP + B_{\text{prefill}} V b}{BW_{\text{mem}}}
+  \frac{2 B_{\text{prefill}} H V / D_{\text{emb}}}{R_{\text{GPU}}},\;
+  \frac{H V b / D_{\text{emb}} + B_{\text{prefill}} V b}{BW_{\text{mem}}}
 \right)
 $$
 
@@ -672,7 +691,7 @@ For prefill, $\text{mb}_{\text{prefill}}$ is large enough at typical $S$ that $\
 
 ### SW composition
 
-The per-stage CPU dispatch budget $t_{\text{stage,sw}}$ is applied via the SW-overlap factor $\rho_{\text{SW}}$ in the same base + unhidden-overflow form as decode (`decode.md §7.2`). Let $t_{\text{prefill,GPU}}(B_{\text{prefill}}) = \max\bigl(t_{\text{compute}}^{\text{eff}}(B_{\text{prefill}}),\, t_{\text{mem}}(B_{\text{prefill}})\bigr)$ denote the GPU-side roofline:
+The per-stage CPU dispatch budget $t_{\text{stage,sw}}$ is applied via the SW-overlap factor $\rho_{\text{SW}}$ in the same base + unhidden-overflow form as decode (`decode.md §7.1` and `§7.3`). Let $t_{\text{prefill,GPU}}(B_{\text{prefill}}) = \max\bigl(t_{\text{compute}}^{\text{eff}}(B_{\text{prefill}}),\, t_{\text{mem}}(B_{\text{prefill}})\bigr)$ denote the GPU-side roofline:
 
 $$
 t_{\text{prefill,local}}(B_{\text{prefill}}) = t_{\text{prefill,GPU}}(B_{\text{prefill}}) + \max\!\bigl(0,\; t_{\text{stage,sw}} - \rho_{\text{SW}} \cdot t_{\text{prefill,GPU}}(B_{\text{prefill}})\bigr)
@@ -750,7 +769,7 @@ For very long prompts ($S_{\text{input}} \gg 1$), prefilling the entire sequence
 Each chunk processes $C$ tokens. The **linear terms** (projections + FFN) are independent of position and identical for every chunk. However, the **attention term** is chunk-index-dependent: chunk $k$ (processing tokens $[(k{-}1)C,\; kC)$) has its $C$ queries attend to the **full accumulated KV cache** of $kC$ positions [SARATHI], not just the $C$ tokens within the chunk itself. The per-chunk FLOPs for chunk $k = 1, 2, \ldots, N_{\text{chunks}}$:
 
 $$
-F_{\text{chunk,device}}^{(k)} = \frac{L}{PP} \left[ \frac{(4H^2 + 4 H H_{kv}) C}{TP} + \frac{6 H I_{\text{eff}} C}{TP \cdot EP} + \frac{4 \cdot C \cdot kC \cdot H}{TP \cdot SP} \right]
+F_{\text{chunk,device}}^{(k)} = \frac{L}{PP} \left[ \frac{(4H^2 + 4 H H_{kv}) C}{D_{\text{attn}}} + \frac{6 H I_{\text{eff}} C}{D_{\text{exp}}} + \frac{4 \cdot C \cdot kC \cdot H}{D_{\text{kv}} \cdot SP} \right]
 $$
 
 The first two terms inside the brackets are **linear** (projections + FFN, constant across chunks). The third term is the **attention** component, which grows with chunk index $k$ since chunk $k$ attends to $kC$ accumulated KV positions.
@@ -807,10 +826,10 @@ The total FLOPs across all chunks separate into constant (linear) and growing (a
 - **Attention terms:**
 
 $$
-\sum_{k=1}^{N} \frac{4 k C^2 H}{TP \cdot SP} =
-\frac{4 C^2 H}{TP \cdot SP} \cdot \frac{N(N{+}1)}{2}
+\sum_{k=1}^{N} \frac{4 k C^2 H}{D_{\text{kv}} \cdot SP} =
+\frac{4 C^2 H}{D_{\text{kv}} \cdot SP} \cdot \frac{N(N{+}1)}{2}
 \;\approx\;
-\frac{2 S_{\text{input}}^2 H}{TP \cdot SP}
+\frac{2 S_{\text{input}}^2 H}{D_{\text{kv}} \cdot SP}
 $$
 
 The chunked attention total ($\approx 2S^2H$) is half the unchunked convention ($4S^2H$ from §1.2). This is **not** a FLOP reduction from chunking — it reflects the **causal structure**: each chunk naturally computes attention only to its accumulated context (positions $0$ through $kC$), faithfully capturing the lower-triangular causal mask. The unchunked formula uses the full-matrix $4S^2H$ convention (see §1.2 note: practical FlashAttention implementations process the full tile and mask, so published FLOPs budgets use $S^2$ rather than $S^2/2$). The actual compute work is the same regardless of chunking.
@@ -908,10 +927,10 @@ M_{\text{KV,total}}=
 \approx 1.34 \text{ GB}
 $$
 
-If the prefill cluster shards the KV cache across $TP_p \cdot SP_p$ ranks, each prefill device holds
+If the prefill cluster shards the KV cache across $D_{\text{kv,p}} \cdot SP_p$ ranks (where $D_{\text{kv,p}}$ is the prefill-side $D_{\text{kv}}$ from `notation.md §1`; equal to $TP_p$ for the typical orthogonal + TP-attn prefill, or $\max(TP_p, EP_p)$ for a co-located DP-attn prefill), each prefill device holds
 
 $$
-M_{\text{KV,shard,p}} = \frac{M_{\text{KV,total}}}{TP_p \cdot SP_p}
+M_{\text{KV,shard,p}} = \frac{M_{\text{KV,total}}}{D_{\text{kv,p}} \cdot SP_p}
 $$
 
 bytes locally. The handoff models below operate on this per-device shard volume, then account for any reshaping required to land the cache in the decode-side layout.
@@ -985,13 +1004,13 @@ Four effects degrade the *delivered* end-to-end bandwidth $BW_{\text{inter}}$ be
 
 3. **HBM write into PagedAttention blocks.** The decode side writes the arriving KV cache into PagedAttention blocks (`kv.md §2`), each of size $\text{BLK}_{KV}$. The block-stride write pattern hits 50–80% of peak HBM bandwidth, not 100%. For a typical 1–2 GB cache this adds 10–50 µs and can be folded into $\eta_{\text{repack}}$ above.
 
-4. **RDMA work-request posting.** Each (layer, shard) tuple is typically a separate RDMA work request; total $N_{\text{WR}} \approx L \cdot TP_p \cdot SP_p$ requests, at ≈1 µs each (mostly async, but the head-of-queue latency is not). This inflates the effective startup beyond a single $\alpha_{\text{inter}}$:
+4. **RDMA work-request posting.** Each (layer, shard) tuple is typically a separate RDMA work request; total $N_{\text{WR}} \approx L \cdot D_{\text{kv,p}} \cdot SP_p$ requests, at ≈1 µs each (mostly async, but the head-of-queue latency is not). This inflates the effective startup beyond a single $\alpha_{\text{inter}}$:
 
    $$
    \alpha_{\text{inter}}^{\text{eff}} = \alpha_{\text{inter}} + N_{\text{WR}} \cdot \tau_{\text{WR}}
    $$
 
-   For $L = 80$, $TP_p = 8$, $SP_p = 1$, $\tau_{\text{WR}} = 1$ µs → $N_{\text{WR}} \cdot \tau_{\text{WR}} = 640$ µs, often larger than $\alpha_{\text{inter}}$ itself.
+   For $L = 80$, $D_{\text{kv,p}} = TP_p = 8$, $SP_p = 1$, $\tau_{\text{WR}} = 1$ µs → $N_{\text{WR}} \cdot \tau_{\text{WR}} = 640$ µs, often larger than $\alpha_{\text{inter}}$ itself.
 
 ### Layer-wise streaming overlap ($\rho_{KV}$)
 
