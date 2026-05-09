@@ -75,6 +75,15 @@ from .partition_layout import (
     assign_tier_per_axis,
     tier_at,
 )
+from .sharding_factors import (
+    D_attn,
+    D_exp,
+    D_kv,
+    D_emb,
+    G_TP,
+    G_EP,
+    N_replica,
+)
 
 __all__ = [
     # P2P
@@ -136,4 +145,12 @@ __all__ = [
     "NESTED_LAYOUT_ORDER",
     "assign_tier_per_axis",
     "tier_at",
+    # sharding factors (notation.md §1)
+    "D_attn",
+    "D_exp",
+    "D_kv",
+    "D_emb",
+    "G_TP",
+    "G_EP",
+    "N_replica",
 ]
