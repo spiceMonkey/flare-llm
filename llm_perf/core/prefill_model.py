@@ -18,6 +18,12 @@ from .primitives import (
     p2p_hop,
     assign_tier_per_axis,
     tier_at,
+    D_attn,
+    D_exp,
+    D_kv,
+    D_emb,
+    G_TP,
+    G_EP,
 )
 
 
@@ -94,15 +100,14 @@ def compute_prefill_flops(
     H_kv = model.H_kv()
     S = tuner.S_input
     PP = partition.PP
-    TP = partition.TP
     SP = partition.SP
     I_dense = model.I_dense
 
     # Linear FLOPs for the full pass: per-token contribution × S_input tokens
     F_linear_device = linear_flops_per_token(model, partition) * S
 
-    # Attention FLOPs: 4·S²·H per layer, sharded by TP·SP
-    F_attn_device = (L / PP) * (4 * S**2 * H) / (TP * SP)
+    # Attention FLOPs: 4·S²·H per layer, sharded by D_kv·SP (notation.md §1)
+    F_attn_device = (L / PP) * (4 * S**2 * H) / (D_kv(partition) * SP)
 
     F_prefill_device = F_linear_device + F_attn_device
 
@@ -178,9 +183,13 @@ def compute_prefill_comm(
     tokens = S if tokens_per_step is None else max(0, int(tokens_per_step))
     b = model.bytes_per_param
     PP = partition.PP
-    TP = partition.TP
-    EP = max(1, partition.EP)
     SP = partition.SP
+
+    # Collective group sizes (notation.md §1; equal to TP and EP across all
+    # three production-relevant configurations, threaded via helpers for
+    # consistency with the abstract divisor symbols D_kv / D_emb).
+    g_TP = G_TP(partition)
+    g_EP = G_EP(partition)
 
     n_TP = tuner.n_TP_collectives
     n_EP = tuner.n_EP_collectives
@@ -189,10 +198,10 @@ def compute_prefill_comm(
     # Resolve EP group size up front so the dispatcher sees the correct radix.
     if model.moe is not None:
         N_exp = max(1, model.moe.n_experts)
-        EP = min(EP, N_exp)
+        g_EP = min(g_EP, N_exp)
         k_active = model.moe.k_active
     else:
-        EP = 1
+        g_EP = 1
         k_active = 1
 
     # Prefill reads the per-phase fields; falls back to legacy single-knob.
@@ -217,35 +226,49 @@ def compute_prefill_comm(
             inc_enabled=inc_enabled,
         )
 
-    # PP: token-scaled activation hop. Cost at the *correct* fabric tier
+    # PP: token-scaled activation hop. Per-rank payload uses H/D_kv (matches
+    # decode.md §5.1 and prefill.md §3.2). Cost at the *correct* fabric tier
     # under nested-layout rule (see decode_model.compute_comm for the full
     # rationale and partition_layout.py for the helper).
+    d_kv = D_kv(partition)
     if PP > 1:
-        msg_PP = (tokens * H / TP) * b
+        msg_PP = (tokens * H / d_kv) * b
         pp_tier_idx = assign_tier_per_axis(partition, system, role="PP")["PP"]
         pp_tier = tier_at(system, "PP", pp_tier_idx)
         t_PP = p2p_hop(msg_PP, pp_tier.alpha_us * 1e-6, pp_tier.bw_per_port_GBps * 1e9)
     else:
         t_PP = 0.0
 
-    # TP: token-scaled all-reduce
-    if TP > 1:
+    # TP: token-scaled all-reduce (or all-gather under DP-attention for the
+    # attention block — see DP-attn swap below)
+    if g_TP > 1:
         msg_TP = tokens * H * b
-        t_TP = _cost("TP", "all_reduce", msg_TP, TP, alg=tp_algorithm)
+        t_TP = _cost("TP", "all_reduce", msg_TP, g_TP, alg=tp_algorithm)
     else:
         t_TP = 0.0
+        msg_TP = 0.0
+
+    # DP-attention swap (decode.md §5.3 + prefill.md §3.2): under
+    # attention_mode="dp" the per-layer attention TP all-reduce is replaced
+    # by a single TP all-gather at the attention → FFN transition. The FFN's
+    # TP all-reduce remains. Per-stage adjustment after aggregate_per_stage.
+    if g_TP > 1 and partition.attention_mode == "dp":
+        t_TP_AG = _cost("TP", "all_gather", msg_TP, g_TP)
+    else:
+        t_TP_AG = 0.0
 
     # EP: MoE all-to-all
-    if EP > 1:
+    if g_EP > 1:
         msg_EP = k_active * tokens * H * b
-        t_EP = _cost("EP", "moe_a2a", msg_EP, EP, alg=ep_algorithm)
+        t_EP = _cost("EP", "moe_a2a", msg_EP, g_EP, alg=ep_algorithm)
     else:
         t_EP = 0.0
 
     # SP: KV all-gather (token-scaled). Per-rank gathered output convention
-    # (collective_cost.py §6: M = G·shard).
+    # (collective_cost.py §6: M = G·shard). Uses D_kv for the head/seq divisor
+    # (matches prefill.md §3.2 / decode.md §5.4).
     if SP > 1:
-        msg_SP = tokens * (2 * H_kv / TP) * b
+        msg_SP = tokens * (2 * H_kv / d_kv) * b
         t_SP = _cost("SP", "all_gather", msg_SP, SP)
     else:
         t_SP = 0.0
@@ -260,6 +283,11 @@ def compute_prefill_comm(
         n_EP=n_EP, t_EP=t_EP,
         t_PP=t_PP,
     )
+
+    # DP-attention adjustment: replace one of the n_TP per-layer all-reduces
+    # (the attention output AR) with the cheaper AG.
+    if t_TP_AG > 0.0 and t_TP > 0.0:
+        t_prefill_comm += (L / PP) * (t_TP_AG - t_TP)
 
     return PrefillCommResults(
         t_TP_prefill=t_TP,
@@ -292,11 +320,27 @@ def compute_prefill_latency(
     tiers = system.device.get_tiers()
 
     PP = partition.PP
-    TP = partition.TP
-    EP = max(1, partition.EP)
     SP = partition.SP
     rho = tuner.overlap_factor
     rho_SW = tuner.sw_overlap_factor
+
+    # Collective group sizes (notation.md §1) for kernel-launch SW count
+    # axis-presence guards. Equal to TP and EP across all three production
+    # configurations; threaded via helpers for consistency with the abstract
+    # divisor symbols D_kv / D_emb.
+    g_TP_pf = G_TP(partition)
+    g_EP_pf = G_EP(partition)
+
+    # Abstract sharding factors (notation.md §1) for the LM head and chunked
+    # prefill formulas. d_kv composes with SP for KV-attention divisors.
+    d_attn_pf = D_attn(partition)
+    d_kv_pf = D_kv(partition)
+    d_emb_pf = D_emb(partition)
+    if model.moe is not None:
+        d_exp_pf_moe = D_exp(partition, layer_kind="moe", n_exp_cap=max(1, model.moe.n_experts))
+    else:
+        d_exp_pf_moe = D_exp(partition, layer_kind="dense")
+    d_exp_pf_dense = D_exp(partition, layer_kind="dense")
 
     S = tuner.S_input
     B_pf = tuner.B_prefill
@@ -316,12 +360,12 @@ def compute_prefill_latency(
     # The PP-hop term uses the middle-stage 2× factor (recv + send) by
     # default; edge stages do only one direction (off by one k_pp_hop·τ,
     # negligible at PP >> 1).
-    n_TP_calls = tuner.n_TP_collectives if TP > 1 else 0
+    n_TP_calls = tuner.n_TP_collectives if g_TP_pf > 1 else 0
     # n_EP_collectives counts NCCL API calls directly (dispatch + combine
     # = 2 per MoE layer); see decode_model._t_SW_per_microbatch. EP launches
     # only fire on MoE layers — split the layer term into dense + MoE
     # contributions, matching the L_moe/PP factor in §5.5's t_comm formula.
-    n_EP_calls = tuner.n_EP_collectives if EP > 1 else 0
+    n_EP_calls = tuner.n_EP_collectives if g_EP_pf > 1 else 0
     n_SP_calls = tuner.n_SP_collectives if SP > 1 else 0
     if model.moe is not None:
         L_moe_total = model.moe.n_moe_layers if model.moe.n_moe_layers else L
@@ -378,8 +422,8 @@ def compute_prefill_latency(
     B_pf_eff = max(1, B_pf)
 
     def _t_LM(B_eff: int) -> float:
-        F_lm = 2.0 * B_eff * H * V / max(1, TP)
-        T_lm = (H * V * b) / max(1, TP) + B_eff * V * b
+        F_lm = 2.0 * B_eff * H * V / max(1, d_emb_pf)
+        T_lm = (H * V * b) / max(1, d_emb_pf) + B_eff * V * b
         t_c = F_lm / R_gpu if R_gpu > 0 else 0.0
         t_m = T_lm / BW_top if BW_top > 0 else 0.0
         return max(t_c, t_m)
@@ -451,16 +495,19 @@ def compute_prefill_latency(
         else:
             I_eff = model.I_dense
 
-        # Linear FLOPs per chunk (constant across chunks)
+        # Linear FLOPs per chunk (constant across chunks). Use D_attn for
+        # projections, D_exp (MoE-aware) for FFN. For pure dense models the
+        # MoE divisor collapses to TP via D_exp(layer_kind="dense").
+        d_exp_for_chunk = d_exp_pf_moe if model.moe is not None else d_exp_pf_dense
         F_linear_per_chunk = (L / PP) * (
-            (4 * H**2 + 4 * H * H_kv) * C / TP
-            + 6 * H * I_eff * C / (TP * EP)
+            (4 * H**2 + 4 * H * H_kv) * C / d_attn_pf
+            + 6 * H * I_eff * C / d_exp_for_chunk
         )
 
         # Weight traffic per chunk (same each chunk — full weight read)
         T_theta_chunk = traffic.T_theta_device
-        # KV write per chunk: C new entries
-        T_kv_write_chunk = (L / PP) * (2 * C * H_kv * model.bytes_per_param) / (TP * SP)
+        # KV write per chunk: C new entries (D_kv * SP divisor matches §1.4 / §3.1)
+        T_kv_write_chunk = (L / PP) * (2 * C * H_kv * model.bytes_per_param) / (d_kv_pf * SP)
 
         # Chunk-level comm: evaluate collectives at C tokens per step.
         # α (latency term) is unchanged per chunk; β (payload) scales with C,
@@ -472,16 +519,17 @@ def compute_prefill_latency(
 
         total_chunked = 0.0
         for k in range(1, n_chunks + 1):
-            # Attention FLOPs for chunk k: attends to kC accumulated KV positions
-            F_attn_chunk_k = (L / PP) * (4 * C * k * C * H) / (TP * SP)
+            # Attention FLOPs for chunk k: attends to kC accumulated KV positions.
+            # Sharded by D_kv·SP per prefill.md §1.5 / §5.1.
+            F_attn_chunk_k = (L / PP) * (4 * C * k * C * H) / (d_kv_pf * SP)
             F_chunk_k = F_linear_per_chunk + F_attn_chunk_k
 
             t_chunk_compute_k = F_chunk_k / R_gpu
 
             # Memory: weights + KV write + KV read (kC entries for attention).
             # Per-tier sum (sram.md §2.1): KV-write + KV-read folded into a
-            # single per-request KV term for placement purposes.
-            T_kv_read_k = (L / PP) * (2 * k * C * H_kv * model.bytes_per_param) / (TP * SP)
+            # single per-request KV term for placement purposes. Uses D_kv·SP.
+            T_kv_read_k = (L / PP) * (2 * k * C * H_kv * model.bytes_per_param) / (d_kv_pf * SP)
             T_kv_chunk_k = T_kv_write_chunk + T_kv_read_k
             t_chunk_mem_k = _t_mem(T_theta_chunk, T_kv_chunk_k, B=1)
 

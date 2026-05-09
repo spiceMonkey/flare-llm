@@ -17,6 +17,11 @@ framework would otherwise price every PP hop at tier 0 because
 resolves to the innermost tier even when PP physically spans an outer
 fabric tier (e.g., d-Matrix squadrack PP=32 with TP=8 spanning the
 ethernet rack-tier, not just the package D2D mesh).
+
+Under TP+EP co-location (`PartitionSpec.layout == "co_located"`), TP and EP
+are overlaid on the same physical GPU set, so the cumulative-reach
+calculation must count them once (as `max(TP, EP)`) rather than as their
+product. The helper `_axis_size_for_reach` encodes this.
 """
 
 from typing import Dict, Tuple
@@ -27,6 +32,28 @@ from ...specs.system_spec import SystemSpec, TierSpec
 
 # Inner-to-outer order used by the nested-layout rule.
 DEFAULT_ORDER: Tuple[str, ...] = ("SP", "TP", "EP", "PP")
+
+
+def _axis_size_for_reach(partition: PartitionSpec, axis: str) -> int:
+    """Effective per-axis multiplier for cumulative-reach accumulation.
+
+    Returns the raw ``getattr(partition, axis)`` for orthogonal layouts
+    (the canonical product `SP*TP*EP*PP`). Under co-located layouts, TP and
+    EP overlay on the same physical GPUs, so:
+
+      - axis "TP" returns ``max(TP, EP)`` (the merged axis size)
+      - axis "EP" returns 1 (already counted by the merged TP-axis above)
+
+    Inert for non-overlapping axes (PP, SP) and orthogonal layouts.
+    """
+    if axis not in ("TP", "EP"):
+        return max(1, getattr(partition, axis, 1))
+    if partition.layout != "co_located":
+        return max(1, getattr(partition, axis, 1))
+    # Co-located: TP and EP share physical GPUs.
+    if axis == "TP":
+        return max(partition.TP, max(1, partition.EP))
+    return 1  # axis == "EP" — absorbed into the merged TP axis above
 
 
 def assign_tier_per_axis(
@@ -47,6 +74,10 @@ def assign_tier_per_axis(
     Groups that exceed the fabric's outermost reach also clamp to the
     outermost tier (the cost will be the worst case for that fabric).
 
+    Co-located layouts merge TP and EP via ``_axis_size_for_reach`` so the
+    cumulative product matches the actual replica size
+    ``PP * max(TP, EP) * SP`` rather than the orthogonal `PP*TP*EP*SP`.
+
     Returns ``{axis_name: tier_index}`` for every axis in ``order``.
     The dict ordering matches ``order`` so callers can iterate predictably.
     """
@@ -64,11 +95,15 @@ def assign_tier_per_axis(
     assignment: Dict[str, int] = {}
     cumulative_group = 1
     for ax in order:
-        n = max(1, getattr(partition, ax, 1))
-        if n <= 1:
+        # Raw axis size still drives the "is this axis trivial?" check —
+        # if the user set EP=1, the EP collective never fires (orthogonal
+        # or co-located). The cumulative-reach multiplier is layout-aware
+        # via _axis_size_for_reach.
+        raw_n = max(1, getattr(partition, ax, 1))
+        if raw_n <= 1:
             assignment[ax] = 0
             continue
-        cumulative_group *= n
+        cumulative_group *= _axis_size_for_reach(partition, ax)
         assigned = last_tier  # default: outermost
         for i, r in enumerate(cumulative_reach):
             if r >= cumulative_group:
