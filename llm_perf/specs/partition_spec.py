@@ -16,7 +16,10 @@ class PartitionSpec:
         sequence-sharded across TP ranks; the per-layer attention all-reduce
         is replaced by a TP all-gather at the attention → FFN transition.
         Per-device KV bytes and attention FLOPs are invariant under the swap.
-        See decode.md §8 for the full derivation.
+        See notation.md §1 for the unified deployment-knob abstraction (the
+        per-component effective sharding factors D_attn, D_exp, D_kv that
+        encode this and the co-location layout in one lookup table) and
+        decode.md §1.4 / §5.3 for the per-device formulas.
     Dense FFN and MoE FFN remain TP-sharded / EP-sharded under both modes.
 
     **Topology limitation.** This spec keeps the orthogonal-axis invariant

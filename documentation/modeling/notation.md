@@ -48,22 +48,53 @@ TP splits matrices within each expert or dense block. After TP, each rank holds 
 
 SP shards the **KV cache** (activation state), not model parameters. Only after DP/PP/EP/TP are fixed can the KV sequence dimension be partitioned.
 
-### Per-block deviation: DP-attention
+### Production deviations from the strict orthogonal layout
 
-The strict orthogonal layout above describes how parameters and KV are placed at the partition level. A separate per-block mode selector, the **attention parallelism mode**, modifies what the TP ranks of a replica hold *inside the attention block only*: under DP-attention mode the attention weights are replicated on every TP rank and tokens are partitioned along the sequence dimension instead of sharding heads. The dense and MoE blocks remain TP- and EP-sharded as above. See §17 below and `decode.md §8` for the full derivation. The default mode (TP-attention) preserves the orthogonal-layout derivations of §1–§14.
+The strict orthogonal nesting above is the canonical mental model and the default convention for §1–§14. Two production-driven deviations modify how individual components are sharded across devices:
+
+1. **Attention parallelism mode swap (TP-attn ↔ DP-attn) [DSV3, SGLANG-DPATTN].** A per-block selector on the attention block only: under DP-attention the attention weights are replicated on every TP rank and tokens are partitioned along the sequence dimension instead of head-sharding. The per-layer attention all-reduce (AR) is replaced by a TP all-gather (AG). Dense and MoE blocks remain TP- and EP-sharded.
+
+2. **TP+EP co-location.** A layout-level choice: TP and EP map to the *same* physical GPUs of a replica rather than disjoint GPU sets (DeepSeek-V3 / R1 production decode on SGLang and NVIDIA Dynamo). With both axes overlapped on the same `max(TP, EP)` GPUs, no separate TP group exists for head-sharding to land on, so attention falls back to DP-attn by construction. Expert weights are no longer further TP-sharded within an expert-owning rank — each owned expert sits whole on its host GPU.
+
+To carry these deviations through every per-device formula in `decode.md` without conditional branching, we abstract each shardable component's effective per-device divisor into a named symbol:
+
+- $D_{\text{attn}}$ — Effective shard factor for attention weights (Q/K/V/O projections).
+- $D_{\text{exp}}$ — Effective shard factor for FFN / expert weights. **Per-layer-type:** dense FFN always uses $D_{\text{exp}} = TP$ (no EP axis to overlap; co-location does not apply); MoE FFN follows the table below.
+- $D_{\text{kv}}$ — Effective shard factor for KV cache by *head or sequence* (excludes the SP axis). Per-device KV memory and traffic always carry an additional $/SP$ factor on top of $D_{\text{kv}}$, reflecting sequence-parallelism sharding when SP is enabled.
+- $D_{\text{emb}}$ — Effective shard factor for embedding / LM head weights.
+- $G_{TP}$, $G_{EP}$ — Collective group sizes for TP and EP comms (group of devices participating in the per-layer collective). Annotated with the collective primitive (AR = all-reduce, AG = all-gather) where the swap depends on the attention mode.
+- $N_{\text{replica}}$ — Devices per model replica.
+
+The mapping from `(layout, attention_mode)` to factor values (MoE FFN row for $D_{\text{exp}}$; dense FFN always uses $TP$):
+
+| layout | attention_mode | $D_{\text{attn}}$ | $D_{\text{exp}}$ (MoE) | $D_{\text{kv}}$ | $D_{\text{emb}}$ | $G_{TP}$ | $G_{EP}$ | $N_{\text{replica}}$ |
+|---|---|---|---|---|---|---|---|---|
+| orthogonal | TP-attn *(default)* | $TP$ | $TP \cdot EP$ | $TP$ (head) | $TP$ | $TP$ (AR) | $EP$ | $PP \cdot TP \cdot EP \cdot SP$ |
+| orthogonal | DP-attn | $1$ | $TP \cdot EP$ | $TP$ (seq) | $TP$ | $TP$ (AG) | $EP$ | $PP \cdot TP \cdot EP \cdot SP$ |
+| co-located | DP-attn *(production)* | $1$ | $EP$ | $\max(TP, EP)$ (seq) | $TP$ | $TP$ (AG) | $EP$ | $PP \cdot \max(TP, EP) \cdot SP$ |
+
+KV cache footprint is **invariant** under the orthogonal TP-attn ↔ DP-attn swap ($D_{\text{kv}} = TP$ either way) — head-sharded by $TP$ vs sequence-sharded by $TP$ ranks gives the same per-device byte count; only the meaning of the divisor changes (`(head)` vs `(seq)` annotation).
+
+A theoretical fourth combination — co-located + TP-attn — is not used in production: with TP and EP mapped to the same physical GPUs, there is no separate TP group for head-sharding to land on, so attention falls back to DP-attn by construction.
+
+**Enabling conditions for co-location.** Per-device HBM must hold $1/EP$ (rather than $1/(TP \cdot EP)$) of the expert weights, OR the attention block is compact enough (Multi-head Latent Attention (MLA) or aggressive grouped-query attention (GQA)) that DP-attn replication costs little. DSv3 satisfies both via MLA + FP4 quantization [DSV3].
+
+All `decode.md` derivations from §1 onward use the abstract factors $D_{\text{attn}}$, $D_{\text{exp}}$, $D_{\text{kv}}$, $D_{\text{emb}}$, $G_{TP}$, $G_{EP}$, $N_{\text{replica}}$. Each downstream section in `decode.md` opens with a small summary table mapping the abstract factors used in that section to each of the three configurations; this `notation.md §1` table is the canonical source. Per-device formulas live in `decode.md §1.4` (memory), `§2.1`, `§2.3` (traffic), `§3.5` (FLOPs), `§5.3`, `§5.5` (communication); operational guidance on when each mode pays lives in `§6.3` (partition strategy).
 
 ---
 
 ## 2. Parallelism Dimensions
 _(→ decode.md)_
 
+The five parallelism dimensions ($DP$, $PP$, $TP$, $EP$, $SP$) are **partition counts** — how many ways each kind of state is sharded. Their physical mapping to GPUs is governed by the layout choice (§1): under the orthogonal layout each $(PP, TP, EP, SP)$ tuple picks a unique GPU within a replica; under TP+EP co-location the $TP$ and $EP$ axes are *overlaid* on the same physical GPU set. The number of GPUs per replica is given by $N_{\text{replica}}$ (§1 lookup table), which itself depends on the layout.
+
 - $DP$ — Data Parallelism. Number of full model replicas; each handles disjoint input batches.
-  $$DP = \left\lfloor \frac{N_{\text{GPUs}}}{PP \cdot EP \cdot TP \cdot SP} \right\rfloor$$
-- $PP$ — Pipeline Parallelism. Layers split into stages; each stage holds $L_{\text{stage}} = L / PP$ layers.
-- $TP$ — Tensor Parallelism. Splits matrix multiplies across devices (Megatron-LM column/row parallel).
-- $EP$ — Expert Parallelism. For MoE: experts partitioned across devices via all-to-all routing.
-- $SP$ — Sequence Parallelism. Ring-attention-style KV sharding for inference; sequence dimension
-  partitioned across devices for KV storage.
+  $$DP = \left\lfloor \frac{N_{\text{GPUs}}}{N_{\text{replica}}} \right\rfloor$$
+  where $N_{\text{replica}} = PP \cdot TP \cdot EP \cdot SP$ under the orthogonal layout (default) and $N_{\text{replica}} = PP \cdot \max(TP, EP) \cdot SP$ under TP+EP co-location.
+- $PP$ — Pipeline Parallelism. Layers split into stages; each stage holds $L_{\text{stage}} = L / PP$ layers. Independent of layout.
+- $TP$ — Tensor Parallelism. Sharding factor for matrix multiplies (Megatron-LM column/row parallel). Under orthogonal layout, TP picks one GPU per attention/FFN shard; under co-location, TP and EP overlap on the same physical GPUs and the attention block falls back to DP-attn (the actual per-device divisors are encoded in $D_{\text{attn}}$, $D_{\text{exp}}$ from §1).
+- $EP$ — Expert Parallelism. Sharding factor for MoE experts (each EP rank owns a subset of experts; tokens routed via all-to-all). Under orthogonal layout, EP picks one GPU per expert shard; under co-location, EP and TP share physical GPUs (per $D_{\text{exp}}$ in §1).
+- $SP$ — Sequence Parallelism. Ring-attention-style KV sharding for inference; sequence dimension partitioned across devices for KV storage. Independent of layout (composes additively with $D_{\text{kv}}$).
 
 ---
 
@@ -315,7 +346,8 @@ _(→ kv.md)_
   $$\varphi(S) = \frac{\lceil S / \text{BLK}_{KV} \rceil \times \text{BLK}_{KV}}{S}, \qquad \varphi_{\text{avg}} \approx 1 + \frac{\text{BLK}_{KV}}{2S}$$
 - $M_{\text{HBM,KV,avail}}$ — HBM capacity available for KV storage after weights and activations.
 - $S_{\max}$ — Maximum supportable context length given $M_{\text{HBM,KV,avail}}$ and $\varphi$:
-  $$S_{\max} \approx \frac{M_{\text{HBM,KV,avail}} \times TP \times SP}{\varphi_{\text{avg}} \times 2 H_{kv} b \times L/PP}$$
+  $$S_{\max} \approx \frac{M_{\text{HBM,KV,avail}} \times D_{\text{kv}} \times SP}{\varphi_{\text{avg}} \times 2 H_{kv} b \times L/PP}$$
+  $D_{\text{kv}}$ values: $TP$ (orthogonal + TP-attn or DP-attn) / $\max(TP, EP)$ (co-located + DP-attn).
 
 ---
 
@@ -371,7 +403,7 @@ Continuous batching:
 - $N_{\text{out}}^{\star}$ — Crossover output length where TTFT equals the decode contribution: $N_{\text{out}}^{\star} \approx TTFT / \text{TPOT} + 1$ (e2e.md §4).
 - $\overline{B_{\text{eff}}}$ — Mean effective batch size in steady-state continuous batching.
 - $\overline{\text{TPOT}}$ — Average TPOT over a request's decode lifetime.
-- $N_{\text{GPUs,per-replica}}$ — GPUs per DP replica: $PP \cdot TP \cdot EP \cdot SP$.
+- $N_{\text{GPUs,per-replica}}$ — GPUs per DP replica; equal to $N_{\text{replica}}$ (§1 lookup table). Resolves to $PP \cdot TP \cdot EP \cdot SP$ under the orthogonal layout (default) and $PP \cdot \max(TP, EP) \cdot SP$ under TP+EP co-location.
 
 Pareto relationship (per-replica, parameterized by $B$):
 $$\text{Tput/GPU} \times \text{TPOT} = \frac{B}{N_{\text{GPUs,per-replica}}}$$
@@ -422,7 +454,7 @@ Placement:
 - $\pi$ — Placement assigning each data class to one or more tiers.
 - $T_{\theta,i}$ — Weight bytes residing on tier $i$; $\sum_i T_{\theta,i} = T_{\theta,\text{device}}$.
 - $T_{\text{KV},i}$ — Per-request KV bytes residing on tier $i$; $\sum_i T_{\text{KV},i} = T_{\text{KV,device}}$.
-- Capacity constraint per tier: $T_{\theta,i} + B \cdot T_{\text{KV},i} \le C_i$ (sram.md §1.3; uses the per-device, per-request $T_{\text{KV,device}}$ from `decode.md §2.3`, which already bakes in $TP \cdot SP$ and the context length $S$).
+- Capacity constraint per tier: $T_{\theta,i} + B \cdot T_{\text{KV},i} \le C_i$ (sram.md §1.3; uses the per-device, per-request $T_{\text{KV,device}}$ from `decode.md §2.3`, which already bakes in $D_{\text{kv}} \cdot SP$ and the context length $S$).
 - **Greedy priority** — Tiebreaker when neither weights nor KV is explicitly pinned to a tier: weights-first (default) fills weights into the fastest tier and gives KV the remainder; KV-first flips the order. Inert when either class is explicitly pinned.
 
 Multi-tier roofline (sram.md §2.1) — full $\alpha$–$\beta$ form:
@@ -437,43 +469,35 @@ $$B^*_{W,K} = \frac{R_{\text{GPU}} \cdot T_{\theta,\text{device}} / BW_{\text{ef
 
 ---
 
-## 17. Attention Parallelism Modes
-_(→ decode.md §8)_
+## 17. Attention Parallelism Modes and Layout Deviations
+_(→ §1 above; `decode.md §1.4` / §2 / §3.5 / §5)_
 
-The default partition derivation in §1–§14 assumes the strict orthogonal layout `DP → PP → EP → TP → SP` with attention weights tensor-parallel (TP) sharded by head. DSv3 / R1 production deployments support an alternative mode in which the attention block's weights are replicated across the TP ranks of a replica and tokens are partitioned instead — derivation in `decode.md §8`. This affects only the attention block; the dense FFN and MoE FFN are unchanged.
+This section's prior content (per-DP-attn symbol register) has been **subsumed by the unified deployment-knob abstraction in §1**. The attention parallelism mode (TP-attn ↔ DP-attn) and the layout choice (orthogonal ↔ TP+EP co-located) are now expressed through the per-component effective sharding factors $D_{\text{attn}}$, $D_{\text{exp}}$, $D_{\text{kv}}$, $D_{\text{emb}}$ and collective group sizes $G_{TP}$, $G_{EP}$ defined in §1. Every per-device formula in `decode.md §1.4` (memory), `§2.1` / `§2.3` (traffic), `§3.5` (FLOPs), and `§5.3` / `§5.5` (communication) is written directly in terms of those abstract factors and resolves automatically under any of the three production-relevant `(layout, attention_mode)` configurations via the §1 lookup table.
 
-- **Attention parallelism mode** — Selector between TP-attention (default; preserves §1–§14) and DP-attention (activates the per-device deltas in `decode.md §8.2` and the comm accounting in `decode.md §8.3`).
-- $M_{\text{attn,device}}^{\text{DP-attn}}$ — Per-device attention weight memory bytes under DP-attention mode (`decode.md §8.2`):
-  $$M_{\text{attn,device}}^{\text{DP-attn}} = \frac{L}{PP} \cdot (2H^2 + 2HH_{kv}) \cdot b$$
-- $T_{\text{attn},\theta,\text{device}}^{\text{DP-attn}}$ — Per-device attention parameter traffic per step under DP-attention mode (`decode.md §8.2`); same expression as the memory footprint above (weights load once per step).
-- $t_{TP,\text{AG}}^{\text{DP-attn}}(B)$ — Per-layer TP all-gather (AG) cost replacing the attention all-reduce (AR) under DP-attention mode (`decode.md §8.3`):
-  $$t_{TP,\text{AG}}^{\text{DP-attn}}(B) = (TP - 1)\,\alpha_{TP} + \frac{TP - 1}{TP} \cdot \frac{B \cdot Hb}{BW_{TP}}$$
-- $\Delta t_{\text{attn-comm}}^{\text{DP-attn}}(B)$ — Per-layer comm time saved by the AR → AG swap (`decode.md §8.3`):
-  $$\Delta t_{\text{attn-comm}}^{\text{DP-attn}}(B) = (TP - 1)\,\alpha_{TP} + \frac{TP - 1}{TP} \cdot \frac{B \cdot Hb}{BW_{TP}}$$
-- $t_{\text{comm}}^{\text{DP-attn}}(B)$ — Per-stage total communication budget under DP-attention mode; substitutes for the §5.5 expression with one fewer attention all-reduce per layer (`decode.md §8.3`).
+KV cache footprint and per-device KV traffic are **invariant** under the TP-attn ↔ DP-attn swap (head-sharded by $TP$ vs sequence-sharded by $SP$ give the same per-device byte count when $TP = SP$, and the abstract $D_{\text{kv}}$ encodes whichever divisor applies; see `decode.md §1.4` for the accounting). The TP collective primitive swaps from all-reduce (AR) under TP-attn to all-gather (AG) under DP-attn — encoded by the AR/AG annotation on $G_{TP}$ in the §1 lookup table.
 
-KV cache footprint and per-device KV traffic are **invariant** under the mode switch — see `decode.md §8.2` for the accounting argument (head-sharded vs sequence-sharded gives the same per-device byte count).
+For operational guidance on **when each mode pays** (the trade-off between attention memory footprint, replica-size shrinkage, and per-collective $\alpha$-cost), see `decode.md §6` (partition strategy).
 
 ---
 
 ## 18. Speculative Decoding (MTP / EAGLE / Medusa)
-_(→ decode.md §9)_
+_(→ decode.md §8)_
 
-Speculative decoding breaks the 1:1 token-per-step mapping of vanilla decode by running a cheap draft head to propose multiple candidate tokens, then verifying all of them in a single target-model pass. Per-step output count exceeds 1 on average; per-step cost grows by the verify multiplier. Symbols introduced in `decode.md §9`.
+Speculative decoding breaks the 1:1 token-per-step mapping of vanilla decode by running a cheap draft head to propose multiple candidate tokens, then verifying all of them in a single target-model pass. Per-step output count exceeds 1 on average; per-step cost grows by the verify multiplier. Symbols introduced in `decode.md §8`.
 
 - $n_{\text{tok,draft}}$ — Number of draft tokens proposed per verify step (typical 3–5; 1 disables speculation).
 - $n_{\text{tok,verify}} = n_{\text{tok,draft}} + 1$ — Tokens evaluated per verify step per sequence (the proposed tokens plus the target's always-accepted next prediction).
 - $p_{\text{accept}}$ — Per-token draft acceptance probability ∈ [0, 1] (calibrate against the deployment).
-- $\mathbb{E}[N_{\text{accept,draft}}]$ — Expected accepted draft tokens per step under independent acceptance (truncated geometric, `decode.md §9.2`):
+- $\mathbb{E}[N_{\text{accept,draft}}]$ — Expected accepted draft tokens per step under independent acceptance (truncated geometric, `decode.md §8.2`):
   $$\mathbb{E}[N_{\text{accept,draft}}] = \sum_{d=1}^{n_{\text{tok,draft}}} p_{\text{accept}}^d = \frac{p_{\text{accept}} \, (1 - p_{\text{accept}}^{n_{\text{tok,draft}}})}{1 - p_{\text{accept}}}$$
 - $N_{\text{tok/step}} = 1 + \mathbb{E}[N_{\text{accept,draft}}]$ — Total expected accepted tokens per verify step. Bound: $1 \le N_{\text{tok/step}} \le n_{\text{tok,verify}}$.
-- $t_{\text{compute}}^{\text{verify}}(B) = n_{\text{tok,verify}} \cdot t_{\text{compute}}(B)$ — Verify-step compute time (FLOPs scale linearly with $n_{\text{tok,verify}}$; `decode.md §9.3`).
-- $t_{\text{mem}}^{\text{verify}}(B) \approx t_{\text{mem}}(B)$ — Verify-step memory time (weights amortize once per step; KV reads piggyback under FlashAttention-style batched-Q kernels; `decode.md §9.3`).
+- $t_{\text{compute}}^{\text{verify}}(B) = n_{\text{tok,verify}} \cdot t_{\text{compute}}(B)$ — Verify-step compute time (FLOPs scale linearly with $n_{\text{tok,verify}}$; `decode.md §8.3`).
+- $t_{\text{mem}}^{\text{verify}}(B) \approx t_{\text{mem}}(B)$ — Verify-step memory time (weights amortize once per step; KV reads piggyback under FlashAttention-style batched-Q kernels; `decode.md §8.3`).
 - $t_{\text{local}}^{\text{verify}}(B) = \max\bigl( n_{\text{tok,verify}} \cdot t_{\text{compute}}(B),\; t_{\text{mem}}(B) \bigr)$ — Verify-step roofline local time.
 - $t_{\text{comm}}^{\text{verify}}(B)$ — Verify-step communication budget; §5.5 expression with all per-layer message sizes scaled by $n_{\text{tok,verify}}$ (α-side terms unchanged).
 - $t_{\text{step,user}}^{\text{verify}}(B)$ — Verify-step user-observed step time; §7.2 composition with the verify-step quantities substituted in.
-- $\mathrm{TPOT_{spec}}(B) = t_{\text{step,user}}^{\text{verify}}(B) / N_{\text{tok/step}}$ — Effective TPOT under speculative decoding (`decode.md §9.4`).
-- $B^\star_{\text{spec}}$ — Verify-step compute-bound crossover batch (`decode.md §9.4`):
+- $\mathrm{TPOT_{spec}}(B) = t_{\text{step,user}}^{\text{verify}}(B) / N_{\text{tok/step}}$ — Effective TPOT under speculative decoding (`decode.md §8.4`).
+- $B^\star_{\text{spec}}$ — Verify-step compute-bound crossover batch (`decode.md §8.4`):
   $$B^\star_{\text{spec}} \approx \frac{T_{\theta,\text{device}} \cdot R_{\text{GPU}}}{n_{\text{tok,verify}} \cdot F_{\text{token,device}} \cdot BW_{\text{mem}} - T_{\text{KV,device}} \cdot R_{\text{GPU}}}$$
   Falls below the vanilla $B^\star$ of §10 by approximately $n_{\text{tok,verify}}$.
 

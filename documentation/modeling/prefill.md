@@ -209,7 +209,7 @@ FlashAttention [FA1, FA2] tiles the $S \times S$ attention matrix into SRAM-resi
 
 Parallelism distributes prefill FLOPs across devices following the same DP → PP → EP → TP → SP nesting as decode [MEGATRON, MEGATRON3].
 
-> **Mode note (DP-attention).** The expressions below assume the default TP-attention mode with attention TP-sharded by head. Under DP-attention mode the attention block's per-device FLOPs are invariant (the $/TP$ divisor reflects the per-device share regardless of whether the work is split by head or by token), but the attention weight footprint and the per-layer attention all-reduce change — see `decode.md §8.2` and `decode.md §8.3` for the substitutions, which apply identically here in prefill.
+> **Mode note (DP-attention / TP+EP co-location).** The expressions below are written against the orthogonal + TP-attention default. The unified deployment-knob abstraction in `notation.md §1` (per-component effective sharding factors $D_{\text{attn}}$, $D_{\text{exp}}$, $D_{\text{kv}}$, $D_{\text{emb}}$, plus the AR ↔ AG swap encoded on $G_{TP}$) carries through identically here in prefill: substitute the abstract divisors per the §1 lookup table for the desired `(layout, attention_mode)` configuration. Per-device FLOPs are invariant under the TP-attn ↔ DP-attn swap; attention weight footprint and the per-layer attention TP collective change as derived in `decode.md §1.4` and `decode.md §5.3` respectively.
 
 ### PP sharding
 

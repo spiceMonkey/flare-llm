@@ -203,7 +203,7 @@ class LatencyResults:
     B: int
     TPOT: float
     B_star: float
-    # Speculative-decoding extension (decode.md §9). When tuner.n_tok_draft = 0
+    # Speculative-decoding extension (decode.md §8). When tuner.n_tok_draft = 0
     # (vanilla decode, default), N_tok_per_step = 1.0 and TPOT_spec == TPOT.
     # When speculation is enabled, t_step_user_verify is the verify-step
     # latency (compute + comm scaled by n_tok_verify; t_mem ≈ unchanged) and
@@ -405,7 +405,7 @@ def compute_comm(
         t_PP=t_PP,
     )
 
-    # DP-attention adjustment (decode.md §8.3): one of the n_TP per-layer
+    # DP-attention adjustment (decode.md §5.3 + §5.5): one of the n_TP per-layer
     # all-reduces is the attention output AR — under attention_mode="dp",
     # replace it with the (cheaper) AG. Saving per layer = (t_TP_AR − t_TP_AG);
     # applied across L/PP layers per stage.
@@ -554,9 +554,9 @@ def compute_latency(
     denom = flops.F_token_device * BW_top - traffic.T_kv * R_gpu
     B_star = (traffic.T_theta * R_gpu / denom) if denom > 0 else float("inf")
 
-    # Speculative-decoding extension (decode.md §9). Compose verify-step
+    # Speculative-decoding extension (decode.md §8). Compose verify-step
     # quantities by scaling compute and comm payloads by n_tok_verify;
-    # weight traffic and KV traffic stay invariant (decode.md §9.3). When
+    # weight traffic and KV traffic stay invariant (decode.md §8.3). When
     # n_tok_draft = 0, the verify quantities reduce to the vanilla ones.
     n_tok_draft = max(0, tuner.n_tok_draft)
     p_accept = max(0.0, min(1.0, tuner.p_accept))
@@ -575,7 +575,7 @@ def compute_latency(
 
     if n_tok_verify > 1:
         # Verify-step roofline: compute scales by n_tok_verify, memory
-        # invariant (FlashAttention batched-Q assumption; decode.md §9.3).
+        # invariant (FlashAttention batched-Q assumption; decode.md §8.3).
         t_compute_verify_eff = t_compute_eff * n_tok_verify
         t_local_verify = max(t_compute_verify_eff, t_mem)
         # Communication payload scales linearly with n_tok_verify; α-side
@@ -586,7 +586,7 @@ def compute_latency(
         t_stage_verify = t_local_verify + max(0.0, t_comm_verify - rho * t_local_verify)
         t_stage_with_SW_verify = t_stage_verify + max(0.0, t_SW - rho_SW * t_stage_verify)
         # LM head: compute scales by n_tok_verify (one logits projection
-        # per query token), memory invariant. Per decode.md §9.3 this is
+        # per query token), memory invariant. Per decode.md §8.3 this is
         # max(...) of the two — at typical FP4 vocab sizes the LM head
         # often stays memory-bound through small B even under speculation.
         t_lm_compute_verify = t_lm_compute * n_tok_verify
