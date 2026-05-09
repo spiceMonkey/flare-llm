@@ -1590,6 +1590,17 @@ $$
 
 This is the single-tier, dropped-$\alpha$ shorthand of the multi-tier $\alpha$–$\beta$ form in §4 — kept here for compactness on the assumption that on-die tier $\alpha$ contributes well under 0.1% of $t_{\text{mem}}$. Reinstate $\alpha_i$ per §4 when modeling small-read regimes.
 
+**Sustained vs nameplate $BW_{\mathrm{mem}}$.** The system spec stores HBM bandwidth at the nameplate / datasheet value (e.g., 8 TB/s for HBM3e on B200, 4.8 TB/s for HBM3 on H200). Real production stacks sustain only a fraction of this peak: the dominant losses are bank conflicts under concurrent address streams (KV reads from many sequences hitting the same row), memory-controller queue depth, and competition between weight reads and KV-page-table gathers. Empirical anchors from the per-driver fits in `benchmark/validate/` against the InferenceX dataset:
+
+| Hardware (HBM gen) | Sustained / nameplate $BW_{\mathrm{mem}}$ | Notes |
+|---|---|---|
+| H100 / H200 (HBM3) | ~0.55 | Older memory controllers; sustained around 2.6 TB/s on H200's nameplate 4.8 TB/s. Calibrated from `benchmark/validate/llama3_70b_h200_trt.py` (~2% MAE at 0.55) and `gpt_oss_120b_h200_trt.py`. |
+| B200 / GB200 (HBM3e) | 0.7–1.0 | Better controllers + Blackwell command processor; the upper end (1.0) holds for Dynamo+TRT-LLM on MoE workloads where access patterns are friendly; the lower end (0.7) for raw TRT-LLM on dense Llama. |
+| B300 / GB300 (HBM3e) | similar to B200 | Same memory subsystem class; less validator coverage. |
+| Dense models on raw TRT | as low as 0.4 | Worst-case observed: `benchmark/validate/llama3_70b_b200_trt.py` fits to $\eta_\beta \approx 0.4$ on dense Llama-70B. Dense GEMMs sustain *less* of peak than MoE expert hopping on Blackwell — counter-intuitive but matches B200 production reports. |
+
+The framework treats the derate as a calibration knob (`flops_eta` / `bw_eta` per-driver in `benchmark/validate/`), not as a baked-in spec field, because the right value depends jointly on the chip, the model class, and the serving framework. The `eta_beta` field on multi-tier `TierSpec` (sram.md §1.2) is the canonical place to apply a per-tier derate when the spec carries multiple tiers; for single-tier devices the equivalent knob is `bw_eta` at the calculator-call site.
+
 ### Roofline local latency
 
 $$
@@ -1765,11 +1776,17 @@ with units of seconds per sequence per step (the framework parameterizes $c_{\ma
 
 Unlike $t_{\text{stage,sw}}$ — which can hide behind the previous step's GPU work via CUDA-Graph replay or eager pipelining — the serving runtime work sits on the **critical path** of every step. Block tables must be built before the attention kernel needs them; sampling and token-append must finish before the next step's input embeddings can be assembled. The term is therefore composed **additively** with the GPU-side step cost (no overlap), and it sits **outside** the pipeline-bubble multiplier $\gamma_{\text{pp}}$ since it fires once per step on the head node regardless of how the body is pipelined across stages.
 
-$c_{\mathrm{serving}}$ is a **stack-dependent** calibration constant — it captures the constant factor in the per-sequence inner loop, which differs across serving frameworks (Python-heavy vs C++/CUDA-Graph-heavy), runtime configurations (eager mode vs CUDA Graphs, Python sampling vs fused-CUDA sampling), and PagedAttention block sizes. Treating it as a tuning knob avoids hard-coding a number that would be wrong for any specific deployment. Representative ranges from published serving-stack characterizations:
+$c_{\mathrm{serving}}$ is a **stack-dependent** calibration constant — it captures the constant factor in the per-sequence inner loop, which differs across serving frameworks (Python-heavy vs C++/CUDA-Graph-heavy), runtime configurations (eager mode vs CUDA Graphs, Python sampling vs fused-CUDA sampling), and PagedAttention block sizes. Treating it as a tuning knob avoids hard-coding a number that would be wrong for any specific deployment. Empirical ranges, calibrated by the per-driver fits in `benchmark/validate/` against the InferenceX dataset:
 
-- **Aggressively fused C++ stacks** (TensorRT-LLM with fused sampling): lower bound ≈ 10 µs/seq, achievable when the sampling kernel fuses penalty application + multinomial draw + token-append in a single CUDA invocation per batch.
-- **Production CUDA-Graph stacks** (TensorRT-LLM, NVIDIA Dynamo): typically ≈ 20–30 µs/seq.
-- **Python-heavy stacks** (vLLM, SGLang in eager mode): ≈ 30–60 µs/seq, dominated by the Python interpreter wrapping the per-sequence sampling decision; CUDA-Graph replay does not help because the CPU work is **between** graph launches.
+| Stack | $c_{\mathrm{serving}}$ range | Notes |
+|---|---|---|
+| **Dynamo-wrapped TensorRT-LLM** (`dynamo-trt`) | 5–22 µs/seq | NVIDIA Dynamo serving orchestrator absorbs most per-step bookkeeping into a single CUDA-Graph launch. The 22 µs upper end matches the gpt-oss-120b / Dynamo+TRT-LLM fit (`benchmark/validate/gpt_oss_120b_gb200_dynamo_trt.py` lands within ~9% MAE at 22 µs). |
+| **Dynamo-wrapped SGLang** (`dynamo-sglang`) | 25–50 µs/seq | Hybrid — Dynamo wrapper over Python-heavier SGLang internals. Worse fit than `dynamo-trt` for very large $B$ (≥ 4000) where the linear-in-$B$ model breaks down. |
+| **Raw TensorRT-LLM** (`trt`, `trt-llm`, `trtllm`) | 50–100 µs/seq | No Dynamo orchestrator; more individual kernel launches per step. Consistent across HW generations (Hopper / Blackwell) — $c_{\mathrm{serving}}$ is primarily a property of the framework, not the GPU. The Llama-3.3-70B-FP8 / B200 / TRT-LLM fit needs $c_{\mathrm{serving}} \approx 50$–$75$ µs/seq; gpt-oss / H200 / TRT-LLM needs $\approx 100$ µs/seq. |
+| **Aggressively fused C++ stacks** (TensorRT-LLM with fused sampling kernel) | ~10 µs/seq lower bound | Achievable when penalty application + multinomial draw + token-append fuse into a single CUDA invocation per batch. Currently no validator exercises this regime in isolation. |
+| **Python-heavy stacks** (`vllm`, `sglang` raw, eager mode) | 30–60 µs/seq (estimated) | Dominated by the Python interpreter wrapping the per-sequence sampling decision; CUDA-Graph replay does not help because the CPU work is **between** graph launches. Not yet directly validated — add a driver to confirm. |
+
+The framework axis dominates the chip axis: the same chip + same model under Dynamo+TRT vs raw TRT-LLM differs by 4–5× in $c_{\mathrm{serving}}$, while the same framework on different chips differs by less than 2×. The host CPU class and PCIe topology contribute weakly through how much of the bookkeeping the GPU command processor (vs the host CPU) absorbs.
 
 When $c_{\mathrm{serving}} = 0$ (the default), $t_{\text{serving}}(B) = 0$ and the §7.3 user-observed step time recovers the pre-extension formula exactly — the term is opt-in and does not change predictions for callers who have not calibrated it.
 
