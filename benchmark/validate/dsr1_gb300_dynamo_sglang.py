@@ -36,8 +36,13 @@ ISL, OSL = 1024, 1024
 # Per-stack calibration. Dynamo+SGLang on GB300 is the worst-fitting cut
 # in the validator suite — even the best-fit knobs leave ~55% MAE. The
 # signed-error pattern (under-predict at small B, over-predict at huge
-# B>4000) is consistent with a missing B-saturation correction
-# (`bw-eta-vs-batch` TODO in `scratch/model_specific_extensions.md`).
+# B>4000) was originally hypothesized as a BW-saturation effect, which
+# motivated the `bw-eta-vs-batch` branch. On inspection (post-merge):
+# the over-prediction at large B lives in t_comm (≈45 ms of the 57 ms
+# predicted at B=8192), not t_mem (~2 ms) — this is a comm-model issue,
+# not a BW-saturation one. The B-dependent `bw_efficiency` curve has no
+# leverage on this case. New TODO tracked under `a2a-saturation-vs-batch`
+# in `scratch/model_specific_extensions.md`.
 #
 # We DEFAULT to (bw_eta=0.4, c_serving=0): the empirically best-fit tuple
 # from `_calibrate.py`. A non-zero c_serving multiplies the error at huge
@@ -45,8 +50,8 @@ ISL, OSL = 1024, 1024
 # larger than the entire measured TPOT of ~23 ms — the linear-in-B
 # t_serving model breaks down outside the 1≤B≤1024 range per `decode.md
 # §7.2`). Users who care about this stack should sweep the knobs and
-# accept that the framework can't fit this case well without the
-# B-saturation extension.
+# accept that the framework can't fit this case well until the comm
+# model is extended.
 DEFAULT_BW_ETA = 0.4
 DEFAULT_C_SERVING_US = 0.0
 

@@ -512,3 +512,15 @@ Captures host-side per-step work that scales with the active-sequence count $B$ 
 - $t_{\mathrm{serving}}(B) = c_{\mathrm{serving}} \cdot B$ — Per-step serving runtime overhead. Additive to $t_{\mathrm{step,user}}(B)$, not overlapped with GPU work; sits outside the pipeline-bubble multiplier $\gamma_{\mathrm{pp}}$ since it fires once per step regardless of bubble depth (`decode.md §7.2`, used in `decode.md §7.3`).
 
 When $c_{\mathrm{serving}} = 0$ (the default), $t_{\mathrm{serving}}(B) = 0$ and the §7.3 user-observed step time formula is recovered exactly — the term is opt-in.
+
+---
+
+## 20. B-Dependent Sustained Memory Bandwidth
+_(→ decode.md §6.2)_
+
+Captures the loss of HBM sustained / nameplate ratio as the active-sequence count $B$ grows: bank-conflict rate rises with concurrent KV address streams, memory-controller queues saturate, and paged-attention block-table updates crowd in over PCIe. Distinct from the per-tier hardware deflator $\eta_{\beta,i}$ of §16 (a static device property) and from the per-fabric switching-tier $\eta_\beta$ of §7 (a network-side runtime BW loss); the symbol below is the **memory-side** runtime BW curve as a function of the active-sequence count.
+
+- $\eta_\beta(B)$ — Per-step effective HBM sustained / nameplate ratio as a function of the active-sequence count $B$ ($\in (0, 1]$). Piecewise-linear interpolation between anchor batch sizes; clamps to the boundary value below the smallest anchor and above the largest. Representative HBM3e anchor set on Blackwell-class production stacks: $\{1 \to 0.92,\; 64 \to 0.85,\; 512 \to 0.75,\; 4096 \to 0.55\}$ (`decode.md §6.2`).
+- $BW_{\mathrm{eff}}(B) = BW_{\mathrm{mem,nameplate}} \cdot \eta_{\beta,\mathrm{tier}} \cdot \eta_\beta(B)$ — Composition rule. $\eta_\beta(B)$ multiplies on top of any per-tier $\eta_{\beta,i}$ from §16. In practice the analyst selects one of these (constant per-tier $\eta_{\beta,i}$ or B-dependent $\eta_\beta(B)$) to carry the sustained-vs-peak gap; composing both is supported but rarely necessary (`decode.md §6.2`).
+
+When $\eta_\beta(B) \equiv 1$ the constant-bandwidth $t_{\mathrm{mem}}$ formula of `decode.md §4.3` is recovered exactly.

@@ -230,6 +230,7 @@ def t_mem_from_placement(
     placement: PlacementResult,
     B: int,
     tiers: List[MemoryTierSpec],
+    eta_beta_curve_factor: float = 1.0,
 ) -> float:
     """Multi-tier decode roofline memory time per sram.md §2.1 (full α–β form):
 
@@ -256,6 +257,11 @@ def t_mem_from_placement(
     α_0 = 0 (PR1 legacy shim), this returns (T_θ + B · T_KV) / BW
     exactly — matches pre-PR2 `t_mem = T_step / BW_mem` to floating-point
     equality.
+
+    `eta_beta_curve_factor` multiplies the effective bandwidth of every
+    tier (decode.md §6.2 / notation.md §20). It is the lookup result of
+    `TuningSpec.bw_efficiency` at the current active-sequence count B —
+    1.0 when the curve is unset, preserving legacy behavior bitwise.
     """
     total = 0.0
     for w_i, kv_i, tier in zip(
@@ -263,7 +269,7 @@ def t_mem_from_placement(
         placement.kv_per_request_per_tier,
         tiers,
     ):
-        bw_eff = tier.bandwidth_GBps * tier.eta_beta * GB_TO_BYTES
+        bw_eff = tier.bandwidth_GBps * tier.eta_beta * eta_beta_curve_factor * GB_TO_BYTES
         if bw_eff <= 0:
             continue
         bytes_i = w_i + B * kv_i
