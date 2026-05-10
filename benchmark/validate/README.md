@@ -15,7 +15,10 @@ scatter.
 
 | Driver | Model spec | System | Framework | Cuts |
 |---|---|---|---|---|
-| `dsr1_gb200_dynamo_trt.py` | `deepseek_r1_0528` | `gb200.72gpu` | dynamo-trt | EXACT (TP=36 EP=1), CO-LOCATED (TP=EP={8,16,32}) |
+| `dsr1_gb200_dynamo_trt.py` | `deepseek_r1_0528` | `gb200.72gpu` | dynamo-trt | EXACT (TP=36 EP=1), CO-LOCATED (TP=EP={8,16,32}), ORTHO (TP=8 EP=8 dec=32) |
+| `dsr1_gb300_dynamo_trt.py` | `deepseek_r1_0528` | `gb300.72gpu` | dynamo-trt | ORTHO (TP=8 EP=8 dec=32), CO-LOCATED (TP=EP={8,16,32}) |
+| `dsr1_gb300_dynamo_sglang.py` | `deepseek_r1_0528` | `gb300.72gpu` | dynamo-sglang | EXACT (TP=4 EP=1), CO-LOCATED (TP=EP={8,32,48}) |
+| `dsr1_b200_trt.py` | `deepseek_r1_0528` | `b200.8gpu` | trt | TP=8 EP=1 dec=8 |
 | `gpt_oss_120b_gb200_dynamo_trt.py` | `gpt_oss_120b` | `gb200.72gpu` | dynamo-trt | TP=4 EP=1 dec=4 |
 | `llama3_70b_b200_trt.py` | `llama3.1_70b` (override FP8) | `b200.8gpu` | trt | TP ∈ {1, 2, 4, 8} |
 
