@@ -82,15 +82,21 @@ SYSTEM_ID = {
 }
 
 # Multi-box specs (NVLink intra-box + IB inter-box). Phase 3 covers
-# B200/B300; H200/H100 multi-box still pending (~65 InferenceX rows).
-# Maps (chip, dec_gpu) → spec id.
+# all NVIDIA chip families with InferenceX multi-box rows. Maps
+# (chip, dec_gpu) → spec id.
 MULTIBOX_SYSTEM_ID = {
+    # Blackwell (B-series): NVLink5 + ConnectX-8 XDR
     ("b200", 16): "b200.16gpu", ("b200", 24): "b200.24gpu",
     ("b200", 40): "b200.40gpu", ("b200", 48): "b200.48gpu",
     ("b200", 64): "b200.64gpu",
     ("b300", 16): "b300.16gpu", ("b300", 20): "b300.20gpu",
     ("b300", 24): "b300.24gpu", ("b300", 32): "b300.32gpu",
     ("b300", 40): "b300.40gpu", ("b300", 64): "b300.64gpu",
+    # Hopper (H-series): NVLink4 + ConnectX-7 NDR
+    ("h100", 16): "h100.16gpu", ("h100", 48): "h100.48gpu",
+    ("h200", 16): "h200.16gpu", ("h200", 48): "h200.48gpu",
+    ("h200", 56): "h200.56gpu", ("h200", 64): "h200.64gpu",
+    ("h200", 72): "h200.72gpu",
 }
 
 
