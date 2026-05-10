@@ -19,7 +19,12 @@ scatter.
 | `dsr1_gb300_dynamo_trt.py` | `deepseek_r1_0528` | `gb300.72gpu` | dynamo-trt | ORTHO (TP=8 EP=8 dec=32), CO-LOCATED (TP=EP={8,16,32}) |
 | `dsr1_gb300_dynamo_sglang.py` | `deepseek_r1_0528` | `gb300.72gpu` | dynamo-sglang | EXACT (TP=4 EP=1), CO-LOCATED (TP=EP={8,32,48}) |
 | `dsr1_b200_trt.py` | `deepseek_r1_0528` | `b200.8gpu` | trt | TP=8 EP=1 dec=8 |
-| `coverage_sweep.py` | **all 8 InferenceX models** | all single-island system specs | all single-island stacks | comprehensive coverage sweep — 794 rows × 44 (model × hw × fw) cells, ~41% overall MAE |
+| `coverage_sweep.py` | **all 8 InferenceX models** | all single-island system specs | all single-island stacks | comprehensive coverage sweep — 794 rows × 44 (model × hw × fw) cells, ~41% overall MAE. Use `--plot` for per-cell plots; `--model X` / `--hardware Y` / `--framework Z` to filter. |
+| `deepseek_v4_pro_all.py` | `deepseek_v4_pro` | all single-island | all single-island | thin wrapper: `coverage_sweep.py --model "DeepSeek-V4-Pro" --plot` (override with `--no-plot`) |
+| `glm5_all.py` | `glm5` | all single-island | all single-island | thin wrapper: `coverage_sweep.py --model GLM-5 --plot` |
+| `kimi_k25_all.py` | `kimi_k25` | all single-island | all single-island | thin wrapper: `coverage_sweep.py --model "Kimi-K2.5" --plot` |
+| `minimax_m25_all.py` | `minimax_m25` | all single-island | all single-island | thin wrapper: `coverage_sweep.py --model "MiniMax-M2.5" --plot` |
+| `qwen35_397b_a17b_all.py` | `qwen35_397b_a17b` | all single-island | all single-island | thin wrapper: `coverage_sweep.py --model "Qwen-3.5-397B-A17B" --plot` |
 | `gpt_oss_120b_gb200_dynamo_trt.py` | `gpt_oss_120b` | `gb200.72gpu` | dynamo-trt | TP=4 EP=1 dec=4 |
 | `llama3_70b_b200_trt.py` | `llama3.1_70b` (override FP8) | `b200.8gpu` | trt | TP ∈ {1, 2, 4, 8} |
 

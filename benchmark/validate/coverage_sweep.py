@@ -32,7 +32,10 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 import dataclasses  # noqa: E402
 
-from common import load_measured, predict_at, system_with_eta  # noqa: E402
+from common import (  # noqa: E402
+    load_measured, predict_at, system_with_eta,
+    log_spaced_B, plot_tpot_vs_B, run_framework,
+)
 from llm_perf import InferenceCalculator  # noqa: E402
 from llm_perf.io import load_model_from_db, load_system_from_db  # noqa: E402
 from llm_perf.specs.partition_spec import PartitionSpec  # noqa: E402
@@ -174,7 +177,19 @@ def main() -> int:
                     help="Exit non-zero if overall MAE %% > threshold")
     ap.add_argument("--verbose", action="store_true",
                     help="Print every row, not just per-cell summaries")
+    ap.add_argument("--plot", action="store_true",
+                    help="Generate one TPOT-vs-B plot per (model, hw, fw, partition shape) cell.")
+    ap.add_argument("--out-dir", type=Path, default=REPO_ROOT / "benchmark" / "results",
+                    help="Directory for plots when --plot is set")
     args = ap.parse_args()
+    args.out_dir = Path(args.out_dir)
+
+    # When --plot is set, we also need the framework sweep per partition
+    # shape (not just point predictions). Track unique (model, hw, fw,
+    # partition shape) tuples seen and plot one per tuple.
+    plot_keys_seen: set[tuple] = set()
+    measured_by_plot: dict[tuple, list] = defaultdict(list)
+    plot_meta: dict[tuple, dict] = {}
 
     # Aggregator: per (model, hw, fw, label) errors; per-cell aggregates derived
     cell_rows: dict[tuple, list[tuple]] = defaultdict(list)
@@ -250,6 +265,62 @@ def main() -> int:
             cell_rows[(inf_model, m.hardware, m.framework)].append(
                 (label, m.B, m.tpot_ms, pred)
             )
+
+            if args.plot:
+                # Group by (model, hw, fw, partition signature) so each
+                # unique partition shape gets one plot with all measured
+                # points for that shape overlaid on the framework sweep.
+                pkey = (inf_model, m.hardware, m.framework,
+                        m.num_decode_gpu, TP, EP, attn_mode, layout)
+                measured_by_plot[pkey].append(m)
+                if pkey not in plot_meta:
+                    plot_meta[pkey] = dict(
+                        framework_model=framework_model,
+                        bpp=bpp,
+                        knobs=knobs,
+                        S_decode=m.isl + m.osl // 2,
+                        PP=PP, TP=TP, EP=EP, SP=SP,
+                        attn_mode=attn_mode, layout=layout,
+                        num_devices=m.num_decode_gpu,
+                    )
+
+    # Render plots (one per (model, hw, fw, partition shape) cell)
+    if args.plot and measured_by_plot:
+        plotted = 0
+        for pkey, measured_pts in sorted(measured_by_plot.items()):
+            inf_model, hw, fw, dec, TP, EP, attn_mode, layout = pkey
+            meta = plot_meta[pkey]
+            B_max = max(2 * max(m.B for m in measured_pts), 256)
+            try:
+                framework = run_framework(
+                    model=meta["framework_model"], system_id=SYSTEM_ID[hw],
+                    PP=meta["PP"], TP=TP, EP=EP, SP=meta["SP"],
+                    attention_mode=attn_mode, layout=layout,
+                    num_devices=dec, S_decode=meta["S_decode"],
+                    B_sweep=log_spaced_B(B_max),
+                    flops_eta=1.0, bw_eta=meta["knobs"]["bw_eta"],
+                    c_serving_us=meta["knobs"]["c_serving"],
+                    moe_a2a_pattern=meta["knobs"]["pattern"],
+                    kernel_launch_us=meta["knobs"]["kernel_launch"],
+                    bytes_per_param=meta["bpp"],
+                )
+            except Exception as e:
+                if args.verbose:
+                    print(f"  PLOT-SKIP {inf_model} {hw}/{fw} TP={TP} EP={EP} dec={dec}: {e}", file=sys.stderr)
+                continue
+
+            slug = f"{inf_model.replace('/', '_').replace(' ', '_')}__{hw}_{fw}__TP{TP}_EP{EP}_dec{dec}_{attn_mode}_{layout}"
+            out = args.out_dir / f"sweep__{slug}.png"
+            plot_tpot_vs_B(
+                framework=framework, measured=measured_pts,
+                title=f"{inf_model} / {hw} / {fw} — TP={TP} EP={EP} dec={dec} ({attn_mode}, {layout})",
+                subtitle=(f"PP={meta['PP']} TP={TP} EP={EP} SP={meta['SP']} | ISL={meta['S_decode']*2//3} OSL={meta['S_decode']*2//3} | "
+                          f"bw_eta={meta['knobs']['bw_eta']:.2f} c_serving={meta['knobs']['c_serving']:.0f}us "
+                          f"kl={meta['knobs']['kernel_launch']:.0f}us pattern={meta['knobs']['pattern']}"),
+                out_path=out,
+            )
+            plotted += 1
+        print(f"[--plot] wrote {plotted} plots to {args.out_dir.relative_to(REPO_ROOT)}/sweep__*.png\n")
 
     # Print summary
     overall_errs = []
