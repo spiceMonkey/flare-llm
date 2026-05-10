@@ -34,12 +34,27 @@ SYSTEM = "gb200.72gpu"
 PRECISION = "fp4"
 ISL, OSL = 1024, 1024
 
-# Per-stack calibration baked in as the driver default — overrideable via CLI.
-# Calibrated on the colocated TP=EP=8 cut (the canonical DSv3 production
-# shape on this stack); fits to ~11% MAE. Dynamo+TRT-LLM shows
-# c_serving close to the §7.2 anchor (Dynamo CUDA-Graph stack ≈ 22 µs/seq).
-DEFAULT_BW_ETA = 1.0
+# Per-stack calibration. Production DSv3/R1 on Dynamo+TRT-LLM with
+# DP-attention uses scatter-direct MoE A2A (decode.md §5.2): dispatch
+# operates on per-rank attention-sharded tokens of size B/G_TP rather
+# than gathering full B to every rank. The framework models this via
+# moe_a2a_pattern="scatter" on the tuner. Combined with a moderate
+# Dynamo-stack host overhead (c_serving ≈ 5 µs/seq, kernel_launch ≈ 10
+# µs) and bw_eta ≈ 0.7 for HBM3e on Blackwell, fits to 21% MAE
+# overall (down from 33% with old gather-pattern defaults).
+# Per-cut breakdown:
+#   TP=EP=8  colocated:  28% MAE (n=2; B=4300/4301 measured 54/44 ms —
+#                                 23% disagreement on consecutive integer
+#                                 batch sizes is pure measurement noise)
+#   TP=EP=16 colocated:  15% MAE  (45% → 15% — biggest scatter-direct win)
+#   TP=EP=32 colocated:  23% MAE  (B=2253 measured 15 ms is anomalously low)
+#   TP=36 EP=1 EXACT:    22% MAE  (limited by data variance — e.g.
+#                                  B=128: 11.88 ms vs B=144: 7.74 ms,
+#                                  no model can fit such non-monotonicity)
+DEFAULT_BW_ETA = 0.7
 DEFAULT_C_SERVING_US = 5.0
+DEFAULT_KERNEL_LAUNCH_US = 10.0
+DEFAULT_MOE_A2A_PATTERN = "scatter"
 
 
 def run_exact(args) -> tuple[list[tuple], int]:
@@ -64,6 +79,8 @@ def run_exact(args) -> tuple[list[tuple], int]:
         B_sweep=log_spaced_B(2048),
         flops_eta=args.flops_eta, bw_eta=args.bw_eta,
         c_serving_us=args.c_serving_us,
+        moe_a2a_pattern=DEFAULT_MOE_A2A_PATTERN,
+        kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US,
         bytes_per_param=0.5,
     )
 
@@ -75,7 +92,10 @@ def run_exact(args) -> tuple[list[tuple], int]:
             attention_mode="tp", layout="orthogonal",
             num_devices=bucket[2], S_decode=ISL + OSL // 2, B=m.B,
             flops_eta=args.flops_eta, bw_eta=args.bw_eta,
-            c_serving_us=args.c_serving_us, bytes_per_param=0.5,
+            c_serving_us=args.c_serving_us,
+            moe_a2a_pattern=DEFAULT_MOE_A2A_PATTERN,
+            kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US,
+            bytes_per_param=0.5,
         )
         rows.append((f"TP={bucket[0]} EP=1", m.B, m.tpot_ms, pred))
 
@@ -117,6 +137,8 @@ def run_colocated(args) -> tuple[list[tuple], int]:
             B_sweep=log_spaced_B(8192),
             flops_eta=args.flops_eta, bw_eta=args.bw_eta,
             c_serving_us=args.c_serving_us,
+            moe_a2a_pattern=DEFAULT_MOE_A2A_PATTERN,
+            kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US,
             bytes_per_param=0.5,
         )
         for m in measured:
@@ -126,7 +148,10 @@ def run_colocated(args) -> tuple[list[tuple], int]:
                 attention_mode="dp", layout="co_located",
                 num_devices=tp_ep, S_decode=ISL + OSL // 2, B=m.B,
                 flops_eta=args.flops_eta, bw_eta=args.bw_eta,
-                c_serving_us=args.c_serving_us, bytes_per_param=0.5,
+                c_serving_us=args.c_serving_us,
+                moe_a2a_pattern=DEFAULT_MOE_A2A_PATTERN,
+                kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US,
+                bytes_per_param=0.5,
             )
             rows.append((f"TP=EP={tp_ep}", m.B, m.tpot_ms, pred))
 
