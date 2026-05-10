@@ -89,6 +89,18 @@ class TuningSpec:
     #   torus_algorithm="swing" is reserved; raises NotImplementedError for now.
     torus_algorithm: str = "ring"
 
+    # MoE A2A data-flow pattern under DP-attention (decode.md §5.2).
+    #   "gather" — gather-then-dispatch (default). TP all-gather brings full
+    #              B tokens to every rank before MoE, then dispatch from
+    #              full B. Per-rank dispatch payload = B·k·H·b. Conservative
+    #              ceiling shipped by general-purpose MoE backends.
+    #   "scatter" — scatter-direct. No AG before MoE; dispatch operates on
+    #              per-rank attention-sharded tokens of size B/G_TP. Per-rank
+    #              dispatch payload = (B/G_TP)·k·H·b — a ~G_TP× reduction.
+    #              Production DSv3/R1 pattern when DeepEP-style backends are
+    #              in use. Requires attention_mode="dp" (no-op otherwise).
+    moe_a2a_pattern: str = "gather"
+
     # In-network collectives opt-out. When True (default), dispatcher routes
     # AR/AG over any crossbar tier chain whose every tier declares inc != "none"
     # to the INC primitives (n_α collapse + BW-eff doubling for AR).

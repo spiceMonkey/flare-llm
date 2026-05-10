@@ -380,9 +380,23 @@ def compute_comm(
         msg_PP = 0.0
         t_PP = 0.0
 
-    # EP: 2-pass all-to-all (Dispatch + Combine) over k·H activation bytes
+    # EP: 2-pass all-to-all (Dispatch + Combine) over k·H activation bytes.
+    # Per-rank dispatch payload depends on the MoE A2A data-flow pattern
+    # (decode.md §5.2):
+    #   "gather" (default) — full B per rank; payload = B·k·H·b
+    #   "scatter" + DP-attn — B/G_TP per rank; payload = (B/G_TP)·k·H·b
+    # Scatter is a no-op outside DP-attn (the structural prerequisite is
+    # that attention has DP-sharded the batch across the TP group).
+    scatter_direct = (
+        getattr(tuner, "moe_a2a_pattern", "gather") == "scatter"
+        and partition.attention_mode == "dp"
+        and g_TP > 1
+    )
     if g_EP > 1:
-        msg_EP = B * k * H * b
+        if scatter_direct:
+            msg_EP = (B / g_TP) * k * H * b
+        else:
+            msg_EP = B * k * H * b
         t_EP = _cost("EP", "moe_a2a", msg_EP, g_EP, alg=ep_algorithm)
     else:
         t_EP = 0.0
@@ -435,6 +449,16 @@ def compute_comm(
     # applied across L/PP layers per stage.
     if t_TP_AG > 0.0 and t_TP > 0.0:
         t_comm_stage += (L / PP) * (t_TP_AG - t_TP)
+
+    # Scatter-direct (decode.md §5.2): under DP-attn + scatter-direct, MoE
+    # layers fire neither the pre-MoE TP all-gather nor the post-MoE TP
+    # all-reduce — the dispatch operates on per-rank sharded tokens and the
+    # combine returns expert outputs to the same per-rank shards. Subtract
+    # the MoE-layer TP contribution that aggregate_per_stage and the AG-AR
+    # adjustment above counted uniformly.
+    if scatter_direct and L_moe > 0:
+        per_moe_layer_tp = (n_TP - 1) * t_TP + t_TP_AG  # 1 AR + 1 AG under DP-attn
+        t_comm_stage -= (L_moe / PP) * per_moe_layer_tp
 
     return CommResults(
         msg_PP_bytes=msg_PP,
