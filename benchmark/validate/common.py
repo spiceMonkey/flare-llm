@@ -229,6 +229,7 @@ def run_framework(
     c_serving_us: float = 0.0,
     bw_efficiency: dict[int, float] | None = None,
     moe_a2a_pattern: str = "gather",
+    kernel_launch_us: float | None = None,
     bytes_per_param: float | None = None,
 ) -> list[FrameworkPoint]:
     """Run InferenceCalculator across a B sweep, return per-B latency breakdown.
@@ -247,10 +248,13 @@ def run_framework(
 
     out: list[FrameworkPoint] = []
     for B in B_sweep:
-        t = TuningSpec(S_decode=S_decode, B_decode=B,
-                       t_serving_per_seq_us=c_serving_us,
-                       bw_efficiency=bw_efficiency,
-                       moe_a2a_pattern=moe_a2a_pattern)
+        kw = dict(S_decode=S_decode, B_decode=B,
+                  t_serving_per_seq_us=c_serving_us,
+                  bw_efficiency=bw_efficiency,
+                  moe_a2a_pattern=moe_a2a_pattern)
+        if kernel_launch_us is not None:
+            kw["kernel_launch_us"] = kernel_launch_us
+        t = TuningSpec(**kw)
         try:
             r = InferenceCalculator(m, s, p, t).run()
         except Exception as e:  # don't kill the sweep on one bad B
@@ -303,6 +307,7 @@ def predict_at(
     c_serving_us: float = 0.0,
     bw_efficiency: dict[int, float] | None = None,
     moe_a2a_pattern: str = "gather",
+    kernel_launch_us: float | None = None,
     bytes_per_param: float | None = None,
 ) -> float:
     """Predict TPOT (ms) at a single B — used to align with measured points."""
@@ -314,6 +319,7 @@ def predict_at(
         B_sweep=[B],
         flops_eta=flops_eta, bw_eta=bw_eta, c_serving_us=c_serving_us,
         bw_efficiency=bw_efficiency, moe_a2a_pattern=moe_a2a_pattern,
+        kernel_launch_us=kernel_launch_us,
         bytes_per_param=bytes_per_param,
     )
     if not pts:
