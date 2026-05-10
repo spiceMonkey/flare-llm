@@ -69,16 +69,40 @@ BYTES_PER_PARAM = {
     "gpt-oss-120b": 0.5,                # FP4 typical
 }
 
-# NVLink island sizes per chip family — anything larger than this needs
-# multi-box networking and a separate system spec.
+# NVLink island sizes per chip family — collectives ≤ this stay on the
+# fastest fabric tier; collectives > this escalate to InfiniBand on
+# multi-box specs (b200/b300 only as of Phase 3).
 ISLAND_SIZE = {"b200": 8, "b300": 8, "gb200": 72, "gb300": 72, "h100": 8, "h200": 8}
 
-# Existing single-island system specs.
+# Single-island system specs (NVLink-only fabric).
 SYSTEM_ID = {
     "b200": "b200.8gpu", "b300": "b300.8gpu",
     "gb200": "gb200.72gpu", "gb300": "gb300.72gpu",
     "h100": "h100.8gpu", "h200": "h200.8gpu",
 }
+
+# Multi-box specs (NVLink intra-box + IB inter-box). Phase 3 covers
+# B200/B300; H200/H100 multi-box still pending (~65 InferenceX rows).
+# Maps (chip, dec_gpu) → spec id.
+MULTIBOX_SYSTEM_ID = {
+    ("b200", 16): "b200.16gpu", ("b200", 24): "b200.24gpu",
+    ("b200", 40): "b200.40gpu", ("b200", 48): "b200.48gpu",
+    ("b200", 64): "b200.64gpu",
+    ("b300", 16): "b300.16gpu", ("b300", 20): "b300.20gpu",
+    ("b300", 24): "b300.24gpu", ("b300", 32): "b300.32gpu",
+    ("b300", 40): "b300.40gpu", ("b300", 64): "b300.64gpu",
+}
+
+
+def system_for(hw: str, dec_gpu: int) -> str | None:
+    """Return the best system spec id for a (chip, dec_gpu) tuple, or None
+    if no spec exists (multi-box H100/H200/AMD)."""
+    if hw not in ISLAND_SIZE:
+        return None
+    if dec_gpu <= ISLAND_SIZE[hw]:
+        return SYSTEM_ID[hw]
+    # > island — try multi-box specs
+    return MULTIBOX_SYSTEM_ID.get((hw, dec_gpu))
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -209,10 +233,9 @@ def main() -> int:
                 continue
             if args.framework and m.framework != args.framework:
                 continue
-            if m.hardware not in ISLAND_SIZE:
-                continue
-            if m.num_decode_gpu > ISLAND_SIZE[m.hardware]:
-                continue  # multi-box, out of scope for this sweep
+            sys_id = system_for(m.hardware, m.num_decode_gpu)
+            if sys_id is None:
+                continue  # no spec (multi-box H100/H200 or AMD — Phase 3/4)
 
             knobs = get_knobs(m.hardware, m.framework)
             PP, TP, EP, SP, attn_mode, layout = infer_partition(m)
@@ -226,7 +249,7 @@ def main() -> int:
             try:
                 spec = load_model_from_db(framework_model)
                 spec = dataclasses.replace(spec, bytes_per_param=bpp)
-                sys_spec = load_system_from_db(SYSTEM_ID[m.hardware])
+                sys_spec = load_system_from_db(sys_id)
                 sys_spec = dataclasses.replace(sys_spec, num_devices=m.num_decode_gpu)
                 p_spec = PartitionSpec(PP=PP, TP=TP, EP=EP, SP=SP,
                                        attention_mode=attn_mode, layout=layout)
@@ -246,7 +269,7 @@ def main() -> int:
 
             try:
                 pred = predict_at(
-                    model=framework_model, system_id=SYSTEM_ID[m.hardware],
+                    model=framework_model, system_id=sys_id,
                     PP=PP, TP=TP, EP=EP, SP=SP,
                     attention_mode=attn_mode, layout=layout,
                     num_devices=m.num_decode_gpu, S_decode=m.isl + m.osl // 2, B=m.B,
@@ -278,6 +301,7 @@ def main() -> int:
                         framework_model=framework_model,
                         bpp=bpp,
                         knobs=knobs,
+                        sys_id=sys_id,
                         S_decode=m.isl + m.osl // 2,
                         PP=PP, TP=TP, EP=EP, SP=SP,
                         attn_mode=attn_mode, layout=layout,
@@ -293,7 +317,7 @@ def main() -> int:
             B_max = max(2 * max(m.B for m in measured_pts), 256)
             try:
                 framework = run_framework(
-                    model=meta["framework_model"], system_id=SYSTEM_ID[hw],
+                    model=meta["framework_model"], system_id=meta["sys_id"],
                     PP=meta["PP"], TP=TP, EP=EP, SP=meta["SP"],
                     attention_mode=attn_mode, layout=layout,
                     num_devices=dec, S_decode=meta["S_decode"],
