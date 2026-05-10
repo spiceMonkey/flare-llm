@@ -1,0 +1,25 @@
+{
+  "schema": "llm_perf.model",
+  "name": "GLM-5",
+
+  "L": 78,
+  "H": 6144,
+  "n_q": 64,
+  "n_kv": 5,
+  "I_dense": 12288,
+  "vocab_size": 154880,
+  "max_seq_len": 202752,
+  "bytes_per_param": 1,
+
+  "moe": {
+    "n_experts": 256,
+    "k_active": 9,
+    "I_moe": 2048,
+    "n_moe_layers": 75
+  },
+
+  "_comment_n_kv": "MLA approximation: kv_lora_rank=512, qk_rope_head_dim=64; n_kv=5 gives H_kv=384 (~3% under). The explicit num_key_value_heads=64 in the config is the head-equivalent count, not the compressed latent count.",
+  "_comment_k_active": "8 routed experts + 1 shared expert (always active). Shared expert approximated by k=9.",
+  "_comment_n_moe_layers": "first_k_dense_replace=3 → first 3 layers are dense, remaining 75 are MoE.",
+  "_comment_caveats": "DeepSeek Sparse Attention (DSA) with index_topk=2048 not modeled — reduces real attention FLOPs at long context; framework treats attention as full O(S²)."
+}

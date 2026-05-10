@@ -1,0 +1,288 @@
+#!/usr/bin/env python3
+"""Comprehensive single-island coverage sweep across InferenceX.
+
+Sweeps every (model, hardware, framework, partition) combination in the
+InferenceX dataset that fits on one NVLink island (i.e., dec_gpu ≤
+island_size for the chip family) and that the framework currently
+supports a model spec for. Uses a per-(hardware, framework)
+calibration table for the host-overhead knobs; cells without a
+calibrated entry fall back to a stack-class default (Dynamo-style,
+raw-Python-heavy, raw-C++).
+
+This is COVERAGE breadth, not depth. For per-cut detailed analysis use
+the per-stack drivers (`dsr1_gb200_dynamo_trt.py` etc.). The MAE
+numbers here are a first look; per-cell calibration would tighten them.
+
+Usage:
+    python benchmark/validate/coverage_sweep.py
+    python benchmark/validate/coverage_sweep.py --model DeepSeek-R1-0528
+    python benchmark/validate/coverage_sweep.py --hardware gb300
+    python benchmark/validate/coverage_sweep.py --framework dynamo-trt
+"""
+import argparse
+import sys
+from collections import defaultdict
+from pathlib import Path
+
+import numpy as np
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT))
+sys.path.insert(0, str(Path(__file__).parent))
+
+import dataclasses  # noqa: E402
+
+from common import load_measured, predict_at, system_with_eta  # noqa: E402
+from llm_perf import InferenceCalculator  # noqa: E402
+from llm_perf.io import load_model_from_db, load_system_from_db  # noqa: E402
+from llm_perf.specs.partition_spec import PartitionSpec  # noqa: E402
+from llm_perf.specs.tuner_spec import TuningSpec  # noqa: E402
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Maps and tables
+# ────────────────────────────────────────────────────────────────────────────
+
+INFERENCEX_TO_FRAMEWORK_MODEL = {
+    "DeepSeek-R1-0528": "deepseek_r1_0528",
+    "DeepSeek-V4-Pro": "deepseek_v4_pro",
+    "GLM-5": "glm5",
+    "Kimi-K2.5": "kimi_k25",
+    "Llama-3.3-70B-Instruct-FP8": "llama3.1_70b",
+    "MiniMax-M2.5": "minimax_m25",
+    "Qwen-3.5-397B-A17B": "qwen35_397b_a17b",
+    "gpt-oss-120b": "gpt_oss_120b",
+}
+
+# bytes-per-param overrides per InferenceX model (most ship FP8 / FP4)
+BYTES_PER_PARAM = {
+    "DeepSeek-R1-0528": 0.5,            # FP4 in production
+    "DeepSeek-V4-Pro": 0.5,             # FP4 mixed
+    "GLM-5": 1.0,                       # FP8/BF16
+    "Kimi-K2.5": 1.0,
+    "Llama-3.3-70B-Instruct-FP8": 1.0,  # FP8
+    "MiniMax-M2.5": 1.0,                # FP8
+    "Qwen-3.5-397B-A17B": 1.0,
+    "gpt-oss-120b": 0.5,                # FP4 typical
+}
+
+# NVLink island sizes per chip family — anything larger than this needs
+# multi-box networking and a separate system spec.
+ISLAND_SIZE = {"b200": 8, "b300": 8, "gb200": 72, "gb300": 72, "h100": 8, "h200": 8}
+
+# Existing single-island system specs.
+SYSTEM_ID = {
+    "b200": "b200.8gpu", "b300": "b300.8gpu",
+    "gb200": "gb200.72gpu", "gb300": "gb300.72gpu",
+    "h100": "h100.8gpu", "h200": "h200.8gpu",
+}
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Per-(hw, fw) calibration table
+# ────────────────────────────────────────────────────────────────────────────
+#
+# Calibrated entries come from the per-stack drivers; uncalibrated cells
+# fall back by stack class.
+
+CALIBRATED = {
+    # Calibrated by dsr1_gb300_dynamo_sglang.py (~17% MAE)
+    ("gb300", "dynamo-sglang"): dict(bw_eta=0.9, c_serving=1.0, kernel_launch=12.0, pattern="scatter"),
+    # Calibrated by dsr1_gb300_dynamo_trt.py (~18% MAE)
+    ("gb300", "dynamo-trt"):    dict(bw_eta=1.0, c_serving=5.0, kernel_launch=7.0,  pattern="scatter"),
+    # Calibrated by dsr1_gb200_dynamo_trt.py (~21% MAE across 4 cuts)
+    ("gb200", "dynamo-trt"):    dict(bw_eta=0.6, c_serving=5.0, kernel_launch=7.0,  pattern="scatter"),
+    # Calibrated by gpt_oss_120b_gb200_dynamo_trt.py (~9% MAE)
+    ("gb200", "dynamo-trt-oss"): dict(bw_eta=1.0, c_serving=22.0, kernel_launch=1.5, pattern="gather"),
+    # Calibrated by llama3_70b_b200_trt.py (~27% MAE)
+    ("b200", "trt"):            dict(bw_eta=0.4, c_serving=0.0,  kernel_launch=1.5, pattern="gather"),
+    # Calibrated by llama3_70b_h200_trt.py (~12% MAE)
+    ("h200", "trt"):            dict(bw_eta=0.55, c_serving=75.0, kernel_launch=1.5, pattern="gather"),
+}
+
+# Stack-class fallbacks used when (hw, fw) isn't in CALIBRATED. Roughly
+# matches `decode.md §7.2` per-stack c_serving table; bw_eta picks per
+# chip class from `decode.md §6.2`.
+STACK_CLASS = {
+    # Aggressively-fused C++/CUDA-Graph runtimes wrapped by an orchestrator.
+    # Low c_serving — the orchestrator absorbs per-step bookkeeping into
+    # one CUDA-Graph launch; per-sequence overhead is the irreducible
+    # sampling/block-table work only.
+    "dynamo-trt":     dict(c_serving=5.0,   kernel_launch=7.0,  pattern="scatter"),
+    "dynamo-sglang":  dict(c_serving=2.0,   kernel_launch=12.0, pattern="scatter"),
+    "dynamo-vllm":    dict(c_serving=2.0,   kernel_launch=12.0, pattern="scatter"),
+    # Raw C++ runtimes (no orchestrator).
+    "trt":            dict(c_serving=50.0,  kernel_launch=1.5,  pattern="gather"),
+    "trt-llm":        dict(c_serving=50.0,  kernel_launch=1.5,  pattern="gather"),
+    "trtllm":         dict(c_serving=50.0,  kernel_launch=1.5,  pattern="gather"),
+    # Python-heavy stacks (eager-mode interpreters dominate per-sequence work).
+    "vllm":           dict(c_serving=20.0,  kernel_launch=10.0, pattern="scatter"),
+    "sglang":         dict(c_serving=20.0,  kernel_launch=10.0, pattern="scatter"),
+}
+
+# Per-chip bw_eta default (HBM3e on Blackwell sustains higher than HBM3 on Hopper).
+BW_ETA_BY_CHIP = {
+    "b200": 0.7, "b300": 0.8,
+    "gb200": 0.7, "gb300": 0.9,
+    "h100": 0.55, "h200": 0.55,
+}
+
+
+def get_knobs(hw: str, fw: str) -> dict:
+    """Lookup calibration knobs for (hardware, framework). Calibrated
+    entries win over stack-class fallbacks."""
+    if (hw, fw) in CALIBRATED:
+        return CALIBRATED[(hw, fw)]
+    cls = STACK_CLASS.get(fw, dict(c_serving=30.0, kernel_launch=5.0, pattern="gather"))
+    return dict(
+        bw_eta=BW_ETA_BY_CHIP.get(hw, 0.7),
+        c_serving=cls["c_serving"],
+        kernel_launch=cls["kernel_launch"],
+        pattern=cls["pattern"],
+    )
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Sweep
+# ────────────────────────────────────────────────────────────────────────────
+
+
+def infer_partition(m) -> tuple[int, int, int, int, str, str]:
+    """Pick (PP, TP, EP, SP, attention_mode, layout) from a measured row."""
+    PP, SP = 1, 1
+    TP, EP = m.decode_tp, max(1, m.decode_ep)
+    dec = m.num_decode_gpu
+    n_replica_orth = dec // (PP * TP * EP * SP)
+    n_replica_colo = dec // (PP * max(TP, EP) * SP)
+    if m.decode_dp_attention:
+        # DP-attn requires either orthogonal+TP=EP*K or co-located. Heuristic:
+        # if max(TP,EP) divides dec evenly under co-located, use co-located.
+        if dec % max(TP, EP) == 0 and TP == EP:
+            return PP, TP, EP, SP, "dp", "co_located"
+        return PP, TP, EP, SP, "dp", "orthogonal"
+    return PP, TP, EP, SP, "tp", "orthogonal"
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
+    ap.add_argument("--model", help="Filter to one InferenceX model name")
+    ap.add_argument("--hardware", help="Filter to one hardware (e.g., gb300)")
+    ap.add_argument("--framework", help="Filter to one framework (e.g., dynamo-trt)")
+    ap.add_argument("--isl", type=int, default=1024)
+    ap.add_argument("--osl", type=int, default=1024)
+    ap.add_argument("--check", type=float, default=None,
+                    help="Exit non-zero if overall MAE %% > threshold")
+    ap.add_argument("--verbose", action="store_true",
+                    help="Print every row, not just per-cell summaries")
+    args = ap.parse_args()
+
+    # Aggregator: per (model, hw, fw, label) errors; per-cell aggregates derived
+    cell_rows: dict[tuple, list[tuple]] = defaultdict(list)
+    skipped_oom = 0
+    skipped_other = 0
+
+    inferencex_models = sorted(INFERENCEX_TO_FRAMEWORK_MODEL)
+    if args.model:
+        inferencex_models = [args.model]
+
+    for inf_model in inferencex_models:
+        framework_model = INFERENCEX_TO_FRAMEWORK_MODEL[inf_model]
+        bpp = BYTES_PER_PARAM[inf_model]
+        ms = load_measured(inf_model, isl=args.isl, osl=args.osl)
+        for m in ms:
+            if args.hardware and m.hardware != args.hardware:
+                continue
+            if args.framework and m.framework != args.framework:
+                continue
+            if m.hardware not in ISLAND_SIZE:
+                continue
+            if m.num_decode_gpu > ISLAND_SIZE[m.hardware]:
+                continue  # multi-box, out of scope for this sweep
+
+            knobs = get_knobs(m.hardware, m.framework)
+            PP, TP, EP, SP, attn_mode, layout = infer_partition(m)
+
+            # Pre-flight: skip rows where the model can't structurally fit on
+            # the labeled (PP*TP*EP*SP) GPUs. The InferenceX dataset has rows
+            # that use FSDP/ZeRO-3 (DP across all GPUs with parameter
+            # sharding) which the framework's TP/EP/PP labeling can't
+            # represent; predicting them as "model replicated on each rank"
+            # blows up by orders of magnitude.
+            try:
+                spec = load_model_from_db(framework_model)
+                spec = dataclasses.replace(spec, bytes_per_param=bpp)
+                sys_spec = load_system_from_db(SYSTEM_ID[m.hardware])
+                sys_spec = dataclasses.replace(sys_spec, num_devices=m.num_decode_gpu)
+                p_spec = PartitionSpec(PP=PP, TP=TP, EP=EP, SP=SP,
+                                       attention_mode=attn_mode, layout=layout)
+                t_spec = TuningSpec(S_decode=m.isl + m.osl // 2, B_decode=m.B,
+                                    moe_a2a_pattern=knobs["pattern"])
+                r_check = InferenceCalculator(spec, sys_spec, p_spec, t_spec).run()
+                if not r_check.memory.fits_in_HBM:
+                    skipped_oom += 1
+                    if args.verbose:
+                        print(f"  SKIP-OOM {inf_model} {m.hardware}/{m.framework} TP={TP} EP={EP} dec={m.num_decode_gpu} dp_attn={m.decode_dp_attention} B={m.B}", file=sys.stderr)
+                    continue
+            except Exception as e:
+                skipped_other += 1
+                if args.verbose:
+                    print(f"  SKIP-PRECHECK {inf_model} {m.hardware}/{m.framework}: {e}", file=sys.stderr)
+                continue
+
+            try:
+                pred = predict_at(
+                    model=framework_model, system_id=SYSTEM_ID[m.hardware],
+                    PP=PP, TP=TP, EP=EP, SP=SP,
+                    attention_mode=attn_mode, layout=layout,
+                    num_devices=m.num_decode_gpu, S_decode=m.isl + m.osl // 2, B=m.B,
+                    flops_eta=1.0, bw_eta=knobs["bw_eta"],
+                    c_serving_us=knobs["c_serving"],
+                    moe_a2a_pattern=knobs["pattern"],
+                    kernel_launch_us=knobs["kernel_launch"],
+                    bytes_per_param=bpp,
+                )
+            except Exception as e:
+                if args.verbose:
+                    print(f"  ERROR {inf_model} {m.hardware}/{m.framework} TP={TP} EP={EP} dec={m.num_decode_gpu} dp_attn={m.decode_dp_attention} B={m.B}: {e}", file=sys.stderr)
+                continue
+
+            label = f"TP={TP} EP={EP} dec={m.num_decode_gpu} dp_attn={m.decode_dp_attention}"
+            cell_rows[(inf_model, m.hardware, m.framework)].append(
+                (label, m.B, m.tpot_ms, pred)
+            )
+
+    # Print summary
+    overall_errs = []
+    print(f"{'model':<35} {'hw':>6} {'frame':<14} {'n':>4} {'MAE%':>7} {'p50%':>7} {'p90%':>7}")
+    print("-" * 100)
+    for (inf_model, hw, fw), rows in sorted(cell_rows.items()):
+        errs = [abs((p - mm) / mm) * 100 for _, _, mm, p in rows]
+        mae = float(np.mean(errs))
+        p50 = float(np.percentile(errs, 50))
+        p90 = float(np.percentile(errs, 90))
+        print(f"{inf_model:<35} {hw:>6} {fw:<14} {len(rows):>4} {mae:>6.1f}% {p50:>6.1f}% {p90:>6.1f}%")
+        overall_errs.extend(errs)
+        if args.verbose:
+            for label, B, mm, p in rows:
+                err = (p - mm) / mm * 100
+                print(f"    {label:<48} B={B:>6}  meas={mm:>7.2f}ms  pred={p:>7.2f}ms  err={err:>+7.1f}%")
+    print("-" * 100)
+    if overall_errs:
+        overall = float(np.mean(overall_errs))
+        print(f"{'OVERALL':<63} {len(overall_errs):>4} {overall:>6.1f}%  "
+              f"p50={np.percentile(overall_errs, 50):.1f}% "
+              f"p90={np.percentile(overall_errs, 90):.1f}%")
+    if skipped_oom or skipped_other:
+        print(f"\nSkipped: {skipped_oom} rows model-doesn't-fit-in-HBM (likely FSDP/ZeRO-3 in dataset, "
+              f"not representable in framework's TP/EP/PP labeling), "
+              f"{skipped_other} other pre-check failures")
+        if args.check is not None:
+            if overall > args.check:
+                print(f"\nFAIL: overall MAE {overall:.1f}% > threshold {args.check}%")
+                return 1
+            print(f"\nPASS: overall MAE {overall:.1f}% ≤ threshold {args.check}%")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
