@@ -118,6 +118,16 @@ _(→ decode.md)_
 - $N_{\text{eff}}$ — Unified expert count for FLOPs: $0$ (dense) or $N_{\text{exp}}$ (MoE).
 - $k$ — Number of experts selected per token (top-$k$ routing).
 
+**MLA (Multi-head Latent Attention) dimensions** (DeepSeek-V3 / R1, DeepSeek-V4-Pro, GLM-5, Kimi-K2.5; full coverage in `attention.md §1`). When a model uses MLA, the per-head Q / K / V symbols above are replaced by a compressed-latent decomposition:
+
+- $d_c$ — KV latent dimension (head-shared); KV cache stores $d_c$ per token per layer instead of $2 H_{kv}$.
+- $d_{q,c}$ — Query latent dimension.
+- $d_{qk,\mathrm{nope}}$ — Non-positional Q / K head dimension.
+- $d_{qk,\mathrm{rope}}$ — Rotary-position-embedded (RoPE) Q / K head dimension (head-shared on the K side).
+- $d_v$ — Value head dimension.
+
+For non-MLA models these symbols are unused; the standard $H$, $n_q$, $n_{kv}$, $H_{kv}$ apply per `decode.md` and `prefill.md`.
+
 ---
 
 ## 4. Sequence, Batch, and Precision
@@ -524,3 +534,17 @@ Captures the loss of HBM sustained / nameplate ratio as the active-sequence coun
 - $BW_{\mathrm{eff}}(B) = BW_{\mathrm{mem,nameplate}} \cdot \eta_{\beta,\mathrm{tier}} \cdot \eta_\beta(B)$ — Composition rule. $\eta_\beta(B)$ multiplies on top of any per-tier $\eta_{\beta,i}$ from §16. In practice the analyst selects one of these (constant per-tier $\eta_{\beta,i}$ or B-dependent $\eta_\beta(B)$) to carry the sustained-vs-peak gap; composing both is supported but rarely necessary (`decode.md §6.2`).
 
 When $\eta_\beta(B) \equiv 1$ the constant-bandwidth $t_{\mathrm{mem}}$ formula of `decode.md §4.3` is recovered exactly.
+
+---
+
+## 21. Attention Variants
+_(→ attention.md)_
+
+The `decode.md` and `prefill.md` cost formulas assume standard multi-head attention (MHA) or grouped-query attention (GQA). Models that depart from this baseline use variant-specific substitutions for the attention block's parameter count, KV cache footprint, traffic, and per-token compute. Per-variant symbols and equations are documented in `attention.md`; this section is the symbol-register pointer:
+
+- **Multi-head Latent Attention (MLA)** (`attention.md §1`) — DeepSeek-V3 / R1, DeepSeek-V4-Pro, GLM-5, Kimi-K2.5. Symbols: $d_c$, $d_{q,c}$, $d_{qk,\mathrm{nope}}$, $d_{qk,\mathrm{rope}}$, $d_v$ (already listed in §3 above).
+- **Sliding-window attention** (`attention.md §2`, placeholder) — Mistral, GPT-OSS, Gemma. Symbol: $W$ (per-token attention window).
+- **DeepSeek Sparse Attention (DSA)** (`attention.md §3`, placeholder) — DeepSeek-V4-Pro, GLM-5. Symbol: $k_{\mathrm{attn}}$ (top-$k$ tokens attended).
+- **Hybrid linear / full attention** (`attention.md §4`, placeholder) — Qwen-3.5, Jamba, Hymba. Symbol: per-layer `layer_type` selector.
+
+When a model uses a non-MHA variant, the `decode.md` and `prefill.md` formulas for $P_{\mathrm{attn}}$, $M_{\mathrm{KV}}$, $T_{\mathrm{KV}}$, and $F_{\mathrm{attn}}$ carry inline references to the matching `attention.md` subsection.
