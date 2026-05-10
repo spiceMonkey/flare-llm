@@ -579,6 +579,8 @@ $$
 
 For torus EP fabrics, use the torus A2A form of `collectives/02_topology_mapping.md §3` with $M = B_{\text{prefill}} \cdot S_{\text{input}} \cdot k H \cdot b$.
 
+The same two A2A data-flow patterns described for decode in `decode.md §5.2` apply identically to prefill under DP-attention. The formula above models the **gather-then-dispatch** ceiling — full $B_{\text{prefill}} \cdot S_{\text{input}}$ tokens are present on every rank before MoE dispatch, paired with the per-MoE-layer TP all-gather counted in §3.2's TP collective. The **scatter-direct** alternative (DeepEP-style [DEEPEP], operating on per-rank sequence-sharded attention outputs of size $B_{\text{prefill}} \cdot S_{\text{input}} / G_{TP}$) replaces the formula above by substituting $B_{\text{prefill}} \cdot S_{\text{input}} \to B_{\text{prefill}} \cdot S_{\text{input}} / G_{TP}$ and dropping the per-MoE-layer TP all-gather contribution from §3.2's per-stage accumulator. The prefill regime is compute-bound (long collective-hiding windows behind general matrix multiply (GEMM) tiles) and the per-rank reduction is structurally smaller than in decode (prefill payloads scale with $S_{\text{input}}$, so the $G_{TP}$-fold cut directly buys back wall-clock when MoE comm enters the critical path); both patterns therefore see meaningful use in production [SGLANG-DPATTN].
+
 ### PP Hop (prefill)
 
 The PP hop forwards the hidden-state shard to the next stage. With cross-section rank alignment, each device forwards its local share of shape $[B_{\text{prefill}} \cdot S_{\text{input}} \times H/D_{\text{kv}}]$; this is a single point-to-point transfer (see `decode.md §5.1` for the p2p rationale and the unified $D_{\text{kv}}$-based per-rank payload):

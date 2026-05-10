@@ -421,9 +421,14 @@ arXiv:2412.19437.
 → Multi-Token Prediction (MTP) head architecture and training; reports per-token acceptance ≈ 0.85–0.90 at draft depth 1 (their §3.2). Also describes the DP-attention + TP+EP co-located production decode deployment (their §4); used as the citation for the unified layout / attention-mode abstraction in `notation.md §1` and the speculative-decoding section in `decode.md §8`.
 
 **[SGLANG-DPATTN]**  
-LMSYS (2024). *Achieving Faster Open-Source LLM Inference (DP-Attention Blog Post).*  
-https://lmsys.org/blog/  
-→ SGLang's `--enable-dp-attention` flag and the AR → AG swap pattern; empirical comm savings on DSv3 / R1 deployments. Cross-confirms the per-layer collective accounting in `decode.md §8.3`.
+LMSYS (2025). *Deploying DeepSeek with PD Disaggregation and Large-Scale Expert Parallelism on 96 H100 GPUs.*  
+https://www.lmsys.org/blog/2025-05-05-large-scale-ep/  
+→ DP-attention as a production parallelism strategy and the AR → AG swap pattern at the attention → MoE transition; documents the gather-then-dispatch path used by SGLang's StandardDispatcher. Source for the per-layer collective accounting in `decode.md §5.3` and the gather-then-dispatch leg of `decode.md §5.2`. The corresponding source path in `sgl-project/sglang` (`python/sglang/srt/layers/communicator.py`) gates the dispatch path on the active MoE A2A backend, returning a sharded scatter mode when the DeepEP backend is in use ([DEEPEP] for the alternative leg).
+
+**[DEEPEP]**  
+DeepSeek-AI (2025). *DeepEP: An efficient expert-parallel communication library.*  
+https://github.com/deepseek-ai/DeepEP  
+→ MoE dispatch / combine kernels operating on per-rank sharded token counts (the dispatch API is parameterized by `num_max_tokens_per_rank`, not a globally-gathered batch). Source for the scatter-direct leg of `decode.md §5.2`. Covers both a normal mode (high-throughput, prefill-style) and a low-latency mode (RDMA-based, decode-style with hook-based compute–communication overlap that does not occupy SM resources). Used together with [DSV3] and [SGLANG-DPATTN] when `--enable-deepep-moe` is set in production DSv3 / R1 deployments.
 
 ---
 
