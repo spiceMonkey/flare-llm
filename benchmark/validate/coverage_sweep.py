@@ -34,7 +34,7 @@ import dataclasses  # noqa: E402
 
 from common import (  # noqa: E402
     load_measured, predict_at, system_with_eta,
-    log_spaced_B, plot_tpot_vs_B, run_framework,
+    log_spaced_B, plot_tpot_vs_B, run_framework, topology_tag,
 )
 from llm_perf import InferenceCalculator  # noqa: E402
 from llm_perf.io import load_model_from_db, load_system_from_db  # noqa: E402
@@ -103,28 +103,6 @@ def system_for(hw: str, dec_gpu: int) -> str | None:
         return SYSTEM_ID[hw]
     # > island — try multi-box specs
     return MULTIBOX_SYSTEM_ID.get((hw, dec_gpu))
-
-
-def topology_tag(sys_id: str) -> str:
-    """Short subtitle tag describing the fabric topology of a system spec.
-
-    Returns 'single-tier (<fabric>)' for one-fabric specs (e.g., the
-    8gpu / 72gpu specs), or 'multi-tier: N <inner>-islands via <outer>'
-    for hierarchical specs (e.g., the b200.16gpu/.../b300.64gpu Phase 3
-    specs). Empty string if the spec can't be loaded.
-    """
-    try:
-        sys_spec = load_system_from_db(sys_id)
-    except Exception:
-        return ""
-    tp_chain = sys_spec.collective_fabrics.get("TP")
-    if isinstance(tp_chain, list) and len(tp_chain) > 1:
-        inner_name, outer_name = tp_chain[0], tp_chain[-1]
-        inner_ports = sys_spec.fabrics[inner_name].tiers[0].ports
-        boxes = (sys_spec.num_devices + inner_ports - 1) // inner_ports
-        return f"multi-tier: {boxes} {inner_name}-islands via {outer_name}"
-    fabric_name = tp_chain if isinstance(tp_chain, str) else (tp_chain[0] if tp_chain else "?")
-    return f"single-tier ({fabric_name})"
 
 
 # ────────────────────────────────────────────────────────────────────────────
