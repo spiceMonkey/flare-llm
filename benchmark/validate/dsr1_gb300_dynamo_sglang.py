@@ -33,27 +33,21 @@ SYSTEM = "gb300.72gpu"
 PRECISION = "fp4"
 ISL, OSL = 1024, 1024
 
-# Per-stack calibration. Dynamo+SGLang on GB300 is the worst-fitting cut
-# in the validator suite — even the best-fit knobs leave ~55% MAE. The
-# signed-error pattern (under-predict at small B, over-predict at huge
-# B>4000) was originally hypothesized as a BW-saturation effect, which
-# motivated the `bw-eta-vs-batch` branch. On inspection (post-merge):
-# the over-prediction at large B lives in t_comm (≈45 ms of the 57 ms
-# predicted at B=8192), not t_mem (~2 ms) — this is a comm-model issue,
-# not a BW-saturation one. The B-dependent `bw_efficiency` curve has no
-# leverage on this case. New TODO tracked under `a2a-saturation-vs-batch`
-# in `scratch/model_specific_extensions.md`.
-#
-# We DEFAULT to (bw_eta=0.4, c_serving=0): the empirically best-fit tuple
-# from `_calibrate.py`. A non-zero c_serving multiplies the error at huge
-# B (a c_serving=25 µs/seq makes t_serving=200 ms at B=8192, which is
-# larger than the entire measured TPOT of ~23 ms — the linear-in-B
-# t_serving model breaks down outside the 1≤B≤1024 range per `decode.md
-# §7.2`). Users who care about this stack should sweep the knobs and
-# accept that the framework can't fit this case well until the comm
-# model is extended.
-DEFAULT_BW_ETA = 0.4
-DEFAULT_C_SERVING_US = 0.0
+# Per-stack calibration. Dynamo+SGLang on GB300 with --enable-deepep-moe
+# uses the scatter-direct MoE A2A pattern (decode.md §5.2): dispatch
+# operates on per-rank attention-sharded tokens of size B/G_TP rather
+# than gathering full B to every rank. The framework models this via
+# moe_a2a_pattern="scatter" on the tuner. Combined with realistic per-
+# step host overhead (c_serving ≈ 1 µs/seq, kernel_launch ≈ 12 µs) and
+# bw_eta ≈ 0.9 for HBM3e on Blackwell Ultra, the colocated cut fits to
+# ~9% MAE across TP=EP={32,48} and B ∈ {512..8192}. The EXACT cut
+# (TP=4 EP=1, EP-inert) is harder to fit at small B (kernel-launch floor
+# dominates 4-token decode); ~38% MAE there is structural and not
+# improvable with current knobs. Overall ~17% MAE across both cuts.
+DEFAULT_BW_ETA = 0.9
+DEFAULT_C_SERVING_US = 1.0
+DEFAULT_KERNEL_LAUNCH_US = 12.0
+DEFAULT_MOE_A2A_PATTERN = "scatter"
 
 
 def run_exact(args) -> tuple[list[tuple], int]:
@@ -81,6 +75,8 @@ def run_exact(args) -> tuple[list[tuple], int]:
             B_sweep=log_spaced_B(2048),
             flops_eta=args.flops_eta, bw_eta=args.bw_eta,
             c_serving_us=args.c_serving_us,
+            moe_a2a_pattern=DEFAULT_MOE_A2A_PATTERN,
+            kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US,
             bytes_per_param=0.5,
         )
         for m in measured:
@@ -90,7 +86,10 @@ def run_exact(args) -> tuple[list[tuple], int]:
                 attention_mode="tp", layout="orthogonal",
                 num_devices=dec, S_decode=ISL + OSL // 2, B=m.B,
                 flops_eta=args.flops_eta, bw_eta=args.bw_eta,
-                c_serving_us=args.c_serving_us, bytes_per_param=0.5,
+                c_serving_us=args.c_serving_us,
+                moe_a2a_pattern=DEFAULT_MOE_A2A_PATTERN,
+                kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US,
+                bytes_per_param=0.5,
             )
             rows.append((f"TP=4 EP=1 dec={dec}", m.B, m.tpot_ms, pred))
 
@@ -132,6 +131,8 @@ def run_colocated(args) -> tuple[list[tuple], int]:
             B_sweep=log_spaced_B(8192),
             flops_eta=args.flops_eta, bw_eta=args.bw_eta,
             c_serving_us=args.c_serving_us,
+            moe_a2a_pattern=DEFAULT_MOE_A2A_PATTERN,
+            kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US,
             bytes_per_param=0.5,
         )
         for m in measured:
@@ -141,7 +142,10 @@ def run_colocated(args) -> tuple[list[tuple], int]:
                 attention_mode="dp", layout="co_located",
                 num_devices=tp_ep, S_decode=ISL + OSL // 2, B=m.B,
                 flops_eta=args.flops_eta, bw_eta=args.bw_eta,
-                c_serving_us=args.c_serving_us, bytes_per_param=0.5,
+                c_serving_us=args.c_serving_us,
+                moe_a2a_pattern=DEFAULT_MOE_A2A_PATTERN,
+                kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US,
+                bytes_per_param=0.5,
             )
             rows.append((f"TP=EP={tp_ep}", m.B, m.tpot_ms, pred))
 
