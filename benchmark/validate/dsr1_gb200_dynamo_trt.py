@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """DeepSeek-R1-0528 on GB200 / Dynamo-TRT — framework vs InferenceX.
 
-Two cuts in the InferenceX dataset for this (model, hardware, framework)
+Three cuts in the InferenceX dataset for this (model, hardware, framework)
 triple:
 
   1. EXACT (orthogonal + TP-attention, dec_tp=N dec_ep=1): natively
@@ -12,13 +12,16 @@ triple:
      PartitionSpec(layout="co_located", attention_mode="dp"). InferenceX
      publishes three replica sizes — 8, 16, 32 GPU.
 
-This script runs both cuts at default knobs unless --flops-eta / --bw-eta
-/ --c-serving-us are set on the CLI.
+  3. ORTHO multi-replica (TP=8 EP=8 dec=32, dp_attn=False): the
+     framework runs 4 replicas of 8 GPUs each (N_replica = 32 / 8) under
+     TP-attention. Same shape as the gb300/dynamo-trt ORTHO cut. Useful
+     for cross-rack-generation comparison and small-B sensitivity testing.
 
 Usage:
     python benchmark/validate/dsr1_gb200_dynamo_trt.py
     python benchmark/validate/dsr1_gb200_dynamo_trt.py --cut exact
-    python benchmark/validate/dsr1_gb200_dynamo_trt.py --cut colocated --bw-eta 0.7 --c-serving-us 5
+    python benchmark/validate/dsr1_gb200_dynamo_trt.py --cut colocated --bw-eta 0.6
+    python benchmark/validate/dsr1_gb200_dynamo_trt.py --cut ortho
 """
 import argparse
 import sys
@@ -39,21 +42,23 @@ ISL, OSL = 1024, 1024
 # operates on per-rank attention-sharded tokens of size B/G_TP rather
 # than gathering full B to every rank. The framework models this via
 # moe_a2a_pattern="scatter" on the tuner. Combined with a moderate
-# Dynamo-stack host overhead (c_serving ≈ 5 µs/seq, kernel_launch ≈ 10
-# µs) and bw_eta ≈ 0.7 for HBM3e on Blackwell, fits to 21% MAE
-# overall (down from 33% with old gather-pattern defaults).
+# Dynamo-stack host overhead (c_serving ≈ 5 µs/seq, kernel_launch ≈ 7
+# µs) and bw_eta ≈ 0.6 for HBM3e on Blackwell, fits to ~21% MAE
+# overall across all three cuts (n=34 measurement points).
 # Per-cut breakdown:
-#   TP=EP=8  colocated:  28% MAE (n=2; B=4300/4301 measured 54/44 ms —
-#                                 23% disagreement on consecutive integer
-#                                 batch sizes is pure measurement noise)
-#   TP=EP=16 colocated:  15% MAE  (45% → 15% — biggest scatter-direct win)
-#   TP=EP=32 colocated:  23% MAE  (B=2253 measured 15 ms is anomalously low)
-#   TP=36 EP=1 EXACT:    22% MAE  (limited by data variance — e.g.
-#                                  B=128: 11.88 ms vs B=144: 7.74 ms,
-#                                  no model can fit such non-monotonicity)
-DEFAULT_BW_ETA = 0.7
+#   TP=36 EP=1 EXACT:        22% MAE (limited by data variance — e.g.
+#                                     B=128: 11.88 ms vs B=144: 7.74 ms;
+#                                     no model fits such non-monotonicity)
+#   TP=EP=8  colocated:      25% MAE (n=2; B=4300/4301 measured 54/44 ms,
+#                                     ~23% disagreement on consecutive
+#                                     integer batch sizes is measurement noise)
+#   TP=EP=16 colocated:      23% MAE (scatter-direct here vs gather)
+#   TP=EP=32 colocated:      22% MAE
+#   TP=8 EP=8 dec=32 ORTHO:  19% MAE (4 replicas of 8 GPUs, TP-attn —
+#                                     scatter inert here)
+DEFAULT_BW_ETA = 0.6
 DEFAULT_C_SERVING_US = 5.0
-DEFAULT_KERNEL_LAUNCH_US = 10.0
+DEFAULT_KERNEL_LAUNCH_US = 7.0
 DEFAULT_MOE_A2A_PATTERN = "scatter"
 
 
@@ -168,9 +173,68 @@ def run_colocated(args) -> tuple[list[tuple], int]:
     return rows, n
 
 
+def run_ortho(args) -> tuple[list[tuple], int]:
+    """Cut 3: TP=8 EP=8 dec=32 orthogonal (4 replicas of 8 GPUs each, TP-attn).
+
+    Same shape as gb300/dynamo-trt's ORTHO cut. Scatter-direct is inert
+    (TP-attention disables it); only the kernel_launch / c_serving / bw_eta
+    knobs apply.
+    """
+    rows: list[tuple] = []
+    measured = load_measured(
+        MODEL, isl=ISL, osl=OSL, precision=PRECISION,
+        decode_tp=8, decode_ep=8, num_decode_gpu=32,
+        dp_attention=False,
+        framework={"dynamo-trt", "trt", "trt-llm", "trtllm", "dynamo-trt-llm"},
+        hardware="gb200",
+    )
+    print(f"\n[ORTHO] TP=8 EP=8 dec=32 (4 replicas × 8 GPUs, TP-attn) | "
+          f"{len(measured)} measured points")
+    if not measured:
+        return [], 0
+
+    framework = run_framework(
+        model="deepseek_r1_0528", system_id=SYSTEM,
+        PP=1, TP=8, EP=8, SP=1,
+        attention_mode="tp", layout="orthogonal",
+        num_devices=32, S_decode=ISL + OSL // 2,
+        B_sweep=log_spaced_B(2048),
+        flops_eta=args.flops_eta, bw_eta=args.bw_eta,
+        c_serving_us=args.c_serving_us,
+        moe_a2a_pattern=DEFAULT_MOE_A2A_PATTERN,
+        kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US,
+        bytes_per_param=0.5,
+    )
+    for m in measured:
+        pred = predict_at(
+            model="deepseek_r1_0528", system_id=SYSTEM,
+            PP=1, TP=8, EP=8, SP=1,
+            attention_mode="tp", layout="orthogonal",
+            num_devices=32, S_decode=ISL + OSL // 2, B=m.B,
+            flops_eta=args.flops_eta, bw_eta=args.bw_eta,
+            c_serving_us=args.c_serving_us,
+            moe_a2a_pattern=DEFAULT_MOE_A2A_PATTERN,
+            kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US,
+            bytes_per_param=0.5,
+        )
+        rows.append(("TP=8 EP=8 dec=32 ortho", m.B, m.tpot_ms, pred))
+
+    out = args.out_dir / f"dsr1_dynamo_trt_ortho_tp8ep8_dec32{eta_filename_tag(args.flops_eta, args.bw_eta, args.c_serving_us)}.png"
+    plot_tpot_vs_B(
+        framework=framework, measured=measured,
+        title="DSR1 / GB200 / Dynamo-TRT — ORTHO TP=8 EP=8 dec=32 (4 replicas, TP-attn)",
+        subtitle=f"PP=1 TP=8 EP=8 attention_mode=tp layout=orthogonal | "
+                 f"ISL={ISL} OSL={OSL} FP4 | "
+                 f"{eta_subtitle(args.flops_eta, args.bw_eta, args.c_serving_us)}",
+        out_path=out,
+    )
+    print(f"  saved: {out.relative_to(args.out_dir.parent.parent)}")
+    return rows, len(measured)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
-    ap.add_argument("--cut", choices=["exact", "colocated", "all"], default="all")
+    ap.add_argument("--cut", choices=["exact", "colocated", "ortho", "all"], default="all")
     add_common_cli(ap, default_bw_eta=DEFAULT_BW_ETA, default_c_serving_us=DEFAULT_C_SERVING_US)
     args = ap.parse_args()
 
@@ -180,6 +244,9 @@ def main() -> int:
         all_rows.extend(rows)
     if args.cut in ("colocated", "all"):
         rows, _ = run_colocated(args)
+        all_rows.extend(rows)
+    if args.cut in ("ortho", "all"):
+        rows, _ = run_ortho(args)
         all_rows.extend(rows)
 
     if all_rows:
