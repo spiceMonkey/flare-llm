@@ -21,7 +21,7 @@ import argparse
 import sys
 
 from common import (
-    add_common_cli, error_table, eta_filename_tag, eta_subtitle,
+    add_common_cli, error_table, eta_filename_tag, eta_subtitle, topology_tag,
     load_measured, log_spaced_B, plot_tpot_vs_B, predict_at, run_framework,
 )
 
@@ -86,7 +86,7 @@ def main() -> int:
         framework=framework, measured=measured,
         title=f"DSR1 / B200 / TRT-LLM — TP={TP} EP={EP} dec={NUM}",
         subtitle=f"PP=1 TP={TP} EP={EP} attention_mode=tp | ISL={ISL} OSL={OSL} FP4 | "
-                 f"{eta_subtitle(args.flops_eta, args.bw_eta, args.c_serving_us)}",
+                 f"sys={SYSTEM} | {topology_tag(SYSTEM)} | {eta_subtitle(args.flops_eta, args.bw_eta, args.c_serving_us)}",
         out_path=out,
     )
     print(f"  saved: {out.relative_to(args.out_dir.parent.parent)}\n")
