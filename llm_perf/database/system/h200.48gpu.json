@@ -1,0 +1,58 @@
+{
+  "schema": "llm_perf.system",
+  "name": "h200_48gpu_dgx_multibox",
+  "num_devices": 48,
+  "device": {
+    "name": "H200-SXM",
+    "hbm_capacity_GB": 141.0,
+    "hbm_bandwidth_GBps": 4800.0,
+    "peak_flops_TF": 989.0
+  },
+  "fabrics": {
+    "nvlink4": {
+      "tiers": [
+        {
+          "name": "intra-box-nvswitch",
+          "ports": 8,
+          "bw_per_port_GBps": 450.0,
+          "alpha_us": 1.0
+        }
+      ]
+    },
+    "ib": {
+      "tiers": [
+        {
+          "name": "inter-box-quantum-ndr",
+          "ports": 6,
+          "bw_per_port_GBps": 50.0,
+          "alpha_us": 2.5
+        }
+      ]
+    }
+  },
+  "collective_fabrics": {
+    "TP": [
+      "nvlink4",
+      "ib"
+    ],
+    "EP": [
+      "nvlink4",
+      "ib"
+    ],
+    "SP": [
+      "nvlink4",
+      "ib"
+    ],
+    "PP": [
+      "nvlink4",
+      "ib"
+    ]
+  },
+  "scale_up_switch": {
+    "B_agg_TBps": 3.6,
+    "num_ports": 8,
+    "eta": 1.0,
+    "delta_alpha_us": 0.0
+  },
+  "_comment": "NVIDIA HGX/DGX Hopper Refresh H200 multi-box deployment: 6 8-GPU boxes (6\u00d78 = 48 GPU topology, 48 GPUs in active use). Intra-box: NVLink4 900 GB/s bidir (450 GB/s single-direction) per GPU through 4 NVSwitch chips. Inter-box: ConnectX-7 NDR InfiniBand (400 Gbps = 50 GB/s single-direction per GPU through dedicated NIC), ~2.5 \u03bcs IB transport latency. A collective \u22648 ranks stays on nvlink4; collectives spanning 48 ranks escalate to ib (paying \u03b1 = 1.0 + 2.5 = 3.5 us and being bandwidth-floored to 50 GB/s). Same chip as h200.8gpu single-box spec."
+}
