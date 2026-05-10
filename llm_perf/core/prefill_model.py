@@ -257,9 +257,20 @@ def compute_prefill_comm(
     else:
         t_TP_AG = 0.0
 
-    # EP: MoE all-to-all
+    # EP: MoE all-to-all. Per-rank dispatch payload depends on the MoE A2A
+    # data-flow pattern (prefill.md §3.2; same two patterns as decode.md §5.2).
+    #   "gather" (default) — full per-step tokens per rank
+    #   "scatter" + DP-attn — tokens / G_TP per rank (~G_TP× reduction)
+    scatter_direct = (
+        getattr(tuner, "moe_a2a_pattern", "gather") == "scatter"
+        and partition.attention_mode == "dp"
+        and g_TP > 1
+    )
     if g_EP > 1:
-        msg_EP = k_active * tokens * H * b
+        if scatter_direct:
+            msg_EP = k_active * (tokens / g_TP) * H * b
+        else:
+            msg_EP = k_active * tokens * H * b
         t_EP = _cost("EP", "moe_a2a", msg_EP, g_EP, alg=ep_algorithm)
     else:
         t_EP = 0.0
@@ -288,6 +299,12 @@ def compute_prefill_comm(
     # (the attention output AR) with the cheaper AG.
     if t_TP_AG > 0.0 and t_TP > 0.0:
         t_prefill_comm += (L / PP) * (t_TP_AG - t_TP)
+
+    # Scatter-direct (prefill.md §3.2): MoE layers fire neither the pre-MoE
+    # TP all-gather nor the post-MoE TP all-reduce under DP-attn + scatter.
+    if scatter_direct and L_moe > 0:
+        per_moe_layer_tp = (n_TP - 1) * t_TP + t_TP_AG
+        t_prefill_comm -= (L_moe / PP) * per_moe_layer_tp
 
     return PrefillCommResults(
         t_TP_prefill=t_TP,

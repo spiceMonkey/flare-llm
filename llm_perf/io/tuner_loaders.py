@@ -143,6 +143,13 @@ def tuning_spec_from_json_dict(cfg: Dict[str, Any]) -> TuningSpec:
                 )
             eta_TC[mb] = eta
 
+    moe_a2a_pattern = cfg.get("moe_a2a_pattern", "gather")
+    if moe_a2a_pattern not in ("gather", "scatter"):
+        raise ValueError(
+            f"tuning configuration: 'moe_a2a_pattern' must be 'gather' or "
+            f"'scatter', got {moe_a2a_pattern!r}"
+        )
+
     eta_BW_cfg = cfg.get("bw_efficiency", None)
     if eta_BW_cfg is None:
         eta_BW: Optional[Dict[int, float]] = None
@@ -202,6 +209,7 @@ def tuning_spec_from_json_dict(cfg: Dict[str, Any]) -> TuningSpec:
         chunk_size=int(cfg.get("chunk_size", 0)),
         torus_algorithm=torus_algorithm,
         inc_enabled=bool(cfg.get("inc_enabled", True)),
+        moe_a2a_pattern=str(cfg.get("moe_a2a_pattern", _defaults.moe_a2a_pattern)),
         placement=placement,
         kernels_per_layer_compute=int(cfg.get("kernels_per_layer_compute", _defaults.kernels_per_layer_compute)),
         kernels_per_collective_call=int(cfg.get("kernels_per_collective_call", _defaults.kernels_per_collective_call)),
