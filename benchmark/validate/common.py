@@ -191,6 +191,32 @@ def system_with_eta(
     return dataclasses.replace(s, device=new_d)
 
 
+def topology_tag(sys_id: str) -> str:
+    """Short subtitle tag describing the fabric topology of a system spec.
+
+    Returns 'single-tier (<fabric>)' for one-fabric specs (e.g. 8gpu /
+    72gpu specs) or 'multi-tier: N <inner>-islands via <outer>' for
+    hierarchical specs (e.g. b200.16gpu / gb200.nvl576.hierarchical).
+    Empty string if the spec can't be loaded.
+
+    Used by `coverage_sweep.py` and per-stack drivers to make the
+    plot subtitle visually distinguish single-box from multi-box
+    deployments at a glance.
+    """
+    try:
+        sys_spec = load_system_from_db(sys_id)
+    except Exception:
+        return ""
+    tp_chain = sys_spec.collective_fabrics.get("TP")
+    if isinstance(tp_chain, list) and len(tp_chain) > 1:
+        inner_name, outer_name = tp_chain[0], tp_chain[-1]
+        inner_ports = sys_spec.fabrics[inner_name].tiers[0].ports
+        boxes = (sys_spec.num_devices + inner_ports - 1) // inner_ports
+        return f"multi-tier: {boxes} {inner_name}-islands via {outer_name}"
+    fabric_name = tp_chain if isinstance(tp_chain, str) else (tp_chain[0] if tp_chain else "?")
+    return f"single-tier ({fabric_name})"
+
+
 # ────────────────────────────────────────────────────────────────────────────
 # Framework runner
 # ────────────────────────────────────────────────────────────────────────────
