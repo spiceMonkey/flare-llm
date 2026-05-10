@@ -105,6 +105,28 @@ def system_for(hw: str, dec_gpu: int) -> str | None:
     return MULTIBOX_SYSTEM_ID.get((hw, dec_gpu))
 
 
+def topology_tag(sys_id: str) -> str:
+    """Short subtitle tag describing the fabric topology of a system spec.
+
+    Returns 'single-tier (<fabric>)' for one-fabric specs (e.g., the
+    8gpu / 72gpu specs), or 'multi-tier: N <inner>-islands via <outer>'
+    for hierarchical specs (e.g., the b200.16gpu/.../b300.64gpu Phase 3
+    specs). Empty string if the spec can't be loaded.
+    """
+    try:
+        sys_spec = load_system_from_db(sys_id)
+    except Exception:
+        return ""
+    tp_chain = sys_spec.collective_fabrics.get("TP")
+    if isinstance(tp_chain, list) and len(tp_chain) > 1:
+        inner_name, outer_name = tp_chain[0], tp_chain[-1]
+        inner_ports = sys_spec.fabrics[inner_name].tiers[0].ports
+        boxes = (sys_spec.num_devices + inner_ports - 1) // inner_ports
+        return f"multi-tier: {boxes} {inner_name}-islands via {outer_name}"
+    fabric_name = tp_chain if isinstance(tp_chain, str) else (tp_chain[0] if tp_chain else "?")
+    return f"single-tier ({fabric_name})"
+
+
 # ────────────────────────────────────────────────────────────────────────────
 # Per-(hw, fw) calibration table
 # ────────────────────────────────────────────────────────────────────────────
@@ -335,10 +357,12 @@ def main() -> int:
 
             slug = f"{inf_model.replace('/', '_').replace(' ', '_')}__{hw}_{fw}__TP{TP}_EP{EP}_dec{dec}_{attn_mode}_{layout}"
             out = args.out_dir / f"sweep__{slug}.png"
+            topo = topology_tag(meta["sys_id"])
             plot_tpot_vs_B(
                 framework=framework, measured=measured_pts,
                 title=f"{inf_model} / {hw} / {fw} — TP={TP} EP={EP} dec={dec} ({attn_mode}, {layout})",
                 subtitle=(f"PP={meta['PP']} TP={TP} EP={EP} SP={meta['SP']} | ISL={meta['S_decode']*2//3} OSL={meta['S_decode']*2//3} | "
+                          f"sys={meta['sys_id']} | {topo} | "
                           f"bw_eta={meta['knobs']['bw_eta']:.2f} c_serving={meta['knobs']['c_serving']:.0f}us "
                           f"kl={meta['knobs']['kernel_launch']:.0f}us pattern={meta['knobs']['pattern']}"),
                 out_path=out,
