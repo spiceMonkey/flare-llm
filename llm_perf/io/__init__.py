@@ -1,5 +1,6 @@
 # llm_perf/io/__init__.py
 
+from .framework_loaders import load_framework_spec, framework_spec_from_json_dict
 from .model_loaders import load_model_spec, model_spec_from_json_dict
 from .system_loaders import load_system_spec, system_spec_from_json_dict
 from .partition_loaders import load_partition_spec, partition_spec_from_json_dict
@@ -16,10 +17,14 @@ from .database_loaders import (
     load_partition_from_db,
     list_tuner_ids,
     load_tuner_from_db,
+    list_framework_ids,
+    load_framework_from_db,
 )
 
 
 __all__ = [
+    "load_framework_spec",
+    "framework_spec_from_json_dict",
     "load_model_spec",
     "model_spec_from_json_dict",
     "load_system_spec",
@@ -36,8 +41,10 @@ __all__ = [
     "list_model_ids",
     "list_partition_ids",
     "list_tuner_ids",
+    "list_framework_ids",
     "load_system_from_db",
     "load_model_from_db",
     "load_partition_from_db",
     "load_tuner_from_db",
+    "load_framework_from_db",
 ]
