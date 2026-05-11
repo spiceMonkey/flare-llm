@@ -35,13 +35,29 @@ def _split_layers(model: LlmModelSpec) -> tuple[int, int, int, int]:
     return L_dense, L_moe, N_exp, I_moe
 
 
+def _per_layer_attn_params(model: LlmModelSpec) -> float:
+    """Per-layer attention parameter count, branching on attention variant.
+
+    GQA / MHA: `2H² + 2HH_kv` (the §2.3 form, reducing to `4H²` at MHA
+    limit). MLA: sum of six matrices from `attention.md §3.3`, computed
+    via `MLASpec.per_layer_attn_params`.
+    """
+    if model.mla is not None:
+        return float(model.mla.per_layer_attn_params(model.H, model.n_q))
+    H = model.H
+    H_kv = model.H_kv()
+    return 2 * H**2 + 2 * H * H_kv
+
+
 def dense_weight_bytes(model: LlmModelSpec, partition: PartitionSpec) -> float:
     """Per-device weight bytes for the dense-layer slice of the model.
 
-        M_theta_dense = (L_dense / PP) · ((2H² + 2HH_kv)/D_attn + 3HI_dense/TP) · b
+        M_theta_dense = (L_dense / PP) · (P_attn/D_attn + 3HI_dense/TP) · b
 
-    Dense FFN always uses /TP regardless of layout (no EP axis to overlap;
-    co-location does not apply to dense layers). Attention follows D_attn.
+    where P_attn is the per-layer attention parameter count from
+    `_per_layer_attn_params` (GQA/MHA: 2H² + 2HH_kv; MLA: 6-matrix sum).
+    Dense FFN always uses /TP regardless of layout. Attention follows
+    D_attn.
     """
     L = model.L
     if model.moe is not None:
@@ -51,27 +67,26 @@ def dense_weight_bytes(model: LlmModelSpec, partition: PartitionSpec) -> float:
         L_dense = L
 
     H = model.H
-    H_kv = model.H_kv()
     I_dense = model.I_dense
     b = model.bytes_per_param
     PP = partition.PP
     d_attn = D_attn(partition)
     d_exp_dense = D_exp(partition, layer_kind="dense")
 
+    P_attn = _per_layer_attn_params(model)
+
     return (L_dense / PP) * (
-        (2 * H**2 + 2 * H * H_kv) / d_attn + (3 * H * I_dense) / d_exp_dense
+        P_attn / d_attn + (3 * H * I_dense) / d_exp_dense
     ) * b
 
 
 def moe_weight_bytes(model: LlmModelSpec, partition: PartitionSpec) -> float:
     """Per-device weight bytes for the MoE-layer slice of the model.
 
-        M_theta_moe = (L_moe / PP) · ((2H² + 2HH_kv)/D_attn + 3HI_moe·N_exp/D_exp) · b
+        M_theta_moe = (L_moe / PP) · (P_attn/D_attn + 3HI_moe·N_exp/D_exp) · b
 
-    Returns 0.0 for dense-only models. EP is clamped by N_exp internally
-    by `D_exp(layer_kind="moe", n_exp_cap=N_exp)`: under the orthogonal
-    layout the divisor is TP * min(EP, N_exp); under co-located it is
-    min(EP, N_exp).
+    Returns 0.0 for dense-only models. P_attn branches on attention
+    variant via `_per_layer_attn_params`.
     """
     if model.moe is None:
         return 0.0
@@ -82,14 +97,15 @@ def moe_weight_bytes(model: LlmModelSpec, partition: PartitionSpec) -> float:
     I_moe = model.moe.I_moe
 
     H = model.H
-    H_kv = model.H_kv()
     b = model.bytes_per_param
     PP = partition.PP
     d_attn = D_attn(partition)
     d_exp_moe = D_exp(partition, layer_kind="moe", n_exp_cap=N_exp)
 
+    P_attn = _per_layer_attn_params(model)
+
     return (L_moe / PP) * (
-        (2 * H**2 + 2 * H * H_kv) / d_attn + (3 * H * I_moe * N_exp) / d_exp_moe
+        P_attn / d_attn + (3 * H * I_moe * N_exp) / d_exp_moe
     ) * b
 
 
