@@ -1,26 +1,26 @@
 """FrameworkSpec — SW-stack-specific runtime behavior.
 
-Captures the host-side overhead model and execution-mode choices that
-depend on the production serving stack rather than the workload, model,
-or hardware. Splits cleanly out of TuningSpec along the natural axis:
+Captures the host-side overhead model, execution-mode choices, and
+collective-dispatch knobs that depend on the production serving stack
+rather than the workload, model, or hardware. Five orthogonal spec
+axes:
 
-    TuningSpec  = workload knobs (S, B, chunk_size, collective algos,
-                  placement, speculation, n_*_collectives, overlap_factor)
-    FrameworkSpec = stack knobs (c_serving, kernel_launch_us, kernels_per_*,
-                  sw_overlap_factor, moe_a2a_pattern, mla_mode, inc_enabled)
+    ModelSpec    = architecture (LlmModelSpec, MoESpec, MLASpec)
+    SystemSpec   = hardware (DeviceSpec, FabricSpec, MemoryTierSpec)
     PartitionSpec = sharding (PP, TP, EP, SP, attention_mode, layout)
-    SystemSpec  = hardware (DeviceSpec, FabricSpec, MemoryTierSpec)
-    ModelSpec   = architecture (LlmModelSpec, MoESpec, MLASpec)
+    TuningSpec   = workload (S, B, chunk_size, placement, speculation,
+                   chip-side derate curves: tensor_core_efficiency,
+                   bw_efficiency)
+    FrameworkSpec = stack runtime (host overhead, kernel launch budget,
+                   collective algorithms + counts + overlap, MLA mode,
+                   MoE A2A pattern, INC opt-in)
 
-The five specs are orthogonal axes of an inference deployment. The
-calculator composes them: any (model, system, partition, tuner, framework)
-tuple is a runnable deployment configuration.
-
-Pre-canned framework JSONs live in `database/framework/` and correspond
-1:1 to the production stack identifiers used in InferenceX measurement
-metadata: `dynamo-trt`, `dynamo-sglang`, `dynamo-vllm`, `trt`, `vllm`,
-`sglang`. See `documentation/modeling/decode.md §7.1, §7.2` for the
-underlying analytical model and per-stack `c_serving` ranges.
+Any (model, system, partition, tuner, framework) tuple is a runnable
+deployment configuration. Pre-canned framework JSONs live in
+`database/framework/` and correspond 1:1 to the production stack
+identifiers in InferenceX measurement metadata. See
+`documentation/modeling/decode.md §7.1, §7.2` (host overhead),
+`§5` (collective algorithms), `§6` (overlap composition).
 """
 
 from dataclasses import dataclass, field
@@ -107,10 +107,79 @@ class FrameworkSpec:
     # fallback — useful for A/B measurements.
     inc_enabled: bool = True
 
+    # ── Collective algorithm selection (decode.md §5.5; §5.7) ──────────
+    # Per-collective-class algorithm name. Values are strings drawn from
+    # `core/primitives/dispatch.enumerate_options()`'s output for each op.
+    # The framework's `optimize_collective_algorithms` resolves the
+    # special value "auto" by enumerating cost-model options and picking
+    # `min(cost)` (with INC priority when `inc_enabled` AND structurally
+    # available — see `core/collective_algo_opt.py` policy).
+    #
+    # Available options per op (from primitives/dispatch.py):
+    #   TP all-reduce (tp_algorithm_*):
+    #     "ring"  — bandwidth-optimal at large M; default fallback.
+    #     "tree"  — alpha-optimal at small M; literal P=1 binomial tree.
+    #     "tree_pipelined" — pipelined variant of tree (lower alpha at large M).
+    #     "inc"   — in-network reduction when fabric supports it (NVLS,
+    #               IB SHARP, etc.). Selected automatically by the optimizer
+    #               when `inc_enabled` and any crossed tier has inc != "none".
+    #     "auto"  — resolve via cost model (requires
+    #               `optimize_collective_algorithms` before calculator.run()).
+    #   EP MoE A2A (ep_algorithm_*):
+    #     "ring"  — pairwise direct-send (= "pairwise" in some frameworks).
+    #     "inc"   — hardware A2A acceleration (only on tiers with inc=="hw_a2a").
+    #     "auto"  — resolve via cost model.
+    #   Torus (torus_algorithm):
+    #     "ring"  — dim-by-dim ring on torus fabrics.
+    #     "swing" — RESERVED (raises NotImplementedError).
+    #     "auto"  — resolve via cost model (only "ring" available today).
+    #
+    # Per-stack JSONs in `database/framework/` typically default to "auto",
+    # forcing the optimizer to pick the right algorithm for the
+    # (workload × system × group size) cell. `FrameworkSpec.default()`
+    # uses "ring" so the calculator runs out-of-box without an optimizer
+    # pass (pure roofline).
+    tp_algorithm_decode: str = "ring"
+    tp_algorithm_prefill: str = "ring"
+    ep_algorithm_decode: str = "ring"
+    ep_algorithm_prefill: str = "ring"
+    torus_algorithm: str = "ring"
+
+    # ── Per-layer collective call counts (decode.md §5.5) ──────────────
+    # How many NCCL API calls fire per transformer layer per microbatch.
+    # Defaults match the canonical TP-attention transformer:
+    #   - 2 TP all-reduces per layer (post-attn + post-FFN). Custom-fused
+    #     stacks may reduce this to 1 via sequence-parallel rewrites.
+    #   - 2 EP MoE A2A calls per MoE layer (dispatch + combine).
+    #   - 1 SP all-gather per layer (with ring SP — only shipped variant
+    #     per `collectives/01_collective_algorithms.md §6`).
+    # Counts are zeroed dynamically in `_t_SW_per_microbatch` when the
+    # corresponding parallelism axis is 1 (no collective fires).
+    n_TP_collectives: int = 2
+    n_EP_collectives: int = 2
+    n_SP_collectives: int = 1
+
+    # ── Comm/compute overlap (decode.md §6.2) ──────────────────────────
+    # Fraction ρ of GPU compute time used to hide collective comm (the
+    # comm-vs-compute overlap, distinct from sw_overlap_factor which is
+    # the SW-vs-GPU overlap):
+    #
+    #   t_stage = t_local + max(0, t_comm - ρ * t_local)
+    #
+    # ρ = 0 → strict serialization (conservative roofline default).
+    # ρ = 1 → full async overlap (NCCL streams hide comm completely).
+    # Production CUDA-Graph stacks (TRT-LLM / SGLang) typically achieve
+    # 0.4–0.7 in steady-state decode; eager-mode stacks see ~0.0–0.3.
+    overlap_factor: float = 0.0
+
     @classmethod
     def default(cls) -> "FrameworkSpec":
         """Neutral / no-overhead defaults — matches the legacy TuningSpec
-        defaults before the framework split. Use this as a fallback when
-        no production stack is being modeled (pure roofline).
+        defaults before the framework split. Algorithms are concrete
+        ("ring" everywhere) so the calculator runs out-of-box without
+        requiring an `optimize_collective_algorithms` pass — pure roofline.
+        Use a per-stack JSON (e.g. `load_framework_from_db("dynamo_trt")`)
+        when modeling a production stack; those JSONs default to
+        algorithm="auto" so the optimizer selects per cell.
         """
         return cls(name="default")

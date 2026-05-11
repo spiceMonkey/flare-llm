@@ -1,11 +1,5 @@
 {
   "schema": "llm_perf.tuner",
   "name": "large_dense_tuner",
-  "S_decode": 12288,
-  "tp_algorithm": "ring",
-  "ep_algorithm": "ring",
-  "n_TP_collectives": 2,
-  "n_EP_collectives": 0,
-  "n_SP_collectives": 1,
-  "overlap_factor": 0.0
+  "S_decode": 12288
 }
