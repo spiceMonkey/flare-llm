@@ -56,8 +56,17 @@ ISL, OSL = 1024, 1024
 #   TP=EP=32 colocated:      22% MAE
 #   TP=8 EP=8 dec=32 ORTHO:  19% MAE (4 replicas of 8 GPUs, TP-attn —
 #                                     scatter inert here)
-DEFAULT_BW_ETA = 0.6
-DEFAULT_C_SERVING_US = 5.0
+#
+# Recalibrated post-MLA-migration (mla(stage 1-3): real MLASpec on
+# deepseek_r1_0528 added ~5 GB to per-rank M_theta and shifted attention
+# compute to absorbed-mode latent-space score/value). Previous (0.6, 5.0)
+# gave 25.1% overall MAE with a 116% outlier at TP=EP=16 B=4301; new
+# (0.5, 0.0) gives 22.7% / max 53.8%. The c_serving 5→0 shift carries
+# the bulk of the improvement: Dynamo+TRT absorbs per-seq host work into
+# the CUDA-graph launch, so the framework's per-seq overhead term
+# over-counts at large B (the offending TP=EP=16,32 cells run at B≥4000).
+DEFAULT_BW_ETA = 0.5
+DEFAULT_C_SERVING_US = 0.0
 DEFAULT_KERNEL_LAUNCH_US = 7.0
 DEFAULT_MOE_A2A_PATTERN = "scatter"
 
