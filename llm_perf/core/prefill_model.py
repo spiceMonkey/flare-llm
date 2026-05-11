@@ -97,23 +97,53 @@ def compute_prefill_flops(
 
     L = model.L
     H = model.H
-    H_kv = model.H_kv()
     S = tuner.S_input
     PP = partition.PP
     SP = partition.SP
     I_dense = model.I_dense
 
     # Linear FLOPs for the full pass: per-token contribution × S_input tokens
-    F_linear_device = linear_flops_per_token(model, partition) * S
+    F_linear_device = linear_flops_per_token(model, partition, tuner) * S
 
-    # Attention FLOPs: 4·S²·H per layer, sharded by D_kv·SP (notation.md §1)
-    F_attn_device = (L / PP) * (4 * S**2 * H) / (D_kv(partition) * SP)
+    # Attention FLOPs (score + value, per pass: per-token form scaled by S
+    # query positions). GQA / MHA: 4·S²·H per layer / (D_kv·SP). MLA:
+    # variant-specific score / value per token per layer (mode-dependent)
+    # × S query positions / SP.
+    if model.mla is not None:
+        from .primitives.mla_flops import mla_score_value_flops_per_layer_per_device
+        F_sv_per_layer_per_device_per_token = (
+            mla_score_value_flops_per_layer_per_device(model, partition, S, tuner.mla_mode)
+        )
+        F_attn_device = (L / PP) * F_sv_per_layer_per_device_per_token * S / SP
+    else:
+        F_attn_device = (L / PP) * (4 * S**2 * H) / (D_kv(partition) * SP)
 
     F_prefill_device = F_linear_device + F_attn_device
 
-    # Unsharded diagnostic values (per layer, representative dense)
-    F_proj = (4 * H**2 + 4 * H * H_kv) * S
-    F_attn = 4 * S**2 * H
+    # Unsharded diagnostic values (per layer, representative dense). For MLA
+    # models the projection cost is variant-specific; we report the
+    # mode-dependent MLA proj-per-token × S for the F_proj diagnostic, and
+    # the MLA score / value cost × S for the F_attn diagnostic. For GQA / MHA
+    # these collapse to the historical (4H²+4HH_kv)·S and 4S²H forms.
+    if model.mla is not None:
+        from .primitives.mla_flops import (
+            mla_proj_flops_per_layer_per_device,
+            mla_score_value_flops_per_layer_per_device,
+        )
+        # Diagnostic forms: cluster-total per-layer (no D_attn / D_kv divisor)
+        # — synthesize by computing the per-device value at TP=1 / DP-attn,
+        # which gives the unsharded form. Keep it simple: use per-device with
+        # current partition (not strictly "unsharded" but matches the post-
+        # MLA convention of "what the partition produces").
+        F_proj_per_token = mla_proj_flops_per_layer_per_device(model, partition, tuner.mla_mode)
+        F_proj = F_proj_per_token * S
+        F_attn = mla_score_value_flops_per_layer_per_device(
+            model, partition, S, tuner.mla_mode
+        ) * S
+    else:
+        H_kv = model.H_kv()
+        F_proj = (4 * H**2 + 4 * H * H_kv) * S
+        F_attn = 4 * S**2 * H
     F_ffn_dense = 6 * H * I_dense * S
     F_layer_prefill = F_proj + F_attn + F_ffn_dense
 

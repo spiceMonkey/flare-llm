@@ -253,9 +253,19 @@ def compute_flops(
     B = tuner.B_decode
 
     # Linear FLOPs per token (proj + FFN + MoE router)
-    F_linear_per_token = linear_flops_per_token(model, partition)
-    # Decode attention: 4·S·H/(D_kv·SP) per token per layer
-    F_attn_per_token = (L / PP) * (4 * S * H) / (D_kv(partition) * SP)
+    F_linear_per_token = linear_flops_per_token(model, partition, tuner)
+    # Decode attention (score + value, S-scaling). GQA / MHA: 4·S·H/(D_kv·SP)
+    # per token per layer. MLA: variant-specific score / value per layer per
+    # device from `mla_score_value_flops_per_layer_per_device` (mode-dependent),
+    # divided by SP for sequence-shard.
+    if model.mla is not None:
+        from .primitives.mla_flops import mla_score_value_flops_per_layer_per_device
+        F_sv_per_layer = mla_score_value_flops_per_layer_per_device(
+            model, partition, S, tuner.mla_mode
+        )
+        F_attn_per_token = (L / PP) * F_sv_per_layer / SP
+    else:
+        F_attn_per_token = (L / PP) * (4 * S * H) / (D_kv(partition) * SP)
 
     F_token_device = F_linear_per_token + F_attn_per_token
     F_layer_per_device = F_token_device / (L / PP) if L > 0 else 0.0

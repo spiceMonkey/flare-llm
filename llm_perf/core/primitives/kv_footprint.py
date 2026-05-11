@@ -31,13 +31,15 @@ def kv_bytes_per_seq(
 ) -> float:
     """Per-device KV bytes for a single sequence of length n_tokens.
 
-    For MLA models (`model.mla` set), the per-token-per-layer base is the
-    head-shared latent `(d_c + d_qk_rope) * b` rather than the GQA form
-    `2 * H_kv * b`. The latent is not head-structured, so the head-shard
-    divisor `D_kv` does not apply under TP-attention; for Phase 1 we
-    retain the divisor for sharding-symbol consistency, accepting a
-    per-rank under-count under TP-attention until §3.7 sharding lands
-    proper MLA-aware D_kv handling. Cluster-total KV is correct.
+    Branches on attention variant and mode (`attention.md §3.4 / §3.6`):
+    - GQA / MHA: `2 · H_kv · b` per token per layer, divided by D_kv
+      (head-shard under TP-attn, sequence-shard under DP-attn — same
+      byte count).
+    - MLA + DP-attn: head-shared latent `(d_c + d_qk_rope) · b` per token
+      per layer, divided by D_kv (sequence-shard across the DP-attn group
+      — same B/G_TP semantics as GQA).
+    - MLA + TP-attn: latent is replicated on every rank (not
+      head-structured). No D_kv divisor — only SP still applies.
     """
     L = model.L
     b = model.bytes_per_param
@@ -46,6 +48,8 @@ def kv_bytes_per_seq(
 
     if model.mla is not None:
         per_tok_per_layer = model.mla.kv_bytes_per_token_per_layer(b)
+        if partition.attention_mode == "tp":
+            return (L / PP) * (n_tokens * per_tok_per_layer) / SP
         return (L / PP) * (n_tokens * per_tok_per_layer) / (D_kv(partition) * SP)
 
     H_kv = model.H_kv()

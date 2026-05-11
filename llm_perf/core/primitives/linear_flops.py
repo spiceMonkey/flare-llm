@@ -4,12 +4,19 @@ Returns the per-device FLOPs attributable to the *linear* (attention-free)
 portion of one decoded token summed across all layers:
 
     F_linear_per_token =
-        (L_dense/PP) · [(4H² + 4HH_kv)/D_attn + 6HI_dense/TP]
-      + (L_moe  /PP) · [(4H² + 4HH_kv)/D_attn + 6HkI_moe/D_exp + 2HN_exp]
+        (L_dense/PP) · [F_attn_proj + 6HI_dense/TP]
+      + (L_moe  /PP) · [F_attn_proj + 6HkI_moe/D_exp + 2HN_exp]
 
-Why these terms:
-- (4H² + 4HH_kv)/D_attn — Q/K/V/O projection FLOPs (TP under TP-attn,
-  unsharded under DP-attn). D_attn from notation.md §1.
+where `F_attn_proj` is the attention projection FLOPs per layer per
+device, branching on attention variant:
+- GQA / MHA: `(4H² + 4HH_kv) / D_attn` — TP under TP-attn,
+  unsharded under DP-attn (D_attn from notation.md §1).
+- MLA: variant-specific projection FLOPs from
+  `mla_flops.mla_proj_flops_per_layer_per_device`, which handles the
+  shardable (W_UQ / W_UK / W_UV / W_O) vs replicated (W_DQ / W_DKV)
+  split under TP-attn and the materialized vs absorbed mode dispatch.
+
+Other terms unchanged:
 - 6HI_dense/TP — dense FFN (gate, up, down), I_dense wide, always
   TP-sharded (no EP axis to overlap on dense).
 - 6HkI_moe/D_exp — MoE FFN: k active experts per token, sharded by D_exp
@@ -17,28 +24,38 @@ Why these terms:
 - 2HN_exp — MoE router gate GEMM (H → N_exp), unsharded
   (see documentation/modeling/decode.md §3.4).
 
-Attention FLOPs are NOT in this primitive because the shape differs by
-phase: decode sees 4·S·H/(D_kv·SP) per token (fixed S), prefill sees
-4·S²·H/(D_kv·SP) per *pass* (not per token). Callers add phase-specific
-attention inline.
+Attention score / value FLOPs are NOT in this primitive because the
+shape differs by phase: decode sees 4·S·H/(D_kv·SP) per token (fixed S),
+prefill sees 4·S²·H/(D_kv·SP) per *pass*. Callers add phase-specific
+attention inline (using `mla_score_value_flops_per_layer_per_device` for
+MLA models).
 
 For prefill, `linear_flops_per_token * S_input` gives the full linear
 contribution across the prefill pass.
 """
 
+from typing import Optional
+
 from ...specs.model_spec import LlmModelSpec
 from ...specs.partition_spec import PartitionSpec
+from ...specs.tuner_spec import TuningSpec
+from .mla_flops import mla_proj_flops_per_layer_per_device
 from .sharding_factors import D_attn, D_exp
 
 
 def linear_flops_per_token(
     model: LlmModelSpec,
     partition: PartitionSpec,
+    tuner: Optional[TuningSpec] = None,
 ) -> float:
-    """Per-device, per-token linear FLOPs summed across all layers."""
+    """Per-device, per-token linear FLOPs summed across all layers.
+
+    `tuner` is required for MLA models (passes `mla_mode`); ignored for
+    GQA / MHA models. When omitted on an MLA model, defaults to the
+    production "absorbed" mode (matches `TuningSpec` default).
+    """
     L = model.L
     H = model.H
-    H_kv = model.H_kv()
     PP = partition.PP
     d_attn = D_attn(partition)
     d_exp_dense = D_exp(partition, layer_kind="dense")
@@ -60,12 +77,20 @@ def linear_flops_per_token(
 
     I_dense = model.I_dense
 
-    # Dense contribution per layer: Q/K/V/O + FFN
-    F_layer_dense = (4 * H**2 + 4 * H * H_kv) / d_attn + (6 * H * I_dense) / d_exp_dense
+    # Per-layer per-device attention projection FLOPs — branch on variant.
+    if model.mla is not None:
+        mla_mode = tuner.mla_mode if tuner is not None else "absorbed"
+        F_attn_proj = mla_proj_flops_per_layer_per_device(model, partition, mla_mode)
+    else:
+        H_kv = model.H_kv()
+        F_attn_proj = (4 * H**2 + 4 * H * H_kv) / d_attn
 
-    # MoE contribution per layer: Q/K/V/O + routed FFN + router gate (unsharded)
+    # Dense contribution per layer: attention projection + FFN
+    F_layer_dense = F_attn_proj + (6 * H * I_dense) / d_exp_dense
+
+    # MoE contribution per layer: attention projection + routed FFN + router gate
     F_layer_moe = (
-        (4 * H**2 + 4 * H * H_kv) / d_attn
+        F_attn_proj
         + (6 * H * k * I_moe) / d_exp_moe
         + 2 * H * N_exp
     )
