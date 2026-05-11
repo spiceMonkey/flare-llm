@@ -1,6 +1,6 @@
 {
   "schema": "llm_perf.system",
-  "name": "h200_16gpu_dgx_multibox",
+  "name": "h200_multibox",
   "num_devices": 16,
   "device": {
     "name": "H200-SXM",
@@ -56,5 +56,5 @@
     "eta": 1.0,
     "delta_alpha_us": 0.0
   },
-  "_comment": "NVIDIA HGX/DGX Hopper Refresh H200 multi-box deployment: 2 8-GPU boxes (2\u00d78 = 16 GPU topology, 16 GPUs in active use). Intra-box: NVLink4 900 GB/s bidir (450 GB/s single-direction) per GPU through 4 NVSwitch chips. Inter-box: ConnectX-7 NDR InfiniBand (400 Gbps = 50 GB/s single-direction per GPU through dedicated NIC), ~2.5 \u03bcs IB transport latency. A collective \u22648 ranks stays on nvlink4; collectives spanning 16 ranks escalate to ib (paying \u03b1 = 1.0 + 2.5 = 3.5 us and being bandwidth-floored to 50 GB/s). Same chip as h200.8gpu single-box spec."
+  "_comment": "NVIDIA HGX/DGX Hopper Refresh H200 multi-box deployment template (8-GPU NVLink4 islands stitched by ConnectX-7 NDR InfiniBand at ~2.5 us/50 GB/s). num_devices and ib.ports are auto-overridden by `system_with_eta(..., num_devices=N)`. Intra-box: NVLink4 900 GB/s bidir per GPU through 4 NVSwitch chips. Inter-box: ConnectX-7 NDR (50 GB/s/GPU). Same chip as h200.8gpu single-box spec."
 }

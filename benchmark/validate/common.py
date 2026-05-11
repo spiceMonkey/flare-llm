@@ -157,6 +157,31 @@ def load_measured(
 # ────────────────────────────────────────────────────────────────────────────
 
 
+def _resize_outer_fabric_tier(system: SystemSpec, num_devices: int) -> SystemSpec:
+    """For multi-tier systems, set the outer fabric tier's `ports` to
+    `ceil(num_devices / inner_tier.ports)` so the IB tier scales with the
+    declared cluster size. Inert for single-tier systems.
+
+    Used to parameterize multibox templates (b200.multibox, b300.multibox,
+    h100.multibox, h200.multibox) by `num_devices` rather than carrying one
+    pre-shaped JSON per supported GPU count.
+    """
+    tp_chain = system.collective_fabrics.get("TP")
+    if not isinstance(tp_chain, list) or len(tp_chain) < 2:
+        return system
+    inner_name = tp_chain[0]
+    outer_name = tp_chain[-1]
+    if inner_name == outer_name:
+        return system
+    inner_tier = system.fabrics[inner_name].tiers[0]
+    n_boxes = (num_devices + inner_tier.ports - 1) // inner_tier.ports
+    outer_fab = system.fabrics[outer_name]
+    new_outer_tiers = [dataclasses.replace(outer_fab.tiers[0], ports=n_boxes), *outer_fab.tiers[1:]]
+    new_outer = dataclasses.replace(outer_fab, tiers=new_outer_tiers)
+    new_fabrics = {**system.fabrics, outer_name: new_outer}
+    return dataclasses.replace(system, fabrics=new_fabrics)
+
+
 def system_with_eta(
     system: SystemSpec,
     *,
@@ -169,10 +194,16 @@ def system_with_eta(
     `flops_eta ∈ (0, 1]` scales `device.peak_flops_TF` (effective compute peak).
     `bw_eta ∈ (0, 1]` scales every memory tier's `bandwidth_GBps` (and the
     legacy `hbm_bandwidth_GBps` field on single-tier devices).
-    `num_devices` overrides the cluster size if provided.
+    `num_devices` overrides the cluster size if provided. For multi-tier
+    systems it also auto-resizes the outer fabric tier's `ports` to match
+    (so `b200.multibox` template loads correctly at any GPU count).
     Returns a new SystemSpec; the original is not mutated.
     """
-    s = system if num_devices is None else dataclasses.replace(system, num_devices=num_devices)
+    if num_devices is None:
+        s = system
+    else:
+        s = dataclasses.replace(system, num_devices=num_devices)
+        s = _resize_outer_fabric_tier(s, num_devices)
     if flops_eta == 1.0 and bw_eta == 1.0:
         return s
 
