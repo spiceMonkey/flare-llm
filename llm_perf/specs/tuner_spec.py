@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Dict, Optional
+from typing import Optional
 
 
 @dataclass
@@ -68,9 +68,13 @@ class TuningSpec:
     #     - n_TP_collectives / n_EP_collectives / n_SP_collectives
     #     - overlap_factor → renamed comm_overlap_factor (ρ_comm; mirrors
     #       sw_overlap_factor on the SW-vs-GPU side)
+    #   Phase F (chip-side calibration curves):
+    #     - tensor_core_efficiency (η_TC(mb) curve) → DeviceSpec
+    #     - bw_efficiency (η_β(B) curve) → DeviceSpec
     # See FrameworkSpec docstring + database/framework/ for stack JSONs.
+    # See SystemSpec.DeviceSpec for chip-side static + dynamic deflators.
     # Loader rejects legacy tuner JSONs that still set these fields with
-    # a clear migration hint pointing at load_framework_from_db().
+    # a clear migration hint pointing at the right destination spec.
 
     # Per-data-class memory tier placement (sram.md §1.3). Defaults are
     # "auto"/"auto" — greedy fastest-first, which collapses to legacy
@@ -78,34 +82,6 @@ class TuningSpec:
     # weights or KV to a named tier (e.g. d-Matrix Capacity Mode pins
     # weights to "lpddr5" to free SRAM for larger batch / context).
     placement: MemoryPlacementSpec = field(default_factory=MemoryPlacementSpec)
-
-    # Tensor Core efficiency curve η_TC(mb) for compute roofline.
-    # Maps microbatch size mb (= B / PP) to a derate factor in [0, 1].
-    # `compute_latency` uses piecewise-linear interpolation between
-    # adjacent keys; mb values below the minimum key clamp to that key's
-    # efficiency, mb values above the maximum clamp to that key's value.
-    # When None, η_TC = 1.0 always (legacy behavior — no compute derate).
-    # Representative FP8 ramp on Hopper / Blackwell:
-    #     {1: 0.05, 16: 0.4, 64: 0.8, 256: 1.0}
-    # See documentation/explaining/practical_pp_choice.md §3.3 for the
-    # tile-floor argument that motivates this curve.
-    tensor_core_efficiency: Optional[Dict[int, float]] = None
-
-    # B-dependent sustained HBM bandwidth curve η_β(B) for memory roofline.
-    # Maps active-sequence count B to a derate factor in (0, 1] applied
-    # multiplicatively on top of the per-tier `eta_beta` and the constant
-    # `bw_eta` calibration knob. Piecewise-linear interpolation between
-    # adjacent keys; B values below the minimum key clamp to that key's
-    # efficiency, B values above the maximum clamp to that key's value.
-    # When None, η_β(B) = 1.0 always (legacy behavior — no B-dependent
-    # derate; the constant `bw_eta` and per-tier `eta_beta` continue to
-    # apply unchanged).
-    # Representative HBM3e ramp on Blackwell production stacks:
-    #     {1: 0.92, 64: 0.85, 512: 0.75, 4096: 0.55}
-    # Mirrors the `tensor_core_efficiency` shape exactly. See
-    # documentation/modeling/decode.md §6.2 for the derivation and
-    # documentation/modeling/notation.md §20 for the symbol register.
-    bw_efficiency: Optional[Dict[int, float]] = None
 
     # ── Speculative decoding (decode.md §8) ────────────────────────────
     # n_tok_draft = 0 disables speculation (vanilla decode, default).

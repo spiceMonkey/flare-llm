@@ -253,7 +253,6 @@ def run_framework(
     flops_eta: float = 1.0,
     bw_eta: float = 1.0,
     c_serving_us: float = 0.0,
-    bw_efficiency: dict[int, float] | None = None,
     moe_a2a_pattern: str = "gather",
     kernel_launch_us: float | None = None,
     bytes_per_param: float | None = None,
@@ -262,7 +261,9 @@ def run_framework(
 
     `bytes_per_param` overrides the model spec's stored precision when
     provided (e.g. 0.5 for FP4, 1 for FP8). Pass None to use the spec's
-    default.
+    default. Phase F: the bw_efficiency η_β(B) and tensor_core_efficiency
+    η_TC(mb) curves now live on DeviceSpec — set them in the system JSON
+    rather than passing through the wrapper.
     """
     from llm_perf.specs import FrameworkSpec  # local import to avoid cycle in some configs
 
@@ -291,9 +292,7 @@ def run_framework(
 
     out: list[FrameworkPoint] = []
     for B in B_sweep:
-        kw = dict(S_decode=S_decode, B_decode=B,
-                  bw_efficiency=bw_efficiency)
-        t = TuningSpec(**kw)
+        t = TuningSpec(S_decode=S_decode, B_decode=B)
         try:
             r = InferenceCalculator(m, s, p, t, framework).run()
         except Exception as e:  # don't kill the sweep on one bad B
@@ -344,7 +343,6 @@ def predict_at(
     flops_eta: float = 1.0,
     bw_eta: float = 1.0,
     c_serving_us: float = 0.0,
-    bw_efficiency: dict[int, float] | None = None,
     moe_a2a_pattern: str = "gather",
     kernel_launch_us: float | None = None,
     bytes_per_param: float | None = None,
@@ -357,7 +355,7 @@ def predict_at(
         num_devices=num_devices, S_decode=S_decode,
         B_sweep=[B],
         flops_eta=flops_eta, bw_eta=bw_eta, c_serving_us=c_serving_us,
-        bw_efficiency=bw_efficiency, moe_a2a_pattern=moe_a2a_pattern,
+        moe_a2a_pattern=moe_a2a_pattern,
         kernel_launch_us=kernel_launch_us,
         bytes_per_param=bytes_per_param,
     )

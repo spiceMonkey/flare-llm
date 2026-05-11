@@ -59,9 +59,12 @@ def effective_peak_flops_TF(system: SystemSpec, bytes_per_param: float) -> float
 
     Uniform convention across all system specs: ``peak_flops_TF`` stores
     the **FP16 dense per-chip peak**. Lower precisions get a linear byte-
-    ratio boost: ``peak(p) = peak_FP16 * (2 / bytes_per_param)``.
+    ratio boost: ``peak(p) = peak_FP16 * (2 / bytes_per_param)``. Phase F:
+    multiplied by static `peak_flops_eta` (per-device sustained / nameplate
+    deflator, sibling to MemoryTierSpec.eta_beta on the memory side; ideal
+    1.0 = chip sustains nameplate FP16 dense peak).
 
-    Examples on GB200 NVL72 (peak_FP16 = 2250 TF/GPU):
+    Examples on GB200 NVL72 (peak_FP16 = 2250 TF/GPU, peak_flops_eta = 1.0):
       - FP16 (b=2.0): 2250 TF
       - FP8  (b=1.0): 4500 TF
       - FP4  (b=0.5): 9000 TF
@@ -75,7 +78,7 @@ def effective_peak_flops_TF(system: SystemSpec, bytes_per_param: float) -> float
     (NVIDIA Hopper / Blackwell, TPU v5p / v6e, Groq LPU).
     """
     bpp = max(1e-9, bytes_per_param)
-    return system.device.peak_flops_TF * (_FP16_BYTES / bpp)
+    return system.device.peak_flops_TF * system.device.peak_flops_eta * (_FP16_BYTES / bpp)
 
 
 # ────────────────────────────────────────────────────────────
@@ -549,12 +552,13 @@ def compute_latency(
     # η_TC ramps from ~0 at mb=1 (FP8 below the wgmma M=64 floor) to ~1
     # at mb ≥ 4·tile (compute-bound peak). curve=None ⇒ η_TC=1 (legacy).
     mb = max(1, B) / max(1, PP)
-    eta_TC = _eta_TC_at_mb(tuner.tensor_core_efficiency, mb)
+    eta_TC = _eta_TC_at_mb(system.device.tensor_core_efficiency, mb)
     t_compute_eff = t_compute / eta_TC if eta_TC > 0 else float("inf")
 
-    # B-dependent HBM sustained bandwidth derate (decode.md §6.2; opt-in
-    # via tuner.bw_efficiency, otherwise η_β(B) = 1 and t_mem is unchanged).
-    eta_beta_B = _eta_beta_at_B(tuner.bw_efficiency, max(1, B))
+    # B-dependent HBM sustained bandwidth derate (decode.md §6.2; Phase F:
+    # curve lives on DeviceSpec. Opt-in via system.device.bw_efficiency,
+    # otherwise η_β(B) = 1 and t_mem is unchanged).
+    eta_beta_B = _eta_beta_at_B(system.device.bw_efficiency, max(1, B))
     t_mem = t_mem_from_placement(
         placement, B=max(1, B), tiers=tiers,
         eta_beta_curve_factor=eta_beta_B,

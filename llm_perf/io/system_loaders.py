@@ -2,7 +2,7 @@
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from ..specs.system_spec import (
     COLLECTIVES,
@@ -26,6 +26,45 @@ def _load_json(path: str | Path) -> Dict[str, Any]:
     path = Path(path)
     with path.open("r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def _parse_efficiency_curve(
+    raw: Any,
+    *,
+    key_name: str,
+    prefix: str,
+    eta_inclusive: bool,
+) -> Optional[Dict[int, float]]:
+    """Parse a piecewise-linear efficiency curve `{int: float}` (Phase F).
+
+    Used for `tensor_core_efficiency` (mb → η_TC) and `bw_efficiency`
+    (B → η_β) on DeviceSpec. Returns None when raw is None.
+
+    `eta_inclusive=True` accepts η ∈ [0, 1] (η_TC where 0 is meaningful);
+    `eta_inclusive=False` accepts η ∈ (0, 1] (η_β must be > 0).
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError(f"{prefix}: must be a {{int: float}} mapping, got {raw!r}")
+    out: Dict[int, float] = {}
+    for k, v in raw.items():
+        key = int(k)
+        eta = float(v)
+        if key < 1:
+            raise ValueError(f"{prefix}: {key_name} keys must be >= 1, got {key}")
+        if eta_inclusive:
+            if not (0.0 <= eta <= 1.0):
+                raise ValueError(
+                    f"{prefix}[{key}]: efficiency must be in [0, 1], got {eta}"
+                )
+        else:
+            if not (0.0 < eta <= 1.0):
+                raise ValueError(
+                    f"{prefix}[{key}]: efficiency must be in (0, 1], got {eta}"
+                )
+        out[key] = eta
+    return out
 
 
 def _eta_alpha(prefix: str, tc: Dict[str, Any], key: str = "eta_alpha") -> float:
@@ -381,6 +420,26 @@ def system_spec_from_json_dict(cfg: Dict[str, Any]) -> SystemSpec:
         )
         sram_capacity_MB = float(dev_cfg["sram_capacity_MB"])
         sram_bandwidth_TBps = float(dev_cfg["sram_bandwidth_TBps"])
+
+    # Phase F: optional static compute deflator + dynamic curves on the
+    # device. All default to no-op (eta=1.0 / curve=None) so existing
+    # system JSONs remain byte-identical.
+    peak_flops_eta = float(dev_cfg.get("peak_flops_eta", 1.0))
+    if not (0.0 < peak_flops_eta <= 1.0):
+        raise ValueError(
+            f"device configuration: 'peak_flops_eta' must be in (0, 1], got {peak_flops_eta}"
+        )
+    tc_curve = _parse_efficiency_curve(
+        dev_cfg.get("tensor_core_efficiency"), key_name="mb",
+        prefix="device configuration: 'tensor_core_efficiency'",
+        eta_inclusive=True,
+    )
+    bw_curve = _parse_efficiency_curve(
+        dev_cfg.get("bw_efficiency"), key_name="B",
+        prefix="device configuration: 'bw_efficiency'",
+        eta_inclusive=False,
+    )
+
     device = DeviceSpec(
         name=str(dev_cfg["name"]),
         hbm_capacity_GB=float(dev_cfg["hbm_capacity_GB"]),
@@ -389,6 +448,9 @@ def system_spec_from_json_dict(cfg: Dict[str, Any]) -> SystemSpec:
         sram_capacity_MB=sram_capacity_MB,
         sram_bandwidth_TBps=sram_bandwidth_TBps,
         tiers=tiers,
+        peak_flops_eta=peak_flops_eta,
+        tensor_core_efficiency=tc_curve,
+        bw_efficiency=bw_curve,
     )
 
     if "fabrics" not in cfg:
