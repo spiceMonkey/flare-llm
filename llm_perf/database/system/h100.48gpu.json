@@ -7,6 +7,7 @@
     "hbm_capacity_GB": 80.0,
     "hbm_bandwidth_GBps": 3350.0,
     "peak_flops_TF": 989.0,
+    "peak_flops_eta": 1.0,
     "hbm_eta_beta": 0.55
   },
   "fabrics": {

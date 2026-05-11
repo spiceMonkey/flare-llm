@@ -6,7 +6,8 @@
     "name": "TPU-v5p",
     "hbm_capacity_GB": 95.0,
     "hbm_bandwidth_GBps": 2765.0,
-    "peak_flops_TF": 459.0
+    "peak_flops_TF": 459.0,
+    "peak_flops_eta": 1.0
   },
   "fabrics": {
     "ici": {
@@ -14,7 +15,11 @@
         {
           "name": "ici-3d-torus",
           "topology": "torus",
-          "dims": [16, 16, 16],
+          "dims": [
+            16,
+            16,
+            16
+          ],
           "bw_per_port_GBps": 150.0,
           "alpha_us": 1.0
         }
@@ -27,5 +32,5 @@
     "SP": "ici",
     "PP": "ici"
   },
-  "_comment": "TPU v5p pod: 16×16×16 = 4096 chips on a single 3D-torus ICI fabric. 6 links/chip × 150 GB/s single-direction (~900 GB/s aggregate), ~1.0 us per-hop α. Every collective walks the ici fabric; collectives at group sizes that align with prefix-products of (16,16,16) route through the torus primitives (collectives/02_topology_mapping.md §3). Non-prefix-aligned G falls back to the flat-ring bound with a UserWarning."
+  "_comment": "TPU v5p pod: 16\u00d716\u00d716 = 4096 chips on a single 3D-torus ICI fabric. 6 links/chip \u00d7 150 GB/s single-direction (~900 GB/s aggregate), ~1.0 us per-hop \u03b1. Every collective walks the ici fabric; collectives at group sizes that align with prefix-products of (16,16,16) route through the torus primitives (collectives/02_topology_mapping.md \u00a73). Non-prefix-aligned G falls back to the flat-ring bound with a UserWarning."
 }

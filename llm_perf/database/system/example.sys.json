@@ -6,17 +6,28 @@
     "name": "H100",
     "hbm_capacity_GB": 80.0,
     "hbm_bandwidth_GBps": 3350.0,
-    "peak_flops_TF": 1000.0
+    "peak_flops_TF": 1000.0,
+    "peak_flops_eta": 1.0
   },
   "fabrics": {
     "nvlink": {
       "tiers": [
-        {"name": "nvswitch", "ports": 8, "bw_per_port_GBps": 400.0, "alpha_us": 1.0}
+        {
+          "name": "nvswitch",
+          "ports": 8,
+          "bw_per_port_GBps": 400.0,
+          "alpha_us": 1.0
+        }
       ]
     },
     "ib": {
       "tiers": [
-        {"name": "infiniband", "ports": 8, "bw_per_port_GBps": 50.0, "alpha_us": 5.0}
+        {
+          "name": "infiniband",
+          "ports": 8,
+          "bw_per_port_GBps": 50.0,
+          "alpha_us": 5.0
+        }
       ]
     }
   },
@@ -32,6 +43,5 @@
     "eta": 1.0,
     "delta_alpha_us": 0.0
   },
-
-  "_comment": "Example H100-class cluster: 64 devices, 8-GPU NVLink domains (400 GB/s single-direction), IB for cross-node PP. Scale-up switch covers the NVLink domain only (8 ports × 400 GB/s = 3.2 TB/s single-dir)."
+  "_comment": "Example H100-class cluster: 64 devices, 8-GPU NVLink domains (400 GB/s single-direction), IB for cross-node PP. Scale-up switch covers the NVLink domain only (8 ports \u00d7 400 GB/s = 3.2 TB/s single-dir)."
 }
