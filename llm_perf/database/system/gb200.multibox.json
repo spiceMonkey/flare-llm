@@ -1,0 +1,46 @@
+{
+  "schema": "llm_perf.system",
+  "name": "gb200_multibox",
+  "num_devices": 576,
+  "device": {
+    "name": "GB200-NVL72-rack-chip",
+    "hbm_capacity_GB": 192.0,
+    "hbm_bandwidth_GBps": 8000.0,
+    "peak_flops_TF": 2250.0,
+    "peak_flops_eta": 1.0,
+    "hbm_eta_beta": 0.7
+  },
+  "fabrics": {
+    "nvlink5": {
+      "tiers": [
+        {
+          "name": "intra-rack-nvswitch",
+          "ports": 72,
+          "bw_per_port_GBps": 900.0,
+          "alpha_us": 0.5,
+          "inc": "nvls",
+          "inc_alpha_us": 0.2
+        }
+      ]
+    },
+    "ib": {
+      "tiers": [
+        {
+          "name": "inter-rack-quantum-ib",
+          "ports": 8,
+          "bw_per_port_GBps": 400.0,
+          "alpha_us": 2.5,
+          "inc": "sharp",
+          "inc_alpha_us": 0.4
+        }
+      ]
+    }
+  },
+  "collective_fabrics": {
+    "TP": ["nvlink5", "ib"],
+    "EP": ["nvlink5", "ib"],
+    "SP": ["nvlink5", "ib"],
+    "PP": ["nvlink5", "ib"]
+  },
+  "_comment": "NVIDIA GB200 multi-rack deployment template. Each rack is one NVL72 island (72-port NVSwitch5, NVLS-capable, 0.5 us SW alpha / 0.2 us INC alpha) stitched by Quantum-2 InfiniBand (SHARP-capable, 2.5 us SW alpha / 0.4 us INC alpha, 400 GB/s/port). num_devices and ib.ports are auto-overridden by `system_with_eta(num_devices=N)`: ib.ports = ceil(N / 72). Default N=576 (8 racks). Rack chip is Blackwell B200 (192 GB HBM3E @ 8 TB/s, 2250 TF FP16 dense, hbm_eta_beta=0.7). Fabric INC capability is disclosed at the hardware level; whether the runtime engages NVLS / SHARP is a framework decision (`FrameworkSpec.inc_enabled`). For the no-INC counterpart (production stacks that opt out of SHARP) keep this spec and set `inc_enabled=False` on the framework. For an idealized single-tier 576-port crossbar (hypothetical perfect NVL576 fabric), use `gb200.nvl576.ideal.json`; for a rail-optimized 2-tier topology variant (alpha=2.0 us instead of 2.5 us, ib_rail fabric name) use `gb200.nvl576.rail.inc.json`."
+}

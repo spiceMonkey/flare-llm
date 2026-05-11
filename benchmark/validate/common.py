@@ -315,6 +315,15 @@ def run_framework(
         tp_ep_layout=tp_ep_layout,
         c_serving_per_seq_us=c_serving_us,
         moe_a2a_pattern=moe_a2a_pattern,
+        # InferenceX measurements were not captured with SHARP-class INC
+        # engaged; opt out explicitly so the cost model picks SW even when
+        # the fabric advertises inc != "none" (e.g. NVL72 NVSwitch5 is NVLS-
+        # capable hardware but production Dynamo+TRT/SGLang runs did not
+        # enable it during the measurement window). Notebooks that *do* study
+        # INC effects (pareto_collective_algorithms, pareto_vs_kernel_launch,
+        # pareto_vs_mem_alpha*) construct their own FrameworkSpec with
+        # `inc_enabled=True` and explicit `tp_algorithm_decode="auto"`.
+        inc_enabled=False,
     )
     if kernel_launch_us is not None:
         fw_kwargs["kernel_launch_us"] = kernel_launch_us
