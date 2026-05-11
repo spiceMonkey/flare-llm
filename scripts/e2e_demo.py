@@ -36,7 +36,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--system",
-        default="llm_perf/database/system/h100.32gpu.json",
+        default="llm_perf/database/system/h100.8gpu.json",
         type=Path,
     )
     parser.add_argument(
