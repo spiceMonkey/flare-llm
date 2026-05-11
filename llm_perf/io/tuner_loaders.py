@@ -32,8 +32,6 @@ def tuning_spec_from_json_dict(cfg: Dict[str, Any]) -> TuningSpec:
           "n_EP_collectives": 2,
           "n_SP_collectives": 1,
 
-          "overlap_factor": 0.3,
-
         }
     """
     schema = cfg.get("schema", "llm_perf.tuner")
@@ -62,7 +60,8 @@ def tuning_spec_from_json_dict(cfg: Dict[str, Any]) -> TuningSpec:
         "tp_algorithm", "ep_algorithm",  # deprecated single-knob aliases
         "torus_algorithm",
         "n_TP_collectives", "n_EP_collectives", "n_SP_collectives",
-        "overlap_factor",
+        "overlap_factor",      # legacy name; new name is `comm_overlap_factor`
+        "comm_overlap_factor", # framework-axis
     )
     leaked = [f for f in _moved_to_framework if f in cfg]
     if leaked:

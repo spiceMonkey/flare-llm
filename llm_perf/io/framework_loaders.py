@@ -58,7 +58,7 @@ def framework_spec_from_json_dict(cfg: Dict[str, Any]) -> FrameworkSpec:
           "n_TP_collectives": 2,
           "n_EP_collectives": 2,
           "n_SP_collectives": 1,
-          "overlap_factor": 0.0
+          "comm_overlap_factor": 0.0
         }
 
     All fields except `name` fall through to FrameworkSpec dataclass
@@ -100,10 +100,10 @@ def framework_spec_from_json_dict(cfg: Dict[str, Any]) -> FrameworkSpec:
     ep_prefill = _algo("ep_algorithm_prefill", _defaults.ep_algorithm_prefill, EP_ALGORITHM_VALUES)
     torus_alg = _algo("torus_algorithm", _defaults.torus_algorithm, TORUS_ALGORITHM_VALUES)
 
-    overlap = float(cfg.get("overlap_factor", _defaults.overlap_factor))
+    overlap = float(cfg.get("comm_overlap_factor", _defaults.comm_overlap_factor))
     if not (0.0 <= overlap <= 1.0):
         raise ValueError(
-            f"framework configuration: 'overlap_factor' must be in [0, 1], got {overlap}"
+            f"framework configuration: 'comm_overlap_factor' must be in [0, 1], got {overlap}"
         )
     sw_overlap = float(cfg.get("sw_overlap_factor", _defaults.sw_overlap_factor))
     if not (0.0 <= sw_overlap <= 1.0):
@@ -130,7 +130,7 @@ def framework_spec_from_json_dict(cfg: Dict[str, Any]) -> FrameworkSpec:
         n_TP_collectives=int(cfg.get("n_TP_collectives", _defaults.n_TP_collectives)),
         n_EP_collectives=int(cfg.get("n_EP_collectives", _defaults.n_EP_collectives)),
         n_SP_collectives=int(cfg.get("n_SP_collectives", _defaults.n_SP_collectives)),
-        overlap_factor=overlap,
+        comm_overlap_factor=overlap,
     )
 
 
