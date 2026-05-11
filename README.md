@@ -47,25 +47,6 @@ llm_perf-specific glue around the synced primitives lives in sibling modules und
 
 ---
 
-## Key Modeling Equations
-
-One line per component in the architecture diagram above. Full derivations live in `documentation/modeling/*.md`; this table is a cross-reference, not a second source of truth.
-
-| Component | Key equation(s) | Doc |
-|---|---|---|
-| Serving Framework | $t_\mathrm{framework} = t_\mathrm{tok} + t_\mathrm{sched} + T_\mathrm{out} \cdot t_\mathrm{detok}$ — CPU-side per-request startup ($t_\mathrm{tok}$, $t_\mathrm{sched}$) + per-output-token streaming ($t_\mathrm{detok}$). Kernel-launch dispatch and LM-head sampling are **GPU-side** and live in the Decode row, not here. | [`framework.md`](documentation/modeling/framework.md) |
-| Prefill Cluster | $t_\mathrm{prefill} = t_\mathrm{prefill,local} + \max(0, t_\mathrm{prefill,comm} - \rho \cdot t_\mathrm{prefill,local}) + t_\mathrm{warmup} + t_\mathrm{LM,prefill}$; prefill FLOPs scale as $S$ (FFN/proj) $+ S^2$ (attention); KV traffic scales as $S$; LM head fires once at the end of the traversal on stage $PP{-}1$ | [`prefill.md`](documentation/modeling/prefill.md) |
-| Decode Cluster | $t_\mathrm{local}(B) = \max(t_\mathrm{compute}(B), t_\mathrm{mem}(B))$; $t_\mathrm{stage,hw}(B) = t_\mathrm{local} + \max(0, t_\mathrm{comm} - \rho \cdot t_\mathrm{local})$; **kernel-launch dispatch** $t_\mathrm{stage,sw} = \tau_\mathrm{launch} \cdot [(L/PP)(k_c + k_\mathrm{coll}(n_{TP}+n_{SP})) + (L_\mathrm{moe}/PP) k_\mathrm{coll} n_{EP} + k_\mathrm{pp\_hop}]$ composed via $\rho_\mathrm{SW}$; **LM head one-shot** $t_\mathrm{LM,hw}(B)$ on stage $PP{-}1$; **pipeline bubble** $\gamma_\mathrm{pp} = \max(1, PP/B)$. Final: $t_\mathrm{step,user}(B) = \gamma_\mathrm{pp} \cdot [t_\mathrm{stage,hw} + \max(0, t_\mathrm{stage,sw} - \rho_\mathrm{SW} \cdot t_\mathrm{stage,hw})] + t_\mathrm{LM,hw}$. $\mathrm{TPOT} = t_\mathrm{step,user}$. Memory→compute crossover at $B^* = T_\theta \cdot R / (F_\mathrm{token} \cdot \mathrm{BW_\mathrm{eff,0}} - T_\mathrm{kv} \cdot R)$. | [`decode.md`](documentation/modeling/decode.md) |
-| Kernel-Launch Overhead | $t_\mathrm{stage,sw} = \tau_\mathrm{launch} \cdot [(L/PP)(k_c + k_\mathrm{coll}(n_{TP}+n_{SP})) + (L_\mathrm{moe}/PP) k_\mathrm{coll} n_{EP} + k_\mathrm{pp\_hop}]$ | [`decode.md §7.1`](documentation/modeling/decode.md) |
-| Memory Hierarchy | $t_\mathrm{mem}(B) = \sum_i (T_{\theta_i} + B \cdot T_\mathrm{KV,i}) / \mathrm{BW_\mathrm{eff,i}}$ — multi-tier opening of the decode roofline (single-tier reduction recovers $T_\mathrm{step} / \mathrm{BW_\mathrm{HBM}}$ exactly) | [`sram.md`](documentation/modeling/sram.md) |
-| Scale-up/out Network | $t_\mathrm{coll}(M, G) = n_\alpha \cdot \alpha \cdot \eta_\alpha + n_\beta \cdot M / (\mathrm{BW} \cdot \eta_\beta)$ per shipped primitive (Hockney α–β with contention factors $\eta_\alpha \ge 1$, $\eta_\beta \in (0, 1]$); ring/DBT for star AR; dim-decomposed for torus; hierarchical RS → sub-AR → AG with payload telescoping for multi-tier crossbars; INC variants on tiers short-circuit to switch-cut-through $\alpha$ + 1× BW; per-primitive $n_\alpha$, $n_\beta$ | [`collectives/00_summary.md`](documentation/modeling/collectives/00_summary.md) |
-| KV Transfer | $t_\mathrm{KV} = \alpha_\mathrm{disagg} + M_\mathrm{KV} / \mathrm{BW_\mathrm{disagg}}$ with $M_\mathrm{KV} = (L/\mathrm{PP}) \cdot 2 S \cdot H_\mathrm{kv} \cdot b$ (0 for co-located) | [`e2e.md`](documentation/modeling/e2e.md) |
-| Distributed KV Cache | $N_\mathrm{seq,max} = \lfloor M_\mathrm{avail} / (N_\mathrm{blocks} \cdot M_\mathrm{block} \cdot \varphi_\mathrm{avg}) \rfloor$ where $M_\mathrm{avail} = \mathrm{HBM} - M_\theta - M_\mathrm{act} - M_\mathrm{sys}$ and $\varphi_\mathrm{avg} = 1 + B_\mathrm{blk} / (2 S)$ | [`kv.md`](documentation/modeling/kv.md) |
-| E2E Assembly | $\mathrm{E2E}(N_\mathrm{out}) = \mathrm{TTFT} + (N_\mathrm{out} - 1) \cdot \mathrm{TPOT} + t_\mathrm{framework}$; throughput/GPU $= \mathrm{TTPS} / N_\mathrm{GPUs} = B / (t_\mathrm{step,user} \cdot N_\mathrm{GPUs,per-replica})$; interactivity $= 1 / \mathrm{TPOT}$ (per-user; not divided by $B$) | [`e2e.md`](documentation/modeling/e2e.md) |
-| SLO & Partition Feasibility | $\mathrm{Goodput} = \max\,\lambda$ s.t. $P_p[\mathrm{TTFT}] \le \mathrm{TTFT_{SLO}}$ and $P_p[\mathrm{TPOT}] \le \mathrm{TPOT_{SLO}}$; **floor** (rules out under-sharded shapes): $T_\theta / \mathrm{BW_{mem}} \le \mathrm{TPOT_{SLO}}$; **TPOT bound** (Zone 3): $B_\mathrm{max} \approx R_\mathrm{GPU} \cdot \mathrm{TPOT_{SLO}} / F_\mathrm{token,device}$; **TTFT bound** (prefill-warmup linearity in PP): $\mathrm{PP_{max}} \approx 1 + (\mathrm{TTFT_{SLO}} - t_\mathrm{sched} - t_\mathrm{prefill,local} - t_\mathrm{step,user}) / t_\mathrm{stage,max}$; dynamic cushion $\overline{B} \ge PP + z_p \sqrt{\overline{B}}$ at percentile $p$ | [`slo.md`](documentation/modeling/slo.md) |
-
----
-
 ## What's Modeled
 
 Survey of the configurations / variants supported by the framework, grouped by the layer of the architecture each addresses. Cross-referenced to the deep-dive doc per row.
