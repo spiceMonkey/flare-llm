@@ -1,0 +1,25 @@
+{
+  "schema": "llm_perf.model",
+  "name": "gpt-oss-120b",
+
+  "L": 36,
+  "H": 2880,
+  "n_q": 64,
+  "n_kv": 11,
+  "I_dense": 2880,
+  "vocab_size": 201088,
+  "max_seq_len": 131072,
+  "bytes_per_param": 0.5,
+
+  "moe": {
+    "n_experts": 128,
+    "k_active": 4,
+    "I_moe": 2880,
+    "n_moe_layers": 36
+  },
+
+  "_comment_n_kv": "HF config sets head_dim=64 explicitly (not H/n_q=45). True KV/token = 2 * 8 * 64 * b = 1024b. Framework infers d_head=H/n_q=45, so we adjust n_kv from 8 to 11 to recover H_kv ≈ 8 * 64 = 512 (n_kv=11 gives 495, ~3% under). Attention FLOPs are approximate.",
+  "_comment_bytes_per_param": "MXFP4 quantization (quant_method=mxfp4 in HF config) → b=0.5. The HF converter defaults to b=2 (BF16); overridden here to match the deployed precision.",
+  "_comment_attention_window": "Half the layers (alternating) use sliding-window attention with W=128 instead of full S=context_length attention. Framework treats all layers as full attention; KV cache and attention compute are over-estimated for context lengths > 128. Acceptable for first-cut comparison; tracked under sliding-window attention in scratch/model_specific_extensions.md.",
+  "_comment_moe": "All 36 layers are MoE (no dense layers). 128 experts per layer, top-k=4. I_moe = intermediate_size = 2880. SwiGLU activation."
+}
