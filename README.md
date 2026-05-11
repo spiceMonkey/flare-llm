@@ -1,8 +1,10 @@
 # llm_perf
 
-`llm_perf` is a lightweight, first-principles analytical framework for large-language-model inference performance modeling. It predicts latency, throughput, and memory footprint of LLM inference on a given cluster *before* you build or rent it — from a JSON description of the model, the hardware, the parallelism layout, and a handful of tuning knobs.
+`llm_perf` is a lightweight, first-principles analytical framework for large-language-model inference performance modeling. It predicts latency, throughput, and memory footprint of LLM inference on a given cluster *before* you build or rent it — from a JSON description of the model, the hardware, the parallelism layout, the workload, and the serving stack.
 
 The core is a five-stage pipeline (memory → FLOPs → traffic → comm → latency) extended with prefill, end-to-end metric assembly, KV paging, chunked prefill, and disaggregated prefill/decode. Everything is composable pure functions over typed dataclasses — no global state, no training-specific baggage.
+
+**Five-spec composition** (`model × system × partition × tuner × framework`). Each spec has a single concern: model = transformer arch; system = cluster hardware (devices, memory tiers, fabric topology, INC capability); partition = pure shard factors (PP/TP/EP/SP); tuner = workload knobs (S, B, gains); **framework** = stack-axis decisions (attention_mode, tp_ep_layout, algorithm choices, `inc_enabled`, kernel-launch budget, comm/compute overlap, MLA mode, MoE A2A pattern). The split keeps "which deployment shape" (partition) cleanly separated from "which serving stack runs it" (framework), so a single (model, system, partition, tuner) can be evaluated under multiple stacks (TRT-LLM, Dynamo+TRT, SGLang, vLLM, …) by swapping just the framework JSON.
 
 ---
 
@@ -146,25 +148,31 @@ The joint feasibility region $\mathcal{F}_\mathrm{SLO}$, the dynamic-stability c
     │       ├── dispatch.py           — topology-aware dispatcher (ring/DBT/INC/hierarchical/torus selection)
     │       ├── stage_aggregator.py   — per-stage TP/SP/EP/PP accumulator
     │       └── partition_layout.py   — nested-layout helper for tier-aware PP-hop costing
-    ├── database/
-    │   ├── model/                    — model JSONs (gpt_1_8t_moe, gpt_70b_moe, llama3.1_*, deepseek_*, qwen3_*, dense_*)
-    │   ├── system/                   — system JSONs (gb200.*, gb300.*, h100/h200, tpu.v5p.pod, dmatrix.{server,squadrack}, groq.lpu)
-    │   ├── partition/                — partition JSONs (PP/TP/EP/SP)
-    │   └── tuner/                    — tuner JSONs (collective algorithms, MemoryPlacementSpec, S_decode, B_decode, kernel_launch_us, ρ_SW, …)
-    ├── specs/                        — LlmModelSpec, SystemSpec (DeviceSpec + MemoryTierSpec + FabricSpec + CrossbarTier/TorusTier/MeshTier), PartitionSpec, TuningSpec (+ MemoryPlacementSpec), OverheadSpec, DisaggSpec
-    ├── io/                           — JSON loaders + list helpers per schema
+    ├── database/                     — on-disk spec store (35 JSONs total)
+    │   ├── model/         (12)       — model JSONs (gpt_1_8t_moe, gpt_oss_120b, llama3.1_{8b,70b}, deepseek_{r1_0528,v4_pro}, glm5, kimi_k25, minimax_m25, qwen35_397b_a17b, qwen3_vl_235b_fp8, example.model.dense)
+    │   ├── system/        (14)       — system JSONs: per-family `<chip>.8gpu` (B/H series) + `<chip>.multibox` template; gb200.{72gpu,multibox}; gb300.72gpu; dmatrix.{server,squadrack}; tpu.v5p.pod; example.sys
+    │   ├── tuner/         (4)        — workload knob JSONs (S_decode, B_decode, MemoryPlacementSpec, attention/MLP gains)
+    │   └── framework/     (5)        — per-stack framework JSONs (default, dynamo_trt, sglang, trt, vllm — algorithm choices, INC, kernel_launch_us, ρ_SW, ρ_comm, …)
+    ├── specs/                        — LlmModelSpec, SystemSpec (DeviceSpec + MemoryTierSpec + FabricSpec + CrossbarTier/TorusTier/MeshTier), PartitionSpec, TuningSpec (+ MemoryPlacementSpec), FrameworkSpec, OverheadSpec, DisaggSpec
+    ├── io/                           — JSON loaders + list helpers per schema (load_{model,system,tuner,framework}_from_db)
     └── utils/                        — constants, equations, HF adapter, DRAM3D helper, plotting, partition_enum
+
+archives/hf/                         — raw HuggingFace configs (conversion inputs for scripts/convert_hf_model.py; not loaded by the library)
 ```
+
+> Note: there is no `partition/` directory — partitions are runtime sweep parameters constructed inline (`PartitionSpec(PP=…, TP=…, EP=…, SP=…)`), not curated catalog entries. There is also no per-GPU-count system permutation — multi-rack/multi-box deployments use a single `<family>.multibox.json` template per chip family, parameterized by `system_with_eta(num_devices=N)` which auto-resizes the outer fabric (IB) tier's port count to `ceil(N / inner_island_size)`. One-off hypotheticals (rail-optimized α, flat 576-port "ideal" fabric, BW-uplifted dmatrix variant, …) are constructed inline in their consuming notebook via `deepcopy + small mutation` — `database/system/` is reserved for real production hardware deployments.
 
 ### Core modeling code structure
 
 The `llm_perf` package is organized as four concentric layers — each one pure, each one a single-purpose target for reading and extension:
 
-**1. Specs (`llm_perf/specs/`)** — typed dataclasses that describe the problem. `LlmModelSpec` + optional `MoESpec` fix the architecture; `SystemSpec` + nested `DeviceSpec` (+ optional `tiers: List[MemoryTierSpec]` or top-level `sram_capacity_MB` / `sram_bandwidth_TBps` for SRAM-augmented devices) + `FabricSpec` + tier classes (`CrossbarTier`, `TorusTier`, `MeshTier`) fix the hardware and its fabric-chain topology; `PartitionSpec` fixes the parallelism layout (PP / TP / EP / SP); `TuningSpec` carries execution knobs (`S_input`, `S_decode`, `B_prefill`, `B_decode`, `chunk_size`, collective algorithms, overlap factor ρ, plus a `MemoryPlacementSpec` that decides which memory tier holds weights vs KV); `OverheadSpec` and `DisaggSpec` add framework overheads and inter-cluster KV transfer. No behaviour — only data.
+**1. Specs (`llm_perf/specs/`)** — typed dataclasses that describe the problem. `LlmModelSpec` + optional `MoESpec` fix the architecture; `SystemSpec` + nested `DeviceSpec` (+ optional `tiers: List[MemoryTierSpec]` or top-level `sram_capacity_MB` / `sram_bandwidth_TBps` for SRAM-augmented devices) + `FabricSpec` + tier classes (`CrossbarTier`, `TorusTier`, `MeshTier`, each with optional `inc: "nvls" | "sharp" | "hw_a2a"` capability disclosure) fix the hardware and its fabric-chain topology; `PartitionSpec` is strictly the 4 shard ints (PP / TP / EP / SP); `TuningSpec` is strictly workload knobs (`S_input`, `S_decode`, `B_prefill`, `B_decode`, `chunk_size`, attention/MLP flash gains, plus a `MemoryPlacementSpec` that decides which memory tier holds weights vs KV); **`FrameworkSpec`** carries every stack-axis decision (`attention_mode` `"tp"`/`"dp"`, `tp_ep_layout` `"orthogonal"`/`"co_located"`, per-phase algorithm choices `tp/ep_algorithm_decode/prefill ∈ {ring, tree, auto}`, `inc_enabled` toggle, per-layer collective counts `n_TP/EP/SP_collectives`, `kernel_launch_us`, `sw_overlap_factor`, `comm_overlap_factor` ρ, MLA mode, MoE A2A pattern, `c_serving_per_seq_us`); `OverheadSpec` and `DisaggSpec` add framework overheads and inter-cluster KV transfer. No behaviour — only data.
+
+> **System describes capability; framework describes selection.** A fabric tier with `inc: "nvls"` advertises that the silicon supports NVLink SHARP; `FrameworkSpec.inc_enabled` decides whether the runtime engages it. The benchmark validators set `inc_enabled=False` because the InferenceX measurements they calibrate against were not captured with SHARP-class INC engaged; INC-study notebooks (`pareto_collective_algorithms`, `pareto_vs_kernel_launch`, `pareto_vs_mem_alpha*`) keep the default `inc_enabled=True`. Cross-spec invariants (e.g. `tp_ep_layout="co_located"` forces `attention_mode="dp"` and `TP == EP`) are enforced by `core/primitives/sharding_factors.compose_check(partition, framework)` on calculator entry.
 
 **2. Core primitives (`llm_perf/core/primitives/`)** — phase-agnostic physics reused by both decode and prefill. Four modules, each a pure function of specs only: `weight_footprint.py` (dense / MoE / embedding bytes), `kv_footprint.py` (KV bytes for `n_tokens` context), `linear_flops.py` (proj + FFN + MoE-router FLOPs per token, attention excluded), and `collective_cost.py` (α-β cost formulas for p2p-hop, ring/tree all-reduce, ring/tree MoE all-to-all, ring all-gather, plus the per-stage aggregator). Everything downstream composes these.
 
-**3. Core phase models (`llm_perf/core/`)** — the roofline stack, one pure function per step, returning a small result dataclass. `memory_model.py` computes weight / activation / KV footprint, calls `memory_placement.resolve_placement` to split bytes across the device's memory tiers, and exposes a per-tier `M_resident_per_tier` plus a `fits_in_HBM` boolean (legacy name, generalized to "fits in every tier"). `memory_placement.py` is the placement layer for SRAM-augmented architectures (sram.md §1.3, §2.1) — `resolve_placement` returns the per-tier (weights, KV) split under the policy on `MemoryPlacementSpec`, and `t_mem_from_placement` evaluates the multi-tier roofline `Σ_i (T_θ,i + B·T_KV,i) / BW_eff,i` consumed by both `decode_model` and `prefill_model`. `decode_model.py` wires primitives with decode-specific attention (4·S·H per token) and single-token messages, exposing `compute_flops / compute_traffic / compute_comm / compute_latency`; the latency step routes through the multi-tier helper, so single-tier devices reproduce the legacy `T_step / BW_HBM` numbers exactly. `prefill_model.py` mirrors that shape with prefill-specific physics: S²-attention, S-scaled messages, pipeline warmup, and a chunked-prefill loop that re-prices comm at `tokens_per_step=C` per chunk. `collective_algo_opt.py` resolves `auto` placeholders on `TuningSpec` after the partition is fixed, picking `min(cost)` per (phase × collective × G × M) and short-circuiting to INC when the fabric supports it. `kv_paging_model.py` accounts for PagedAttention-style block allocation and fragmentation to derive max concurrent sequences.
+**3. Core phase models (`llm_perf/core/`)** — the roofline stack, one pure function per step, returning a small result dataclass. `memory_model.py` computes weight / activation / KV footprint, calls `memory_placement.resolve_placement` to split bytes across the device's memory tiers, and exposes a per-tier `M_resident_per_tier` plus a `fits_in_HBM` boolean (legacy name, generalized to "fits in every tier"). `memory_placement.py` is the placement layer for SRAM-augmented architectures (sram.md §1.3, §2.1) — `resolve_placement` returns the per-tier (weights, KV) split under the policy on `MemoryPlacementSpec`, and `t_mem_from_placement` evaluates the multi-tier roofline `Σ_i (T_θ,i + B·T_KV,i) / BW_eff,i` consumed by both `decode_model` and `prefill_model`. `decode_model.py` wires primitives with decode-specific attention (4·S·H per token) and single-token messages, exposing `compute_flops / compute_traffic / compute_comm / compute_latency`; the latency step routes through the multi-tier helper, so single-tier devices reproduce the legacy `T_step / BW_HBM` numbers exactly. `prefill_model.py` mirrors that shape with prefill-specific physics: S²-attention, S-scaled messages, pipeline warmup, and a chunked-prefill loop that re-prices comm at `tokens_per_step=C` per chunk. `collective_algo_opt.py` resolves `auto` placeholders on `FrameworkSpec` after the partition is fixed, picking `min(cost)` per (phase × collective × G × M) and short-circuiting to INC when the fabric advertises capability AND `framework.inc_enabled=True`. `kv_paging_model.py` accounts for PagedAttention-style block allocation and fragmentation to derive max concurrent sequences.
 
 **4. Calculators (`llm_perf/calculators/`)** — thin orchestrators that stitch the phase models into user-facing workflows: `InferenceCalculator` (decode end-to-end), `PrefillCalculator` (prefill end-to-end incl. batched / chunked), and `E2ECalculator` (TTFT = prefill + overhead + disagg KV transfer; TPOT from decode; E2E(N_out); throughput/GPU; interactivity). Each returns a single aggregate result dataclass you can inspect field-by-field.
 
@@ -188,26 +196,35 @@ The quickstart walks through discovery, loading, running `InferenceCalculator`, 
 ### Programmatic usage
 
 ```python
-from llm_perf import InferenceCalculator
+from llm_perf import InferenceCalculator, PartitionSpec
 from llm_perf.calculators.prefill_calculator import PrefillCalculator
 from llm_perf.calculators.e2e_calculator import E2ECalculator
-from llm_perf.io import load_model_spec, load_system_spec, load_tuning_spec
-from llm_perf.specs.partition_spec import PartitionSpec
+from llm_perf.core.collective_algo_opt import optimize_collective_algorithms
+from llm_perf.io import (
+    load_model_from_db, load_system_from_db, load_tuner_from_db, load_framework_from_db,
+)
+from llm_perf.specs.framework_spec import FrameworkSpec
 from llm_perf.specs.overhead_spec import OverheadSpec
 from llm_perf.specs.disagg_spec import DisaggSpec
 
-model     = load_model_spec("llm_perf/database/model/gpt_1_8t_moe.json")
-system    = load_system_spec("llm_perf/database/system/gb200.72gpu.json")
-tuner     = load_tuning_spec("llm_perf/database/tuner/gpt_1_8t_moe.tuner.json")
-partition = PartitionSpec(PP=8, TP=8, EP=1, SP=1)
+model     = load_model_from_db("gpt_1_8t_moe")
+system    = load_system_from_db("gb200.72gpu")
+tuner     = load_tuner_from_db("gpt_1_8t_moe.tuner")
+partition = PartitionSpec(PP=8, TP=8, EP=1, SP=1)         # constructed inline
+framework = load_framework_from_db("dynamo_trt")          # or FrameworkSpec.default() / FrameworkSpec(...)
 tuner.S_input, tuner.S_decode, tuner.B_decode = 8192, 8192, 1
 
-decode   = InferenceCalculator(model, system, partition, tuner).run()
-prefill  = PrefillCalculator(model, system, partition, tuner).run()
+# Per-stack JSONs ship algorithm fields = "auto"; resolve them per-(partition, B)
+# via the optimizer before calling .run(). FrameworkSpec.default() ships concrete
+# "ring" algorithms and skips this step.
+framework = optimize_collective_algorithms(model, partition, system, tuner, framework)
+
+decode   = InferenceCalculator(model, system, partition, tuner, framework).run()
+prefill  = PrefillCalculator(model, system, partition, tuner, framework).run()
 e2e      = E2ECalculator(
     decode, prefill,
-    overhead=OverheadSpec(t_graph_us=100.0),   # CUDA graph overhead
-    disagg=DisaggSpec(),                        # co-lo, matched partition
+    overhead=OverheadSpec(t_graph_us=100.0),    # CUDA graph overhead
+    disagg=DisaggSpec(),                         # co-lo, matched partition
     model=model, system=system, partition=partition, tuner=tuner,
 ).run()
 
@@ -215,6 +232,8 @@ print(f"TTFT       = {e2e.TTFT*1e3:.1f} ms")
 print(f"TPOT       = {e2e.TPOT*1e3:.2f} ms")
 print(f"tok/s/GPU  = {e2e.throughput_per_gpu:.1f}")
 ```
+
+`framework` is optional in `InferenceCalculator` / `PrefillCalculator` — omitting it falls back to `FrameworkSpec.default()` (ring everywhere, no INC, no overlap; pure roofline). To compare two stacks against the same (model, system, partition, tuner), swap only the framework JSON.
 
 ---
 
@@ -244,13 +263,13 @@ To compare against the unbounded-PP regime (PP up to 32 — the `pareto_basic` h
 
 *Question: how much does the choice of collective algorithm move the decode Pareto frontier on a fixed cluster?*
 
-Three frontiers, same model + system, only the `TuningSpec` algorithm fields and `inc_enabled` flag differ:
+Three frontiers, same model + system, only the `FrameworkSpec` algorithm fields and `inc_enabled` flag differ:
 
 1. **Worst-case SW** — pin every collective to ring; `inc_enabled=False`. The do-nothing baseline (red).
 2. **Optimized SW** — `tp/ep_algorithm_*='auto'` + `optimize_collective_algorithms` resolves per (phase × collective × M); `inc_enabled=False`. Picks DBT vs ring per cell (orange).
 3. **INC** — `auto` fields + `inc_enabled=True`. Optimizer short-circuits to NVLS / Quantum SHARP for AR / AG where the fabric supports it (EP A2A still on SW pairwise — sharp_class doesn't accelerate A2A; would need a `hw_a2a` tier) (green).
 
-System: `gb200.nvl576.hierarchical.inc` (576 GPUs, NVLink5 + IB, NVLS + Quantum SHARP declared on both tiers).
+System: `gb200.multibox` loaded with `num_devices=576` (8 racks × 72 GPUs; NVLink5 + IB, NVLS + Quantum SHARP declared on both tiers).
 
 **Headline at the corners** (under the operational `PP_MAX = 8` cap; cluster spans tier-1 IB so collectives can cross the rack boundary):
 
