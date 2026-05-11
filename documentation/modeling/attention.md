@@ -828,3 +828,44 @@ The $8\times$ ratio is exact (it equals $L / L_{\mathrm{full}}$) and constant ac
 The compute trade is similar in shape: the 28 Mamba layers cost a fixed per-token amount, the 4 full layers grow with $S$. At $S = 256$K, attention-side compute is dominated by the 4 full-attention layers' $S$-scaling work; the 28 Mamba layers contribute a small constant. At short $S$ the Mamba layers dominate. The cross-over is around $S \sim 2$K–$8$K depending on $H$ and the precise Mamba architecture; above the cross-over, the hybrid becomes increasingly compute-efficient relative to a uniform full-attention baseline.
 
 The model-quality trade-off is fundamentally about whether 4 full-attention layers give enough global routing for the workload. Jamba's published evaluations argue this is sufficient for long-context tasks; deployments in 2024–2025 have generally validated this trade for retrieval and summarization workloads. For tasks with very fine-grained cross-token dependencies (e.g., complex code reasoning) the hybrid recall trade may degrade more sharply, and the operational call is workload-dependent.
+
+---
+
+## 7. Summary
+
+The six variants in §1–§6 attack different axes of inference cost. Table 1 lists per-layer attention parameter counts (static weight footprint). Table 2 distills each variant's compression strategy, per-token-per-layer KV cache base, and cluster-level KV scaling pattern. Table 3 covers decode-time attention compute. Per-rank sharding decompositions under TP-attention vs DP-attention live in each variant's §x.5 (sharding) subsection; concrete byte / GB / TB worked-example numbers live in §x.7.
+
+**Table 1 — Per-layer attention parameter count**
+
+| § | Variant | Per-layer attention params | At worked example (per layer) | Notes |
+|---|---|---|---|---|
+| §1 | MHA | $4 H^2$ | 268.4 M (LLaMA-1 65B, $H = 8192$) | $W_Q, W_K, W_V, W_O$ each $\approx H^2$ at $n_q d_{\mathrm{head}} = H$ |
+| §2 | GQA | $2 H^2 + 2 H \cdot H_{kv}$ | 151.0 M (LLaMA-3 70B, $H = 8192$, $n_{kv} = 8$) | $W_K, W_V$ shrink by $n_q / n_{kv}$ vs MHA; $W_Q, W_O$ unchanged |
+| §3 | MLA | sum of 6 matrices ($W_{DQ}, W_{UQ}, W_{DKV}, W_{UK}, W_{UV}, W_O$; §3.3) | 187.0 M (DSv3, $H = 7168$) | adds the down / up projection pair on Q and KV sides; substantially more than GQA at same $H$, $n_q$ — see §3.8 |
+| §4 | SWA | inherits underlying GQA / MHA layer | ~42 M (Mistral 7B, $H = 4096$) | no parameter change — SWA is mask + eviction only |
+| §5 | DSA | $P_{\mathrm{attn,MLA}} + P_{\mathrm{indexer}}$ | ~190 M (DSv3.2-Exp, est.) | indexer adds ~1–2 % over MLA |
+| §6 | Hybrid | per-layer-type sum: $L_{\mathrm{full}} \cdot P_{\mathrm{full}} + L_{\mathrm{lin}} \cdot P_{\mathrm{lin}}$ | full: ~42 M; lin / SSM: ~50–80 M (Jamba 1.5 Mini, $H = 4096$) | $P_{\mathrm{lin}}$ is comparable to a Transformer FFN at same $H$ |
+
+**Table 2 — KV cache and compression axis**
+
+| § | Variant | Compression axis | KV / tok / layer (base) | Cluster KV scaling pattern | Production example |
+|---|---|---|---|---|---|
+| §1 | MHA | (baseline — no compression) | $2 \cdot n_q \cdot d_{\mathrm{head}} \cdot b$ | $B \cdot S \cdot L \cdot \text{base}$ | LLaMA-1 65B |
+| §2 | GQA | head-share K, V across $n_q / n_{kv}$ query heads per group | $2 \cdot n_{kv} \cdot d_{\mathrm{head}} \cdot b$ | $B \cdot S \cdot L \cdot \text{base}$ | LLaMA-3 70B |
+| §3 | MLA | low-rank factorization of K, V into a shared latent | $(d_c + d_{qk,\mathrm{rope}}) \cdot b$ | $B \cdot S \cdot L \cdot \text{base}$ | DSv3 / R1 |
+| §4 | SWA | per-sequence cache cap at window $W$; per-layer receptive-field cap at $W$ | inherits base of underlying GQA / MHA layer | $B \cdot L_{\mathrm{swa}} \cdot \min(S, W) \cdot \text{base} + B \cdot L_{\mathrm{full}} \cdot S \cdot \text{base}$ | Mistral 7B; Gemma 3 27B |
+| §5 | DSA | top-$k_{\mathrm{attn}}$ token selection on the MLA latent | $(d_c + d_{qk,\mathrm{rope}} + d_{\mathrm{idx}}) \cdot b$ | $B \cdot S \cdot L \cdot \text{base}$ | DSv3.2-Exp |
+| §6 | Hybrid | per-layer type: only $L_{\mathrm{full}}$ layers carry growing KV cache | full layers: variant base; lin / SSM: fixed $M_{\mathrm{state,SSM}}$ per sequence per layer | $B \cdot S \cdot L_{\mathrm{full}} \cdot \text{base} + B \cdot L_{\mathrm{lin}} \cdot M_{\mathrm{state,SSM}}$ | Jamba 1.5 |
+
+**Table 3 — Decode-time attention compute**
+
+| § | Variant | FLOPs / tok / layer (one user, $S$ past tokens) | Compute scaling vs $S$ |
+|---|---|---|---|
+| §1 | MHA | $8 H^2 + 4 S H$ | $O(S)$ on score / value terms |
+| §2 | GQA | $4 H^2 + 4 H \cdot H_{kv} + 4 S H$ | $O(S)$ on score / value terms (scales with $n_q$, not $n_{kv}$) |
+| §3 | MLA | mode-dependent: materialized vs absorbed (§3.7) | $O(S)$ on score / value, in $d_{qk,\mathrm{nope}}$ space (materialized) or $d_c$ space (absorbed) |
+| §4 | SWA | $4 H^2 + 4 H \cdot H_{kv} + 4 \cdot \min(S, W) \cdot H$ | $O(\min(S, W))$ — bounded once $S \ge W$ |
+| §5 | DSA | $2 S \cdot n_q \cdot d_{\mathrm{idx}}$ (indexer) + $2 k_{\mathrm{attn}} \cdot n_q \cdot (d_{qk} + d_v)$ (sparse-attn) + MLA projections | $O(S \cdot d_{\mathrm{idx}} + k_{\mathrm{attn}} \cdot d_{qk})$ — dominant work is constant in $S$ for $S \gg k_{\mathrm{attn}}$ |
+| §6 | Hybrid | full layers: variant-specific (rows §1 / §2 / §3 above); lin / SSM layers: $O(d_{\mathrm{model}} \cdot d_{\mathrm{state}})$ per token | $O(S)$ on $L_{\mathrm{full}}$ layers; $O(1)$ in $S$ on $L_{\mathrm{lin}}$ layers |
+
+**How to read across variants.** MHA → GQA → MLA progressively compress *what is stored per token* (head sharing, then low-rank factorization). SWA changes *which past tokens are visible per layer* (windowing). DSA changes *which past tokens enter attention each step* (top-$k$ selection on top of MLA's already-compressed cache). Hybrid changes *which layers grow with $S$ at all* (replacing most attention layers with linear / SSM layers whose state is fixed in $S$). The four compression axes are largely orthogonal — a single model can compose them (e.g., DSv3.2-Exp = MLA + DSA, Jamba = GQA + hybrid), and several plausible combinations have not yet appeared in shipped models.

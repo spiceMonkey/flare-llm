@@ -39,7 +39,6 @@ def compute_kv_paging(
     """KV paging analysis. Doc: documentation/modeling/kv.md §2-6"""
 
     L = model.L
-    H_kv = model.H_kv()
     b = model.bytes_per_param
     S = tuner.S_decode
     PP = partition.PP
@@ -51,8 +50,16 @@ def compute_kv_paging(
 
     block_size = paging.block_size
 
-    # Per-block KV footprint: block_size tokens × 2 (K+V) × H_kv × b × (L/PP) / (D_kv*SP)
-    M_block = block_size * 2 * H_kv * b * (L / PP) / (d_kv * SP)
+    # Per-token-per-layer KV cache base: GQA / MHA stores 2·H_kv·b
+    # (separate K and V); MLA stores the head-shared latent
+    # (d_c + d_qk_rope)·b — see attention.md §3.4.
+    if model.mla is not None:
+        kv_base_per_tok_per_layer = model.mla.kv_bytes_per_token_per_layer(b)
+    else:
+        kv_base_per_tok_per_layer = 2 * model.H_kv() * b
+
+    # Per-block KV footprint: block_size tokens × base × (L/PP) / (D_kv*SP)
+    M_block = block_size * kv_base_per_tok_per_layer * (L / PP) / (d_kv * SP)
 
     # Blocks per sequence
     N_blocks_per_seq = math.ceil(S / block_size)
@@ -71,7 +78,7 @@ def compute_kv_paging(
     max_sequences = int(M_HBM_KV_avail / M_per_seq) if M_per_seq > 0 else 0
 
     # Max context length for a single sequence (with paging fragmentation)
-    M_per_token_kv = 2 * H_kv * b * (L / PP) / (d_kv * SP)
+    M_per_token_kv = kv_base_per_tok_per_layer * (L / PP) / (d_kv * SP)
     S_max = M_HBM_KV_avail / (M_per_token_kv * phi_avg) if M_per_token_kv > 0 else 0.0
 
     return KVPagingResults(

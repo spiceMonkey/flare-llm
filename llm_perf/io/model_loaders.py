@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from ..specs.model_spec import LlmModelSpec, MoESpec
+from ..specs.model_spec import LlmModelSpec, MLASpec, MoESpec
 from ..utils import validate_positive_int_fields
 
 
@@ -39,6 +39,25 @@ def _parse_moe(moe_cfg: Optional[Dict[str, Any]]) -> Optional[MoESpec]:
         n_moe_layers=int(moe_cfg["n_moe_layers"])
         if "n_moe_layers" in moe_cfg and moe_cfg["n_moe_layers"] is not None
         else None,
+    )
+
+
+def _parse_mla(mla_cfg: Optional[Dict[str, Any]]) -> Optional[MLASpec]:
+    if mla_cfg is None:
+        return None
+
+    validate_positive_int_fields(
+        mla_cfg,
+        ["d_c", "d_q_c", "d_qk_nope", "d_qk_rope", "d_v"],
+        prefix="MLA configuration",
+    )
+
+    return MLASpec(
+        d_c=int(mla_cfg["d_c"]),
+        d_q_c=int(mla_cfg["d_q_c"]),
+        d_qk_nope=int(mla_cfg["d_qk_nope"]),
+        d_qk_rope=int(mla_cfg["d_qk_rope"]),
+        d_v=int(mla_cfg["d_v"]),
     )
 
 
@@ -97,6 +116,7 @@ def model_spec_from_json_dict(cfg: Dict[str, Any]) -> LlmModelSpec:
     )
 
     moe = _parse_moe(cfg.get("moe"))
+    mla = _parse_mla(cfg.get("mla"))
 
     return LlmModelSpec(
         name=str(cfg.get("name", "unnamed_model")),
@@ -109,6 +129,7 @@ def model_spec_from_json_dict(cfg: Dict[str, Any]) -> LlmModelSpec:
         max_seq_len=int(cfg["max_seq_len"]),
         bytes_per_param=float(cfg["bytes_per_param"]),
         moe=moe,
+        mla=mla,
     )
 
 
