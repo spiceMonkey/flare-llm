@@ -226,7 +226,7 @@ def topology_tag(sys_id: str) -> str:
 
     Returns 'single-tier (<fabric>)' for one-fabric specs (e.g. 8gpu /
     72gpu specs) or 'multi-tier: N <inner>-islands via <outer>' for
-    hierarchical specs (e.g. b200.16gpu / gb200.nvl576.hierarchical).
+    hierarchical specs (e.g. b200.multibox / gb200.multibox).
     Empty string if the spec can't be loaded.
 
     Used by `coverage_sweep.py` and per-stack drivers to make the
