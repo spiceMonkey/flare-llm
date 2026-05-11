@@ -6,7 +6,8 @@
     "name": "H200-SXM",
     "hbm_capacity_GB": 141.0,
     "hbm_bandwidth_GBps": 4800.0,
-    "peak_flops_TF": 989.0
+    "peak_flops_TF": 989.0,
+    "hbm_eta_beta": 0.7
   },
   "fabrics": {
     "nvlink4": {

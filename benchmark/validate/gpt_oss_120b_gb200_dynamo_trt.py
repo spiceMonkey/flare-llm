@@ -30,7 +30,7 @@ TP, EP, NUM = 4, 1, 4
 # range for "production CUDA-Graph stacks". Confirms the 22 µs anchor is
 # Dynamo-specific (raw TRT-LLM needs c_serving 4–5× higher; see
 # dsr1_b200_trt and llama3_70b_*).
-DEFAULT_BW_ETA = 1.0
+DEFAULT_BW_ETA = 1.4286
 DEFAULT_C_SERVING_US = 22.0
 
 

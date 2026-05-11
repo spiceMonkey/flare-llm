@@ -6,7 +6,8 @@
     "name": "GB200-NVL576-ideal",
     "hbm_capacity_GB": 192.0,
     "hbm_bandwidth_GBps": 8000.0,
-    "peak_flops_TF": 2250.0
+    "peak_flops_TF": 2250.0,
+    "hbm_eta_beta": 0.7
   },
   "fabrics": {
     "nvlink5-flat": {
