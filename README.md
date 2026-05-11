@@ -66,6 +66,140 @@ One line per component in the architecture diagram above. Full derivations live 
 
 ---
 
+## What's Modeled
+
+Survey of the configurations / variants supported by the framework, grouped by the layer of the architecture each addresses. Cross-referenced to the deep-dive doc per row.
+
+### Attention model variants
+
+| Family | Spec signal | Cache per token-per-layer | Notes | Doc |
+|---|---|---|---|---|
+| **MHA** (Multi-Head) | `n_q == n_kv` | `2 · n_q · d_head · b` | Original transformer attention (GPT-2/3) | [`attention.md §2`](documentation/modeling/attention.md) |
+| **GQA** (Grouped-Query) | `n_q > n_kv > 1` | `2 · n_kv · d_head · b` | Llama-3, Mistral, GPT-OSS, Qwen3 — KV shrunk by n_q/n_kv | [`attention.md §3.1`](documentation/modeling/attention.md) |
+| **MQA** (Multi-Query) | `n_kv == 1` | `2 · d_head · b` | Falcon, PaLM — KV minimized; special case of GQA | [`attention.md §3.2`](documentation/modeling/attention.md) |
+| **MLA** (Multi-head Latent) | `MLASpec` set | `(d_c + d_qk_rope) · b` (no factor 2) | DeepSeek-V3 / R1 — single latent vector per token replaces KV pair | [`attention.md §3.4–3.6`](documentation/modeling/attention.md) |
+
+Two orthogonal **dispatch modes** on `FrameworkSpec`:
+
+- `attention_mode = "tp"` (default) — head-shard K/V across the TP group; per-rank KV scales as 1/G_TP. Used by GPT/Llama/GQA on classical TP stacks.
+- `attention_mode = "dp"` — replicate Q/K/V projection weights, shard the batch across the TP-as-DP-attn group; per-rank KV still scales as 1/G_TP via user split. Production-canonical for MLA on Dynamo orchestrators (TP-attn buys no KV reduction for MLA — see attention.md §3.6).
+
+MLA execution path is selected by `framework.mla_mode ∈ {"absorbed", "mat_absorb_lazy"}` (see attention.md §3.5).
+
+### Memory hierarchy
+
+| Tier class | Examples in `database/system/` | Capacity / BW / α | Notes |
+|---|---|---|---|
+| **Single-tier HBM** | gb200/gb300, b200/b300, h100/h200 | 80–192 GB · 3.4–8 TB/s · ~100 ns | Auto-promoted from legacy `hbm_capacity_GB`/`hbm_bandwidth_GBps` fields |
+| **HBM with η_β deflator** | All Blackwell | + `hbm_eta_beta=0.7` sustained vs nameplate | DeviceSpec field |
+| **SRAM + LPDDR (multi-tier)** | dmatrix.server, dmatrix.squadrack | 256 MB SRAM @ 18.75 TB/s + 32 GB LPDDR5 @ 51.2 GB/s per chiplet | DeviceSpec.tiers list |
+| **Hypothetical 3D-stacked** | (parameterizable) | derived from die-interface params | `utils/dram3d.py` + `dram3d.md` |
+
+The decode roofline opens to a per-tier sum: `t_mem(B) = Σ_i (T_θ,i + B·T_KV,i) / BW_eff,i`. Single-tier devices reduce to `T_step / BW_HBM` bit-for-bit. Placement policy on `tuner.placement: MemoryPlacementSpec`:
+
+- `weights="auto"` + `kv="auto"` + `auto_priority="weights"|"kv"` — greedy fastest-first (with the priority field as tiebreaker)
+- `weights="<tier_name>"` or `kv="<tier_name>"` — operator-pinned to a named tier
+
+Doc: [`sram.md`](documentation/modeling/sram.md), [`memory_placement.py`](llm_perf/core/memory_placement.py).
+
+### Collective communication primitives
+
+Four operation classes × multiple algorithms per class. All α–β (Hockney) cost forms; INC entries assume the crossed tier(s) advertise `inc != "none"` AND `framework.inc_enabled=True`.
+
+| Op | SW algorithms | INC variant | n_α (SW) | Notes |
+|---|---|---|---|---|
+| **Broadcast** | ring, tree | `inc_broadcast` (sharp_class) | (G−1) / log₂G | One-to-all |
+| **Reduce** | ring, tree | `inc_reduce` (sharp_class) | (G−1) / log₂G | All-to-one |
+| **All-Reduce** | ring, tree (DBT), Rabenseifner halving-doubling | `inc_all_reduce` (sharp_class) — n_α=2, BW_eff×2 | 2(G−1) / 2·log₂G | Dual traversal; INC collapses to switch-cut-through |
+| **All-Gather** | ring, recursive doubling, PAT (Parallel Aggregated Trees) | `inc_all_gather` (sharp_class) — n_α=1 | (G−1) / log₂G | NCCL ≥ 2.23 ships PAT |
+| **Reduce-Scatter** | ring, recursive halving, PAT | `inc_reduce_scatter` (sharp_class) — n_α=1 | (G−1) / log₂G | Mirror of AG |
+| **MoE All-to-All** | pairwise (direct-send), ring relay (single-NIC), Bruck (small-msg log-α) | `inc_a2a` (hw_a2a tier — Tomahawk Ultra / Rubin) | (G−1) / log₂G | sharp_class doesn't accelerate A2A |
+| **P2P** | `p2p_hop` (single send/recv) | — | 1 | Used for PP hops |
+
+**Composition rules** for multi-tier fabric chains (`collective_fabrics: {TP: [tier1, tier2, …]}`):
+
+- `hierarchical_all_reduce` / `hierarchical_all_reduce_ring_ring` — RS → sub-AR → AG with payload telescoping (collectives/03_hierarchical_topologies.md §2)
+- `hierarchical_all_gather` / `hierarchical_reduce_scatter` — multi-tier AG/RS
+- Per-destination-class A2A accounting on multi-tier crossbars (collectives/03 §3)
+
+**Torus primitives** for k-D torus tiers (TPU pods, GPU NV-link torus): `torus_all_reduce`, `torus_all_gather`, `torus_reduce_scatter`, `torus_a2a`, `torus_broadcast`, `torus_reduce` (dim-by-dim).
+
+**Selection**: `optimize_collective_algorithms(model, partition, system, tuner, framework)` resolves `framework.{tp,ep}_algorithm_{decode,prefill}="auto"` per (phase × collective × G × M) by `argmin(cost)`; short-circuits to INC when eligible.
+
+Source: [`collective_cost.py`](llm_perf/core/primitives/collective_cost.py) (upstream-synced), [`dispatch.py`](llm_perf/core/primitives/dispatch.py); doc subseries: [`collectives/`](documentation/modeling/collectives/) (00 cheatsheet → 05 contention).
+
+### Fabric topology classes
+
+| Class | Topology | INC field | Used by |
+|---|---|---|---|
+| `CrossbarTier(ports=N)` | One monolithic switch chip (radix N) | `inc ∈ {none, sharp_class, hw_a2a}` + `inc_alpha_us` | NVSwitch4/5, Tomahawk, Quantum-2 IB, PCIe switch |
+| `TorusTier(dims=(d₁,…,dₖ))` | k-D torus (wraparound) | (no INC) | TPU v4/v5 ICI |
+| `MeshTier(dims=(N,), full=True)` | Full mesh | (no INC) | NVLink direct, package D2D |
+| `MeshTier(dims=(d₁,…,dₖ), full=False)` | k-D mesh (no wraparound) | (no INC) | d-Matrix package_d2d 2×2 |
+
+**INC capabilities** (declared at the tier, controlled by framework):
+
+- `none` — pure SW collectives (the table above)
+- `sharp_class` — switch ALU + multicast crossbar (NVLink SHARP / NVLS, Quantum SHARP, Spectrum-X SHARP); accelerates AR/AG/RS
+- `hw_a2a` — also accelerates A2A via switch scatter-gather (Tomahawk Ultra, Rubin-class fabric)
+
+`framework.inc_enabled` toggles whether the runtime engages INC even when the fabric advertises capability — this is how `gb200.72gpu` (NVLS-capable hardware) can be modeled both with INC engaged (notebooks studying INC effects) and without (validators calibrating against measurements that didn't enable SHARP).
+
+Doc: [`collectives/02_topology_mapping.md`](documentation/modeling/collectives/02_topology_mapping.md), [`collectives/04_in_network_collectives.md`](documentation/modeling/collectives/04_in_network_collectives.md).
+
+### Parallelism & sharding axes
+
+| Axis | Spec | Per-layer comm | Bubble / overhead |
+|---|---|---|---|
+| **DP** (Data Parallel) | inferred = `num_devices / (PP·TP·EP·SP)` | none — replicates the pipeline | 0; scales `TTPS` linearly |
+| **PP** (Pipeline Parallel) | `partition.PP` | P2P send/recv per layer hop | `γ_pp = max(1, PP/B)` first-token bubble |
+| **TP** (Tensor Parallel) | `partition.TP` | per-layer all-reduce (n_TP_collectives = 2) | shards attention heads + FFN columns |
+| **EP** (Expert Parallel) | `partition.EP` | MoE Dispatch + Combine all-to-all (2 × a2a per MoE layer) | MoE models only |
+| **SP** (Sequence Parallel) | `partition.SP` | per-layer all-gather + reduce-scatter (n_SP_collectives = 1) | shards activations along sequence dim |
+
+**Cross-axis composition** is set on `FrameworkSpec`, not partition (so a single partition can be evaluated under multiple framework choices):
+
+- `tp_ep_layout = "orthogonal"` (default) — TP and EP are independent axes; replica spans `PP · TP · EP · SP` devices.
+- `tp_ep_layout = "co_located"` — TP and EP overlay on the same GPUs; replica spans `PP · max(TP,EP) · SP`. Required by DeepEP-style scatter-direct dispatch. **Forces** `attention_mode="dp"` AND `TP == EP` (enforced by `compose_check`).
+
+Per-device sharding factors (`D_attn`, `D_kv`, `D_exp`, `N_replica` from `core/primitives/sharding_factors.py`) absorb all the partition × framework algebra so the rooflines stay framework-agnostic. Docs: [`decode.md §1.4 / §5.3`](documentation/modeling/decode.md), [`notation.md §1`](documentation/modeling/notation.md).
+
+### Serving stack overhead model — 5 production framework JSONs
+
+`FrameworkSpec` carries every host-side / dispatch-side knob; the database ships 5 calibrated stacks. Side-by-side:
+
+| Field (units) | What it models | `default` | `trt` | `dynamo_trt` | `sglang` | `vllm` |
+|---|---|---|---|---|---|---|
+| `kernel_launch_us` (μs) | Per-kernel CUDA dispatch budget τ_launch — multiplied by partition-dependent kernel count K to get t_SW | 1.5 | 1.5 | 7.0 | 10.0 | 10.0 |
+| `c_serving_per_seq_us` (μs/seq) | Per-sequence host work (sampling, scheduler, block-table gather) | 0 | 50 | 0 | 20 | 20 |
+| `moe_a2a_pattern` | MoE Dispatch+Combine pattern | gather | gather | scatter | scatter | scatter |
+| `attention_mode` | `tp` / `dp` dispatch | tp | tp | dp | tp | tp |
+| `tp_ep_layout` | `orthogonal` / `co_located` | orthogonal | orthogonal | co_located | orthogonal | orthogonal |
+| `inc_enabled` | Engage SHARP-class INC where fabric supports it | True | True | True | True | True |
+| `tp/ep_algorithm_*` | `ring` / `tree` / `auto` | ring | auto | auto | auto | auto |
+| `comm_overlap_factor` (ρ_comm) | Collective comm hidden under HW compute | 0 | 0 | 0 | 0 | 0 |
+| `sw_overlap_factor` (ρ_SW) | SW dispatch hidden under GPU step | 1.0 | 1.0 | 1.0 | 1.0 | 1.0 |
+
+Anchor calibrations (from `benchmark/validate/*` against InferenceX measurements):
+
+- `dynamo_trt`: `c_serving_per_seq_us=0` because the Dynamo orchestrator absorbs per-seq host work into one CUDA-graph launch per microbatch.
+- `trt` (raw TRT-LLM): `c_serving_per_seq_us=50` — fast C++ runtime but more individual kernel launches per step than Dynamo.
+- `sglang` / `vllm`: `c_serving_per_seq_us=20` — Python-heavy stacks; CUDA-graph replay doesn't help because per-seq Python runs between graph launches.
+
+The kernel-launch tax `t_SW = τ_launch · K(partition)` produces visible Pareto cliffs at high τ_launch (eager-mode stacks) — see [`pareto_vs_kernel_launch.ipynb`](notebooks/pareto_vs_kernel_launch.ipynb). Docs: [`decode.md §7.1 / §7.2`](documentation/modeling/decode.md), [`framework.md`](documentation/modeling/framework.md).
+
+### KV handoff & disaggregation
+
+| Mode | `DisaggSpec` field | Cost model |
+|---|---|---|
+| **Co-located, matched-partition** | `disaggregated=False`, `colo_repack_GBps=0` | Zero handoff (KV stays in HBM) |
+| **Co-located, repack** | `disaggregated=False`, `colo_repack_GBps>0` | `t_handoff = α_intra + M_KV / BW_intra · η_repack` |
+| **Disaggregated transfer** | `disaggregated=True`, `inter_bandwidth_GBps>0` | `t_handoff = max(0, α_eff + M_KV / BW_inter + t_repack − ρ_KV · t_prefill)` with `α_eff = α_inter + N_WR · τ_WR` |
+
+`M_KV = 2 · L · S · H_kv · b` (cluster-aggregate, MHA/GQA). For MLA: `(d_c + d_qk_rope) · L · S · b`. The handoff tax can dominate TTFT for short prompts or low-bandwidth fabrics — see [`disagg_bw_inter_sweep.py`](sandbox/disagg_bw_inter_sweep.py) (in `sandbox/` since this is an experimental study) and [`e2e.md §6`](documentation/modeling/e2e.md).
+
+---
+
 ## Decode Modeling Flow
 
 > **Start with [`decode.md`](documentation/modeling/decode.md).** It's the most important modeling doc to review — every Pareto sweep, every case study, and the entire `InferenceCalculator` path go through it. The decode roofline assembles compute + multi-tier memory + collective comm + kernel-launch dispatch + LM head + pipeline bubble into a single user-observed step time, and the rest of the framework (prefill, e2e, kv paging) builds on its conventions.
