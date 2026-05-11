@@ -463,7 +463,7 @@ def compute_prefill_latency(
             tiers=tiers,
             placement=tuner.placement,
         )
-        eta_beta_B = _eta_beta_at_B(tuner.bw_efficiency, max(1, B))
+        eta_beta_B = _eta_beta_at_B(system.device.bw_efficiency, max(1, B))
         return t_mem_from_placement(
             plc, B=max(1, B), tiers=tiers,
             eta_beta_curve_factor=eta_beta_B,
@@ -498,7 +498,7 @@ def compute_prefill_latency(
     # derate. Applied for consistency with decode and to capture small-S
     # corner cases.
     mb_prefill = max(1, B_pf) * max(1, S) / max(1, PP)
-    eta_TC = _eta_TC_at_mb(tuner.tensor_core_efficiency, mb_prefill)
+    eta_TC = _eta_TC_at_mb(system.device.tensor_core_efficiency, mb_prefill)
     t_prefill_compute_eff = t_prefill_compute / eta_TC if eta_TC > 0 else float("inf")
     t_prefill_mem = _t_mem(traffic.T_theta_device, traffic.T_kv_write_device, B=1)
     t_prefill_local_gpu = max(t_prefill_compute_eff, t_prefill_mem)
@@ -597,7 +597,7 @@ def compute_prefill_latency(
             # η_TC at chunk payload (mb_chunk = B_pf · C / PP). For typical
             # C the saturated curve gives 1.0 — same caveat as unchunked.
             mb_chunk = max(1, B_pf) * max(1, C) / max(1, PP)
-            eta_TC_chunk = _eta_TC_at_mb(tuner.tensor_core_efficiency, mb_chunk)
+            eta_TC_chunk = _eta_TC_at_mb(system.device.tensor_core_efficiency, mb_chunk)
             t_chunk_compute_eff_k = t_chunk_compute_k / eta_TC_chunk if eta_TC_chunk > 0 else float("inf")
             t_chunk_local_gpu_k = max(t_chunk_compute_eff_k, t_chunk_mem_k)
             t_chunk_local_k = _compose_SW(t_chunk_local_gpu_k)

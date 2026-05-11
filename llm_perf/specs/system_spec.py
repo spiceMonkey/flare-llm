@@ -70,6 +70,46 @@ class DeviceSpec:
     sram_bandwidth_TBps: Optional[float] = None  # optional fast SRAM BW (TB/s)
     tiers: List["MemoryTierSpec"] = field(default_factory=list)
 
+    # ── Static compute deflator (Phase F) ──────────────────────────────
+    # Per-device "sustained / nameplate" compute factor, symmetric to
+    # MemoryTierSpec.eta_beta on the memory side. Multiplies
+    # peak_flops_TF at runtime in `effective_peak_flops_TF`. Captures
+    # chip-wide architectural overhead (instruction issue, FP exception
+    # handling, SM occupancy floor) that's independent of microbatch
+    # size — distinct from the dynamic tensor_core_efficiency curve
+    # below, which captures the mb-dependent tile-floor effect.
+    # 1.0 = chip sustains nameplate FP16 dense peak (matches every
+    # existing system JSON's pre-Phase-F behavior).
+    peak_flops_eta: float = 1.0
+
+    # ── Dynamic compute curve (Phase F; was on TuningSpec) ─────────────
+    # Tensor Core efficiency η_TC(mb) — piecewise-linear curve mapping
+    # microbatch size mb (= B / PP) to a derate factor in [0, 1] applied
+    # multiplicatively on top of `peak_flops_eta`. Captures TC tile-floor
+    # underutilization (FP8 wgmma needs M ≥ 64 for full peak; below that
+    # the kernel is partially serialized).
+    # When None, η_TC = 1.0 always (legacy behavior — no compute derate).
+    # Convention: anchor η_TC(mb→large) = 1.0 so peak_flops_eta carries
+    # the chip-wide ceiling and this curve only adds the small-mb derate.
+    # Representative FP8 ramp on Hopper / Blackwell:
+    #     {1: 0.05, 16: 0.4, 64: 0.8, 256: 1.0}
+    tensor_core_efficiency: Optional[Dict[int, float]] = None
+
+    # ── Dynamic memory BW curve (Phase F; was on TuningSpec) ───────────
+    # B-dependent sustained HBM bandwidth η_β(B) — piecewise-linear curve
+    # mapping active-sequence count B to a derate in (0, 1] applied
+    # multiplicatively on top of per-tier `eta_beta`. Captures concurrent-
+    # stream HBM controller saturation (paged-attention block-table
+    # stress, MoE expert hopping, multiple KV streams).
+    # When None, η_β(B) = 1.0 always (no B-dependent derate; per-tier
+    # `eta_beta` continues to apply unchanged).
+    # Convention: anchor η_β(B=1) = 1.0 so per-tier `eta_beta` carries
+    # the single-stream sustained / nameplate ratio and this curve only
+    # adds the contention-with-B derate.
+    # Representative HBM3e ramp on Blackwell production stacks:
+    #     {1: 0.92, 64: 0.85, 512: 0.75, 4096: 0.55}
+    bw_efficiency: Optional[Dict[int, float]] = None
+
     def get_tiers(self) -> List["MemoryTierSpec"]:
         """Return the device's memory tier list, materializing a shim from
         the legacy / sram_* fields when `tiers` is empty.

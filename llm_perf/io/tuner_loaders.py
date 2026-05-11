@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from ..specs.tuner_spec import MemoryPlacementSpec, TuningSpec
 from ..utils import (
@@ -63,60 +63,27 @@ def tuning_spec_from_json_dict(cfg: Dict[str, Any]) -> TuningSpec:
         "overlap_factor",      # legacy name; new name is `comm_overlap_factor`
         "comm_overlap_factor", # framework-axis
     )
-    leaked = [f for f in _moved_to_framework if f in cfg]
-    if leaked:
+    _moved_to_device = (
+        # Phase F (chip-side calibration curves):
+        "tensor_core_efficiency",  # → DeviceSpec.tensor_core_efficiency
+        "bw_efficiency",           # → DeviceSpec.bw_efficiency
+    )
+    leaked_fw = [f for f in _moved_to_framework if f in cfg]
+    if leaked_fw:
         raise ValueError(
-            f"tuning configuration: fields {leaked} were moved to "
+            f"tuning configuration: fields {leaked_fw} were moved to "
             f"FrameworkSpec — load a framework JSON via "
             f"`load_framework_from_db('<stack>')` instead. See "
             f"`llm_perf/database/framework/` for available stacks."
         )
-
-    eta_TC_cfg = cfg.get("tensor_core_efficiency", None)
-    if eta_TC_cfg is None:
-        eta_TC: Optional[Dict[int, float]] = None
-    else:
-        if not isinstance(eta_TC_cfg, dict):
-            raise ValueError(
-                "tuning configuration: 'tensor_core_efficiency' must be an "
-                f"object mapping mb→efficiency, got {eta_TC_cfg!r}"
-            )
-        eta_TC = {}
-        for k, v in eta_TC_cfg.items():
-            mb = int(k)
-            eta = float(v)
-            if mb < 1:
-                raise ValueError(
-                    f"tensor_core_efficiency: mb keys must be >= 1, got {mb}"
-                )
-            if not (0.0 <= eta <= 1.0):
-                raise ValueError(
-                    f"tensor_core_efficiency[{mb}]: efficiency must be in [0, 1], got {eta}"
-                )
-            eta_TC[mb] = eta
-
-    eta_BW_cfg = cfg.get("bw_efficiency", None)
-    if eta_BW_cfg is None:
-        eta_BW: Optional[Dict[int, float]] = None
-    else:
-        if not isinstance(eta_BW_cfg, dict):
-            raise ValueError(
-                "tuning configuration: 'bw_efficiency' must be an "
-                f"object mapping B→efficiency, got {eta_BW_cfg!r}"
-            )
-        eta_BW = {}
-        for k, v in eta_BW_cfg.items():
-            B = int(k)
-            eta = float(v)
-            if B < 1:
-                raise ValueError(
-                    f"bw_efficiency: B keys must be >= 1, got {B}"
-                )
-            if not (0.0 < eta <= 1.0):
-                raise ValueError(
-                    f"bw_efficiency[{B}]: efficiency must be in (0, 1], got {eta}"
-                )
-            eta_BW[B] = eta
+    leaked_dev = [f for f in _moved_to_device if f in cfg]
+    if leaked_dev:
+        raise ValueError(
+            f"tuning configuration: fields {leaked_dev} were moved to "
+            f"DeviceSpec (sibling of peak_flops_TF / peak_flops_eta and "
+            f"per-tier eta_beta). Add them to the device block of the "
+            f"system JSON instead. See llm_perf/database/system/."
+        )
 
     # MemoryPlacementSpec block (sram.md §1.3 Operator-Specified policy).
     # JSON shape:  "placement": {"weights_tier": "sram", "kv_tier": "auto"}
@@ -140,8 +107,6 @@ def tuning_spec_from_json_dict(cfg: Dict[str, Any]) -> TuningSpec:
         B_prefill=int(cfg.get("B_prefill", 1)),
         chunk_size=int(cfg.get("chunk_size", 0)),
         placement=placement,
-        tensor_core_efficiency=eta_TC if eta_TC is not None else _defaults.tensor_core_efficiency,
-        bw_efficiency=eta_BW if eta_BW is not None else _defaults.bw_efficiency,
         n_tok_draft=int(cfg.get("n_tok_draft", _defaults.n_tok_draft)),
         p_accept=float(cfg.get("p_accept", _defaults.p_accept)),
     )
