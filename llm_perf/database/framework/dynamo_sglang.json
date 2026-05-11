@@ -1,0 +1,18 @@
+{
+  "schema": "llm_perf.framework",
+  "name": "dynamo-sglang",
+
+  "c_serving_per_seq_us": 0.0,
+  "kernel_launch_us": 12.0,
+  "kernels_per_layer_compute": 10,
+  "kernels_per_collective_call": 2,
+  "kernels_per_pp_hop": 2,
+  "sw_overlap_factor": 1.0,
+
+  "moe_a2a_pattern": "scatter",
+  "mla_mode": "absorbed",
+  "inc_enabled": true,
+
+  "_comment_c_serving": "0 µs/seq — Dynamo orchestrator absorbs per-seq host work into the CUDA-graph launch. Same recalibration as dynamo-trt; the prior 1-2 µs default was over-counting at large B post-MLA-migration. The underlying SGLang runtime has Python-heavy paths but those fire once per microbatch under Dynamo, not per-seq.",
+  "_comment_kernel_launch": "12 µs — SGLang's per-kernel dispatch is heavier than TRT-LLM's because the SGLang-specific Python wrapping leaks through even under Dynamo orchestration."
+}

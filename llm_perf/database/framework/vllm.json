@@ -1,0 +1,17 @@
+{
+  "schema": "llm_perf.framework",
+  "name": "vllm",
+
+  "c_serving_per_seq_us": 20.0,
+  "kernel_launch_us": 10.0,
+  "kernels_per_layer_compute": 10,
+  "kernels_per_collective_call": 2,
+  "kernels_per_pp_hop": 2,
+  "sw_overlap_factor": 1.0,
+
+  "moe_a2a_pattern": "scatter",
+  "mla_mode": "absorbed",
+  "inc_enabled": true,
+
+  "_comment_c_serving": "20 µs/seq — Python-heavy stack (eager-mode interpreter wraps each per-seq sampling decision). CUDA-graph replay doesn't help because the CPU work is between graph launches. Sits in decode.md §7.2's 30-60 µs Python-heavy range, calibrated lower (~20 µs) for vLLM's relatively fused C++ critical path."
+}

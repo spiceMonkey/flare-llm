@@ -1,0 +1,17 @@
+{
+  "schema": "llm_perf.framework",
+  "name": "sglang",
+
+  "c_serving_per_seq_us": 20.0,
+  "kernel_launch_us": 10.0,
+  "kernels_per_layer_compute": 10,
+  "kernels_per_collective_call": 2,
+  "kernels_per_pp_hop": 2,
+  "sw_overlap_factor": 1.0,
+
+  "moe_a2a_pattern": "scatter",
+  "mla_mode": "absorbed",
+  "inc_enabled": true,
+
+  "_comment_c_serving": "20 µs/seq — Python-heavy stack (similar to vllm). The Python interpreter wrapping each per-seq sampling decision dominates host overhead; CUDA-graph replay does not help because CPU work runs between graph launches. Sits at the lower end of decode.md §7.2's 30-60 µs Python-heavy range."
+}

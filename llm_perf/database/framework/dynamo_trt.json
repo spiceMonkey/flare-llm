@@ -1,0 +1,19 @@
+{
+  "schema": "llm_perf.framework",
+  "name": "dynamo-trt",
+
+  "c_serving_per_seq_us": 0.0,
+  "kernel_launch_us": 7.0,
+  "kernels_per_layer_compute": 10,
+  "kernels_per_collective_call": 2,
+  "kernels_per_pp_hop": 2,
+  "sw_overlap_factor": 1.0,
+
+  "moe_a2a_pattern": "scatter",
+  "mla_mode": "absorbed",
+  "inc_enabled": true,
+
+  "_comment_c_serving": "0 µs/seq — Dynamo orchestrator absorbs per-seq host work (block-table gather, sampling, scheduler) into one CUDA-graph launch per microbatch. The irreducible per-seq cost is below the ~µs threshold relative to per-step GPU work. See decode.md §7.2 for the C++/CUDA-graph + orchestrator stack range (5-22 µs/seq nominal; recalibrated to 0 µs post-MLA-migration when DSv3-class TPOT predictions revealed the prior 5 µs over-counted at large B).",
+  "_comment_kernel_launch": "7 µs — typical per-kernel dispatch budget for Dynamo+TRT-LLM steady state.",
+  "_comment_moe_a2a_pattern": "scatter — Dynamo+TRT exposes DeepEP-style scatter-direct dispatch (decode.md §5.2)."
+}
