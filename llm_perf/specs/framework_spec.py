@@ -160,17 +160,16 @@ class FrameworkSpec:
     n_SP_collectives: int = 1
 
     # ── Comm/compute overlap (decode.md §6.2) ──────────────────────────
-    # Fraction ρ of GPU compute time used to hide collective comm (the
-    # comm-vs-compute overlap, distinct from sw_overlap_factor which is
-    # the SW-vs-GPU overlap):
+    # Fraction ρ_comm of GPU compute time used to hide collective comm
+    # (distinct from `sw_overlap_factor` which is the SW-vs-GPU overlap):
     #
-    #   t_stage = t_local + max(0, t_comm - ρ * t_local)
+    #   t_stage = t_local + max(0, t_comm - ρ_comm * t_local)
     #
-    # ρ = 0 → strict serialization (conservative roofline default).
-    # ρ = 1 → full async overlap (NCCL streams hide comm completely).
+    # ρ_comm = 0 → strict serialization (conservative roofline default).
+    # ρ_comm = 1 → full async overlap (NCCL streams hide comm completely).
     # Production CUDA-Graph stacks (TRT-LLM / SGLang) typically achieve
     # 0.4–0.7 in steady-state decode; eager-mode stacks see ~0.0–0.3.
-    overlap_factor: float = 0.0
+    comm_overlap_factor: float = 0.0
 
     @classmethod
     def default(cls) -> "FrameworkSpec":

@@ -378,7 +378,7 @@ def compute_prefill_latency(
 
     PP = partition.PP
     SP = partition.SP
-    rho = fw.overlap_factor
+    rho = fw.comm_overlap_factor
     rho_SW = fw.sw_overlap_factor
 
     # Collective group sizes (notation.md §1) for kernel-launch SW count

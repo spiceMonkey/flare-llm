@@ -66,7 +66,8 @@ class TuningSpec:
     #     - tp_algorithm / ep_algorithm (legacy single-knob aliases — DROPPED)
     #     - torus_algorithm
     #     - n_TP_collectives / n_EP_collectives / n_SP_collectives
-    #     - overlap_factor (ρ comm/compute overlap; mirrors sw_overlap_factor)
+    #     - overlap_factor → renamed comm_overlap_factor (ρ_comm; mirrors
+    #       sw_overlap_factor on the SW-vs-GPU side)
     # See FrameworkSpec docstring + database/framework/ for stack JSONs.
     # Loader rejects legacy tuner JSONs that still set these fields with
     # a clear migration hint pointing at load_framework_from_db().

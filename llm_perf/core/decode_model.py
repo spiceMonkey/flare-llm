@@ -562,7 +562,7 @@ def compute_latency(
     t_local = max(t_compute_eff, t_mem)
 
     t_comm = comm.t_comm_stage
-    rho = framework.overlap_factor
+    rho = framework.comm_overlap_factor
     t_stage = t_local + max(0.0, t_comm - rho * t_local)
 
     # Per-microbatch per-stage CPU dispatch budget (kernel_launch_overhead.md §5).
