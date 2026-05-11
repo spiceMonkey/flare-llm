@@ -70,18 +70,20 @@ One line per component in the architecture diagram above. Full derivations live 
 
 > **Start with [`decode.md`](documentation/modeling/decode.md).** It's the most important modeling doc to review — every Pareto sweep, every case study, and the entire `InferenceCalculator` path go through it. The decode roofline assembles compute + multi-tier memory + collective comm + kernel-launch dispatch + LM head + pipeline bubble into a single user-observed step time, and the rest of the framework (prefill, e2e, kv paging) builds on its conventions.
 
-![decode modeling flow: JSON specs → partition → per-device traffic & FLOPs → 4 parallel cost branches → assembly funnel → TPOT](assets/decode_modeling_flow.png)
+![decode modeling flow: 5 specs → compose check + optional optimizer → sharding factors → 4 parallel cost branches → 2-stage overlap assembly → TPOT](assets/decode_modeling_flow.png)
 
-The diagram traces how three JSON inputs (cluster, model, tuning) become a single TPOT number:
+The diagram (source: [`assets/mermaid/decode_modeling_flow.mmd`](assets/mermaid/decode_modeling_flow.mmd)) traces how the five typed-dataclass inputs become a single TPOT number:
 
-1. **Partition** maps the cluster onto a `(PP, TP, EP, SP)` shard layout, with `DP = N / (PP·TP·EP·SP)` filling the remaining device budget.
-2. **Per-device traffic & FLOPs** turn model bytes into per-device weight bytes ($T_\theta$), KV bytes ($T_\mathrm{KV}$), and FLOPs ($F_\mathrm{token}$) — this is where the partition's structural choices first hit the rooflines.
-3. **Four parallel cost branches** are computed independently from the per-device quantities: memory roofline ($t_\mathrm{mem}$), compute roofline ($t_\mathrm{compute}$), collective communication ($t_\mathrm{comm}$), and kernel-launch dispatch ($t_\mathrm{stage,sw}$).
-4. **Assembly funnel** combines them in two overlap stages: HW-side ($t_\mathrm{stage,hw} = t_\mathrm{local} + \max(0, t_\mathrm{comm} - \rho \cdot t_\mathrm{local})$) then SW-side ($t_\mathrm{stage} = t_\mathrm{stage,hw} + \max(0, t_\mathrm{stage,sw} - \rho_\mathrm{SW} \cdot t_\mathrm{stage,hw})$).
-5. **Pipeline bubble** ($\gamma_\mathrm{pp} = \max(1, PP/B)$) and **LM head** ($t_\mathrm{LM,hw}$) join at the final assembly: $t_\mathrm{step,user}(B) = \gamma_\mathrm{pp} \cdot t_\mathrm{stage} + t_\mathrm{LM,hw}$.
-6. **TPOT** = $t_\mathrm{step,user}$. Interactivity $= 1 / \mathrm{TPOT}$; per-replica throughput $= B / t_\mathrm{step,user}$, scaled by $\mathrm{DP}$ to get cluster TTPS.
+1. **Five-spec composition.** `LlmModelSpec` (architecture) × `SystemSpec` (cluster hardware + per-tier fabric capability incl. `inc` disclosure) × `PartitionSpec` (`PP × TP × EP × SP`; `DP = N / product` inferred) × `TuningSpec` (workload knobs) × `FrameworkSpec` (stack-axis choices: attention_mode, tp_ep_layout, algorithm choices, `inc_enabled`, kernel-launch budget, ρ_SW, ρ_comm, MoE A2A pattern). Partition is constructed inline at the call site; the other four come from the JSON database.
+2. **Cross-spec validation.** `compose_check(partition, framework)` enforces invariants like `tp_ep_layout="co_located" ⇒ attention_mode="dp" ∧ TP == EP` on calculator entry.
+3. **(Optional) collective-algorithm resolver.** When `framework` ships `"auto"` algorithm fields (per-stack JSONs do), `optimize_collective_algorithms(model, partition, system, tuner, framework)` resolves them per (phase × collective × G × M) by `argmin(cost)`, short-circuiting to INC when the fabric advertises capability AND `framework.inc_enabled=True`. Returns a new `FrameworkSpec` with auto fields concrete. `FrameworkSpec.default()` ships `"ring"` everywhere and skips this pass.
+4. **Per-device sharding factors.** The (partition, framework) join resolves to abstract sharding factors `D_attn`, `D_kv`, `D_exp`, `N_replica` (`core/primitives/sharding_factors.py`). These encode every production-relevant configuration (orthogonal TP+EP, co-located TP+EP, DP-attention) in one lookup table.
+5. **Four parallel cost branches** computed independently per-device: compute roofline ($t_\mathrm{compute} = F_\mathrm{step}/R_\mathrm{GPU}$, η_TC-derated), memory roofline ($t_\mathrm{mem}(B) = \sum_i (T_{\theta,i} + B \cdot T_\mathrm{KV,i})/\mathrm{BW_\mathrm{eff,i}}$ across tiers), collective communication ($t_\mathrm{comm}$ via `cost_collective` dispatch — SW α-β or INC short-circuit), and kernel-launch dispatch ($t_\mathrm{SW} = \tau_\mathrm{launch} \cdot K(\text{partition})$ with K depending on layer count, per-stage collective count, and PP hops).
+6. **Two-stage overlap assembly.** HW-side: $t_\mathrm{stage,hw} = t_\mathrm{local} + \max(0, t_\mathrm{comm} - \rho_\mathrm{comm} \cdot t_\mathrm{local})$ where $t_\mathrm{local} = \max(t_\mathrm{compute,eff}, t_\mathrm{mem})$. SW-side: $t_\mathrm{stage} = t_\mathrm{stage,hw} + \max(0, t_\mathrm{SW} - \rho_\mathrm{SW} \cdot t_\mathrm{stage,hw})$.
+7. **Pipeline bubble** $\gamma_\mathrm{pp} = \max(1, PP/B)$ and **LM head** $t_\mathrm{LM,hw}(B)$ (fires once on stage `PP-1`) and **serving overhead** $t_\mathrm{serving}$ join the final assembly: $t_\mathrm{step,user}(B) = \gamma_\mathrm{pp} \cdot t_\mathrm{stage} + t_\mathrm{LM,hw} + t_\mathrm{serving}$.
+8. **Outputs.** $\mathrm{TPOT} = t_\mathrm{step,user}$. Interactivity $= 1 / \mathrm{TPOT}$. Cluster throughput $\mathrm{TTPS} = \mathrm{DP} \cdot B / t_\mathrm{step,user}$. Memory→compute crossover $B^* = T_\theta \cdot R / (F_\mathrm{token} \cdot \mathrm{BW_\mathrm{eff,0}} - T_\mathrm{KV} \cdot R)$.
 
-Every block in the diagram corresponds to a function in `llm_perf/core/decode_model.py`; every equation has its derivation in `documentation/modeling/decode.md`.
+Every block in the diagram corresponds to a function in `llm_perf/core/decode_model.py` (or `core/primitives/` for the shared physics); every equation has its derivation in `documentation/modeling/decode.md`.
 
 ---
 
