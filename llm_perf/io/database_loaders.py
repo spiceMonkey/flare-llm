@@ -14,7 +14,6 @@ _DB_ROOT = Path(__file__).resolve().parent.parent / "database"
 
 _HW_DIR = _DB_ROOT / "system"
 _MODEL_DIR = _DB_ROOT / "model"
-_PARTITION_DIR = _DB_ROOT / "partition"
 _TUNER_DIR = _DB_ROOT / "tuner"
 _FRAMEWORK_DIR = _DB_ROOT / "framework"
 
@@ -71,27 +70,12 @@ def load_model_from_db(model_id: str):
 # ─────────────────────────────────────────────
 # Partitions (DP/PP/TP/EP/SP)
 # ─────────────────────────────────────────────
-
-def list_partition_ids() -> List[str]:
-    """
-    List available partition IDs from llm_perf/database/partition.
-    """
-    if not _PARTITION_DIR.is_dir():
-        return []
-    return sorted(p.stem for p in _PARTITION_DIR.glob("*.json"))
-
-
-def load_partition_from_db(partition_id: str):
-    """
-    Load a PartitionSpec from llm_perf/database/partition/{partition_id}.json.
-    """
-    path = _PARTITION_DIR / f"{partition_id}.json"
-    if not path.is_file():
-        raise FileNotFoundError(f"No partition config found for id={partition_id!r} at {path}")
-    return load_partition_spec(path)
-
-
-# ─────────────────────────────────────────────
+# Phase G: partition.json database removed. Partitions are inline-
+# constructed at the call site (drivers, sweeps, notebooks) — they're
+# runtime sweep parameters, not curated catalog entries. The
+# `load_partition_spec` file-path loader stays in io.partition_loaders
+# for ad-hoc one-off JSONs. Recommended attention_mode + layout per
+# stack now live on FrameworkSpec (see database/framework/).
 # Tuners (S_decode, flash_attn_gain, overlap, algorithms, etc.)
 # ─────────────────────────────────────────────
 

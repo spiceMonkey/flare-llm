@@ -1,8 +1,0 @@
-{
-  "schema": "llm_perf.partition",
-  "name": "example_partition",
-  "PP": 1,
-  "TP": 4,
-  "EP": 8,
-  "SP": 2
-}

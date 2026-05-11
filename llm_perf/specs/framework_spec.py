@@ -159,6 +159,34 @@ class FrameworkSpec:
     n_EP_collectives: int = 2
     n_SP_collectives: int = 1
 
+    # ── Recommended sharding mode + layout (Phase G) ───────────────────
+    # Per-stack default attention_mode + layout. Captures the production
+    # convention for this stack (e.g. Dynamo+TRT on DSv3 uses DP-attn
+    # co-located because MLA's latent is not head-structured — see
+    # attention.md §3.6). Callers that construct PartitionSpec inline
+    # may use these as the recommended defaults; PartitionSpec carries
+    # the actual values consumed by the calculator (downstream code
+    # reads partition.attention_mode / partition.layout unchanged).
+    #
+    # attention_mode (dispatch policy for the attention block):
+    #   "tp" — head-shard the K, V matrices across the TP group; per-rank
+    #          KV scales as 1/G_TP. Default for non-MLA models.
+    #   "dp" — replicate Q / K / V projection weights and shard the batch
+    #          across the TP-as-DP-attn group; per-rank KV scales as
+    #          1/G_TP via user split. Production-default for MLA models
+    #          on Dynamo-orchestrator stacks (TP-attn buys no KV
+    #          reduction for MLA — attention.md §3.6).
+    #
+    # layout (whether TP and EP groups overlay on the same physical GPUs):
+    #   "orthogonal" — TP and EP are independent axes. Default for raw-
+    #                  TRT and other stacks that don't co-locate.
+    #   "co_located" — TP and EP overlay on the same GPU set (TP == EP).
+    #                  Required by some DeepEP-style scatter-direct
+    #                  dispatch. Production-default for Dynamo+TRT/
+    #                  SGLang on MoE models.
+    attention_mode: str = "tp"
+    layout: str = "orthogonal"
+
     # ── Comm/compute overlap (decode.md §6.2) ──────────────────────────
     # Fraction ρ_comm of GPU compute time used to hide collective comm
     # (distinct from `sw_overlap_factor` which is the SW-vs-GPU overlap):

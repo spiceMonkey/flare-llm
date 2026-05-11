@@ -30,7 +30,6 @@ if str(_REPO_ROOT) not in sys.path:
 from llm_perf import InferenceCalculator  # noqa: E402
 from llm_perf.io import (  # noqa: E402
     load_model_from_db,
-    load_partition_from_db,
     load_system_from_db,
     load_tuner_from_db,
 )

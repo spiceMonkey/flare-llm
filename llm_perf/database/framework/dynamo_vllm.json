@@ -19,5 +19,7 @@
   "n_TP_collectives": 2,
   "n_EP_collectives": 2,
   "n_SP_collectives": 1,
-  "comm_overlap_factor": 0.0
+  "comm_overlap_factor": 0.0,
+  "attention_mode": "dp",
+  "layout": "co_located"
 }
