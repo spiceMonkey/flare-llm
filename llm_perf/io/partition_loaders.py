@@ -13,8 +13,7 @@ def _load_json(path: str | Path) -> Dict[str, Any]:
 
 
 def partition_spec_from_json_dict(cfg: Dict[str, Any]) -> PartitionSpec:
-    """
-    Build PartitionSpec from a config dict.
+    """Build PartitionSpec from a config dict.
 
     partition.json format:
 
@@ -23,22 +22,30 @@ def partition_spec_from_json_dict(cfg: Dict[str, Any]) -> PartitionSpec:
           "PP": 4,
           "TP": 4,
           "EP": 8,
-          "SP": 2,
-          "attention_mode": "tp",       (optional; default "tp"; "tp" or "dp")
-          "layout":         "orthogonal" (optional; default "orthogonal";
-                                          "orthogonal" or "co_located")
+          "SP": 2
         }
 
-    Co-located layout requires `attention_mode = "dp"` and `TP == EP`
-    (DSv3 / SGLang / NVIDIA Dynamo production decode pattern); see
-    `notation.md §1` and `decode.md §6.3`. PartitionSpec.__post_init__
-    enforces these invariants and raises ValueError on violation.
+    Phase H: `attention_mode` and `tp_ep_layout` (formerly `layout`) are no
+    longer accepted here — they live on FrameworkSpec. Files that still
+    carry them will raise ValueError so that stale configs are caught
+    explicitly rather than silently dropping the field.
     """
     schema = cfg.get("schema", "llm_perf.partition")
     if not schema.startswith("llm_perf.partition"):
         raise ValueError(f"Unsupported partition schema: {schema}")
 
-    # Ensure all parallelism dimensions are integers ≥ 1
+    _stale_map = {
+        "attention_mode": "FrameworkSpec.attention_mode",
+        "layout": "FrameworkSpec.tp_ep_layout",
+        "tp_ep_layout": "FrameworkSpec.tp_ep_layout",
+    }
+    for stale, target in _stale_map.items():
+        if stale in cfg:
+            raise ValueError(
+                f"partition config field {stale!r} is no longer supported "
+                f"on PartitionSpec (Phase H). Move it to {target}."
+            )
+
     validate_positive_int_fields(
         cfg,
         ["PP", "TP", "EP", "SP"],
@@ -50,8 +57,6 @@ def partition_spec_from_json_dict(cfg: Dict[str, Any]) -> PartitionSpec:
         TP=int(cfg["TP"]),
         EP=int(cfg["EP"]),
         SP=int(cfg["SP"]),
-        attention_mode=str(cfg.get("attention_mode", "tp")),
-        layout=str(cfg.get("layout", "orthogonal")),
     )
 
 

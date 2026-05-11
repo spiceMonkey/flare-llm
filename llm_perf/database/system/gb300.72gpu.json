@@ -6,7 +6,9 @@
     "name": "GB300-NVL72",
     "hbm_capacity_GB": 288.0,
     "hbm_bandwidth_GBps": 12000.0,
-    "peak_flops_TF": 2500.0
+    "peak_flops_TF": 2500.0,
+    "peak_flops_eta": 1.0,
+    "hbm_eta_beta": 0.9
   },
   "fabrics": {
     "nvlink5": {

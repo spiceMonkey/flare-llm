@@ -6,7 +6,9 @@
     "name": "B300-SXM",
     "hbm_capacity_GB": 288.0,
     "hbm_bandwidth_GBps": 12000.0,
-    "peak_flops_TF": 2500.0
+    "peak_flops_TF": 2500.0,
+    "peak_flops_eta": 1.0,
+    "hbm_eta_beta": 0.8
   },
   "fabrics": {
     "nvlink5": {
@@ -32,5 +34,5 @@
     "eta": 1.0,
     "delta_alpha_us": 0.0
   },
-  "_comment": "NVIDIA HGX/DGX B300 8-GPU server: same Blackwell Ultra chip as gb300.72gpu (288 GB HBM3E, 12 TB/s HBM BW, FP16 dense 2500 TFLOPS/GPU per framework convention; FP8 = 5000, FP4 = 10000 by linear byte scaling), NVLink5 1.8 TB/s bidir (900 GB/s single-direction) per GPU. Single 8-GPU NVLink5 domain via 4 NVSwitch5 chips. B_agg = 8 × 900 GB/s = 7.2 TB/s single-dir system aggregate. Cross-node would be InfiniBand (CX7 ≈50 GB/s per port). Use this spec for production 8-GPU B300 deployments instead of gb300.72gpu when modeling TP ≤ 8 — they share the same chip but differ in topology size beyond 8 GPUs (the rack-scale gb300 spans 72 GPUs in one NVLink domain; the 8-GPU server falls back to IB for cross-node). Matches the b200.8gpu / gb200.72gpu pairing pattern."
+  "_comment": "NVIDIA HGX/DGX B300 8-GPU server: same Blackwell Ultra chip as gb300.72gpu (288 GB HBM3E, 12 TB/s HBM BW, FP16 dense 2500 TFLOPS/GPU per framework convention; FP8 = 5000, FP4 = 10000 by linear byte scaling), NVLink5 1.8 TB/s bidir (900 GB/s single-direction) per GPU. Single 8-GPU NVLink5 domain via 4 NVSwitch5 chips. B_agg = 8 \u00d7 900 GB/s = 7.2 TB/s single-dir system aggregate. Cross-node would be InfiniBand (CX7 \u224850 GB/s per port). Use this spec for production 8-GPU B300 deployments instead of gb300.72gpu when modeling TP \u2264 8 \u2014 they share the same chip but differ in topology size beyond 8 GPUs (the rack-scale gb300 spans 72 GPUs in one NVLink domain; the 8-GPU server falls back to IB for cross-node). Matches the b200.8gpu / gb200.72gpu pairing pattern."
 }

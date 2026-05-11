@@ -3,8 +3,8 @@
 Splits the weight footprint along the dense/MoE axis so callers can compose
 exactly what they need. Dense and MoE layers share the same attention
 projections (Q,K,V,O) but differ in the FFN: dense always TP-shards the FFN;
-MoE shards experts by D_exp (= TP*EP under orthogonal layout, EP under
-co-located).
+MoE shards experts by D_exp (= TP*EP under orthogonal tp_ep_layout, EP
+under co-located).
 
 All three functions return bytes on one device (D-factor and PP aware). The
 abstract divisors D_attn / D_exp / D_emb are resolved from the
@@ -13,6 +13,7 @@ PartitionSpec via `sharding_factors`; see `notation.md §1` and `decode.md
 layer loop.
 """
 
+from ...specs.framework_spec import FrameworkSpec
 from ...specs.model_spec import LlmModelSpec
 from ...specs.partition_spec import PartitionSpec
 from .sharding_factors import D_attn, D_emb, D_exp
@@ -49,7 +50,9 @@ def _per_layer_attn_params(model: LlmModelSpec) -> float:
     return 2 * H**2 + 2 * H * H_kv
 
 
-def _per_layer_attn_params_per_device(model: LlmModelSpec, partition: PartitionSpec) -> float:
+def _per_layer_attn_params_per_device(
+    model: LlmModelSpec, partition: PartitionSpec, framework: FrameworkSpec
+) -> float:
     """Per-device per-layer attention parameter count (after sharding).
 
     Branches on attention variant and mode:
@@ -60,15 +63,17 @@ def _per_layer_attn_params_per_device(model: LlmModelSpec, partition: PartitionS
       W_UV, W_O) are head-sharded by G_TP. Returns
       `replicated + shardable / G_TP`. See `attention.md §3.6`.
     """
-    if model.mla is not None and partition.attention_mode == "tp":
+    if model.mla is not None and framework.attention_mode == "tp":
         H, n_q = model.H, model.n_q
         P_repl = model.mla.per_layer_attn_params_replicated(H, n_q)
         P_shrd = model.mla.per_layer_attn_params_shardable(H, n_q)
         return P_repl + P_shrd / partition.TP
-    return _per_layer_attn_params(model) / D_attn(partition)
+    return _per_layer_attn_params(model) / D_attn(partition, framework)
 
 
-def dense_weight_bytes(model: LlmModelSpec, partition: PartitionSpec) -> float:
+def dense_weight_bytes(
+    model: LlmModelSpec, partition: PartitionSpec, framework: FrameworkSpec
+) -> float:
     """Per-device weight bytes for the dense-layer slice of the model.
 
         M_theta_dense = (L_dense / PP) · (attn_per_device + 3HI_dense/TP) · b
@@ -76,7 +81,7 @@ def dense_weight_bytes(model: LlmModelSpec, partition: PartitionSpec) -> float:
     where `attn_per_device` is the per-device per-layer attention parameter
     count from `_per_layer_attn_params_per_device` (handles GQA / MHA's
     P/D_attn and MLA's TP-attn-aware shardable / replicated split).
-    Dense FFN always uses /TP regardless of layout.
+    Dense FFN always uses /TP regardless of tp_ep_layout.
     """
     L = model.L
     if model.moe is not None:
@@ -89,16 +94,18 @@ def dense_weight_bytes(model: LlmModelSpec, partition: PartitionSpec) -> float:
     I_dense = model.I_dense
     b = model.bytes_per_param
     PP = partition.PP
-    d_exp_dense = D_exp(partition, layer_kind="dense")
+    d_exp_dense = D_exp(partition, framework, layer_kind="dense")
 
-    P_attn_dev = _per_layer_attn_params_per_device(model, partition)
+    P_attn_dev = _per_layer_attn_params_per_device(model, partition, framework)
 
     return (L_dense / PP) * (
         P_attn_dev + (3 * H * I_dense) / d_exp_dense
     ) * b
 
 
-def moe_weight_bytes(model: LlmModelSpec, partition: PartitionSpec) -> float:
+def moe_weight_bytes(
+    model: LlmModelSpec, partition: PartitionSpec, framework: FrameworkSpec
+) -> float:
     """Per-device weight bytes for the MoE-layer slice of the model.
 
         M_theta_moe = (L_moe / PP) · (attn_per_device + 3HI_moe·N_exp/D_exp) · b
@@ -116,9 +123,9 @@ def moe_weight_bytes(model: LlmModelSpec, partition: PartitionSpec) -> float:
     H = model.H
     b = model.bytes_per_param
     PP = partition.PP
-    d_exp_moe = D_exp(partition, layer_kind="moe", n_exp_cap=N_exp)
+    d_exp_moe = D_exp(partition, framework, layer_kind="moe", n_exp_cap=N_exp)
 
-    P_attn_dev = _per_layer_attn_params_per_device(model, partition)
+    P_attn_dev = _per_layer_attn_params_per_device(model, partition, framework)
 
     return (L_moe / PP) * (
         P_attn_dev + (3 * H * I_moe * N_exp) / d_exp_moe

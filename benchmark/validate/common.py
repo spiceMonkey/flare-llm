@@ -30,7 +30,6 @@ if str(_REPO_ROOT) not in sys.path:
 from llm_perf import InferenceCalculator  # noqa: E402
 from llm_perf.io import (  # noqa: E402
     load_model_from_db,
-    load_partition_from_db,
     load_system_from_db,
     load_tuner_from_db,
 )
@@ -158,6 +157,31 @@ def load_measured(
 # ────────────────────────────────────────────────────────────────────────────
 
 
+def _resize_outer_fabric_tier(system: SystemSpec, num_devices: int) -> SystemSpec:
+    """For multi-tier systems, set the outer fabric tier's `ports` to
+    `ceil(num_devices / inner_tier.ports)` so the IB tier scales with the
+    declared cluster size. Inert for single-tier systems.
+
+    Used to parameterize multibox templates (b200.multibox, b300.multibox,
+    h100.multibox, h200.multibox) by `num_devices` rather than carrying one
+    pre-shaped JSON per supported GPU count.
+    """
+    tp_chain = system.collective_fabrics.get("TP")
+    if not isinstance(tp_chain, list) or len(tp_chain) < 2:
+        return system
+    inner_name = tp_chain[0]
+    outer_name = tp_chain[-1]
+    if inner_name == outer_name:
+        return system
+    inner_tier = system.fabrics[inner_name].tiers[0]
+    n_boxes = (num_devices + inner_tier.ports - 1) // inner_tier.ports
+    outer_fab = system.fabrics[outer_name]
+    new_outer_tiers = [dataclasses.replace(outer_fab.tiers[0], ports=n_boxes), *outer_fab.tiers[1:]]
+    new_outer = dataclasses.replace(outer_fab, tiers=new_outer_tiers)
+    new_fabrics = {**system.fabrics, outer_name: new_outer}
+    return dataclasses.replace(system, fabrics=new_fabrics)
+
+
 def system_with_eta(
     system: SystemSpec,
     *,
@@ -170,10 +194,16 @@ def system_with_eta(
     `flops_eta ∈ (0, 1]` scales `device.peak_flops_TF` (effective compute peak).
     `bw_eta ∈ (0, 1]` scales every memory tier's `bandwidth_GBps` (and the
     legacy `hbm_bandwidth_GBps` field on single-tier devices).
-    `num_devices` overrides the cluster size if provided.
+    `num_devices` overrides the cluster size if provided. For multi-tier
+    systems it also auto-resizes the outer fabric tier's `ports` to match
+    (so `b200.multibox` template loads correctly at any GPU count).
     Returns a new SystemSpec; the original is not mutated.
     """
-    s = system if num_devices is None else dataclasses.replace(system, num_devices=num_devices)
+    if num_devices is None:
+        s = system
+    else:
+        s = dataclasses.replace(system, num_devices=num_devices)
+        s = _resize_outer_fabric_tier(s, num_devices)
     if flops_eta == 1.0 and bw_eta == 1.0:
         return s
 
@@ -196,7 +226,7 @@ def topology_tag(sys_id: str) -> str:
 
     Returns 'single-tier (<fabric>)' for one-fabric specs (e.g. 8gpu /
     72gpu specs) or 'multi-tier: N <inner>-islands via <outer>' for
-    hierarchical specs (e.g. b200.16gpu / gb200.nvl576.hierarchical).
+    hierarchical specs (e.g. b200.multibox / gb200.multibox).
     Empty string if the spec can't be loaded.
 
     Used by `coverage_sweep.py` and per-stack drivers to make the
@@ -246,14 +276,13 @@ def run_framework(
     EP: int,
     SP: int,
     attention_mode: str = "tp",
-    layout: str = "orthogonal",
+    tp_ep_layout: str = "orthogonal",
     num_devices: int,
     S_decode: int,
     B_sweep: Sequence[int],
     flops_eta: float = 1.0,
     bw_eta: float = 1.0,
     c_serving_us: float = 0.0,
-    bw_efficiency: dict[int, float] | None = None,
     moe_a2a_pattern: str = "gather",
     kernel_launch_us: float | None = None,
     bytes_per_param: float | None = None,
@@ -262,27 +291,49 @@ def run_framework(
 
     `bytes_per_param` overrides the model spec's stored precision when
     provided (e.g. 0.5 for FP4, 1 for FP8). Pass None to use the spec's
-    default.
+    default. Phase F: the bw_efficiency η_β(B) and tensor_core_efficiency
+    η_TC(mb) curves now live on DeviceSpec — set them in the system JSON
+    rather than passing through the wrapper.
     """
+    from llm_perf.specs import FrameworkSpec  # local import to avoid cycle in some configs
+
     m = load_model_from_db(model)
     if bytes_per_param is not None:
         m = dataclasses.replace(m, bytes_per_param=bytes_per_param)
     s = system_with_eta(load_system_from_db(system_id), num_devices=num_devices,
                         flops_eta=flops_eta, bw_eta=bw_eta)
-    p = PartitionSpec(PP=PP, TP=TP, EP=EP, SP=SP,
-                      attention_mode=attention_mode, layout=layout)
+    p = PartitionSpec(PP=PP, TP=TP, EP=EP, SP=SP)
+
+    # Build a FrameworkSpec from the per-driver knobs. Phase H: attention_mode
+    # and layout flow here from the driver since they're stack-axis decisions
+    # (not sharding-factor decisions). Other framework fields fall to
+    # FrameworkSpec defaults — sw_overlap_factor=1, mla_mode='absorbed',
+    # inc_enabled=True, kernels_per_*=defaults.
+    fw_kwargs = dict(
+        name="benchmark-driver",
+        attention_mode=attention_mode,
+        tp_ep_layout=tp_ep_layout,
+        c_serving_per_seq_us=c_serving_us,
+        moe_a2a_pattern=moe_a2a_pattern,
+        # InferenceX measurements were not captured with SHARP-class INC
+        # engaged; opt out explicitly so the cost model picks SW even when
+        # the fabric advertises inc != "none" (e.g. NVL72 NVSwitch5 is NVLS-
+        # capable hardware but production Dynamo+TRT/SGLang runs did not
+        # enable it during the measurement window). Notebooks that *do* study
+        # INC effects (pareto_collective_algorithms, pareto_vs_kernel_launch,
+        # pareto_vs_mem_alpha*) construct their own FrameworkSpec with
+        # `inc_enabled=True` and explicit `tp_algorithm_decode="auto"`.
+        inc_enabled=False,
+    )
+    if kernel_launch_us is not None:
+        fw_kwargs["kernel_launch_us"] = kernel_launch_us
+    framework = FrameworkSpec(**fw_kwargs)
 
     out: list[FrameworkPoint] = []
     for B in B_sweep:
-        kw = dict(S_decode=S_decode, B_decode=B,
-                  t_serving_per_seq_us=c_serving_us,
-                  bw_efficiency=bw_efficiency,
-                  moe_a2a_pattern=moe_a2a_pattern)
-        if kernel_launch_us is not None:
-            kw["kernel_launch_us"] = kernel_launch_us
-        t = TuningSpec(**kw)
+        t = TuningSpec(S_decode=S_decode, B_decode=B)
         try:
-            r = InferenceCalculator(m, s, p, t).run()
+            r = InferenceCalculator(m, s, p, t, framework).run()
         except Exception as e:  # don't kill the sweep on one bad B
             print(f"  ERROR at B={B}: {e}", file=sys.stderr)
             continue
@@ -324,14 +375,13 @@ def predict_at(
     system_id: str,
     PP: int, TP: int, EP: int, SP: int,
     attention_mode: str = "tp",
-    layout: str = "orthogonal",
+    tp_ep_layout: str = "orthogonal",
     num_devices: int,
     S_decode: int,
     B: int,
     flops_eta: float = 1.0,
     bw_eta: float = 1.0,
     c_serving_us: float = 0.0,
-    bw_efficiency: dict[int, float] | None = None,
     moe_a2a_pattern: str = "gather",
     kernel_launch_us: float | None = None,
     bytes_per_param: float | None = None,
@@ -340,11 +390,11 @@ def predict_at(
     pts = run_framework(
         model=model, system_id=system_id,
         PP=PP, TP=TP, EP=EP, SP=SP,
-        attention_mode=attention_mode, layout=layout,
+        attention_mode=attention_mode, tp_ep_layout=tp_ep_layout,
         num_devices=num_devices, S_decode=S_decode,
         B_sweep=[B],
         flops_eta=flops_eta, bw_eta=bw_eta, c_serving_us=c_serving_us,
-        bw_efficiency=bw_efficiency, moe_a2a_pattern=moe_a2a_pattern,
+        moe_a2a_pattern=moe_a2a_pattern,
         kernel_launch_us=kernel_launch_us,
         bytes_per_param=bytes_per_param,
     )

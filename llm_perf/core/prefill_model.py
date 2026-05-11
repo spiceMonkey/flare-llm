@@ -1,6 +1,8 @@
 
 import math
 from dataclasses import dataclass
+from typing import Optional
+from ..specs.framework_spec import FrameworkSpec
 from ..specs.model_spec import LlmModelSpec
 from ..specs.system_spec import SystemSpec
 from ..specs.partition_spec import PartitionSpec
@@ -87,6 +89,7 @@ def compute_prefill_flops(
     model: LlmModelSpec,
     partition: PartitionSpec,
     tuner: TuningSpec,
+    framework: FrameworkSpec,
 ) -> PrefillFlopsResults:
     """Per-device prefill FLOPs. Doc: documentation/modeling/prefill.md §1.5
 
@@ -94,6 +97,8 @@ def compute_prefill_flops(
     `linear_flops_per_token` primitive scaled by S_input. Attention is
     phase-specific (S² scaling) and stays inline.
     """
+
+    fw = framework
 
     L = model.L
     H = model.H
@@ -103,7 +108,7 @@ def compute_prefill_flops(
     I_dense = model.I_dense
 
     # Linear FLOPs for the full pass: per-token contribution × S_input tokens
-    F_linear_device = linear_flops_per_token(model, partition, tuner) * S
+    F_linear_device = linear_flops_per_token(model, partition, fw) * S
 
     # Attention FLOPs (score + value, per pass: per-token form scaled by S
     # query positions). GQA / MHA: 4·S²·H per layer / (D_kv·SP). MLA:
@@ -112,11 +117,11 @@ def compute_prefill_flops(
     if model.mla is not None:
         from .primitives.mla_flops import mla_score_value_flops_per_layer_per_device
         F_sv_per_layer_per_device_per_token = (
-            mla_score_value_flops_per_layer_per_device(model, partition, S, tuner.mla_mode)
+            mla_score_value_flops_per_layer_per_device(model, partition, fw, S, fw.mla_mode)
         )
         F_attn_device = (L / PP) * F_sv_per_layer_per_device_per_token * S / SP
     else:
-        F_attn_device = (L / PP) * (4 * S**2 * H) / (D_kv(partition) * SP)
+        F_attn_device = (L / PP) * (4 * S**2 * H) / (D_kv(partition, fw) * SP)
 
     F_prefill_device = F_linear_device + F_attn_device
 
@@ -135,10 +140,10 @@ def compute_prefill_flops(
         # which gives the unsharded form. Keep it simple: use per-device with
         # current partition (not strictly "unsharded" but matches the post-
         # MLA convention of "what the partition produces").
-        F_proj_per_token = mla_proj_flops_per_layer_per_device(model, partition, tuner.mla_mode)
+        F_proj_per_token = mla_proj_flops_per_layer_per_device(model, partition, fw, fw.mla_mode)
         F_proj = F_proj_per_token * S
         F_attn = mla_score_value_flops_per_layer_per_device(
-            model, partition, S, tuner.mla_mode
+            model, partition, fw, S, fw.mla_mode
         ) * S
     else:
         H_kv = model.H_kv()
@@ -164,6 +169,7 @@ def compute_prefill_traffic(
     model: LlmModelSpec,
     partition: PartitionSpec,
     tuner: TuningSpec,
+    framework: FrameworkSpec,
 ) -> PrefillTrafficResults:
     """Per-device HBM traffic for prefill pass."""
 
@@ -171,11 +177,12 @@ def compute_prefill_traffic(
 
     # Weight read traffic (same as decode — weights loaded once per pass)
     T_theta_device = (
-        dense_weight_bytes(model, partition) + moe_weight_bytes(model, partition)
+        dense_weight_bytes(model, partition, framework)
+        + moe_weight_bytes(model, partition, framework)
     )
 
     # KV cache write traffic: writing S_input KV entries for one sequence
-    T_kv_write_device = kv_bytes_per_seq(model, partition, S)
+    T_kv_write_device = kv_bytes_per_seq(model, partition, framework, S)
 
     T_prefill_device = T_theta_device + T_kv_write_device
 
@@ -195,6 +202,7 @@ def compute_prefill_comm(
     system: SystemSpec,
     partition: PartitionSpec,
     tuner: TuningSpec,
+    framework: FrameworkSpec,
     *,
     tokens_per_step: int | None = None,
 ) -> PrefillCommResults:
@@ -221,9 +229,10 @@ def compute_prefill_comm(
     g_TP = G_TP(partition)
     g_EP = G_EP(partition)
 
-    n_TP = tuner.n_TP_collectives
-    n_EP = tuner.n_EP_collectives
-    n_SP = tuner.n_SP_collectives
+    fw = framework
+    n_TP = fw.n_TP_collectives
+    n_EP = fw.n_EP_collectives
+    n_SP = fw.n_SP_collectives
 
     # Resolve EP group size up front so the dispatcher sees the correct radix.
     if model.moe is not None:
@@ -234,17 +243,17 @@ def compute_prefill_comm(
         g_EP = 1
         k_active = 1
 
-    # Prefill reads the per-phase fields; falls back to legacy single-knob.
-    tp_algorithm = getattr(tuner, "tp_algorithm_prefill",
-                           getattr(tuner, "tp_algorithm", "ring")).lower()
-    ep_algorithm = getattr(tuner, "ep_algorithm_prefill",
-                           getattr(tuner, "ep_algorithm", "ring")).lower()
-    torus_alg = getattr(tuner, "torus_algorithm", "ring").lower()
-    inc_enabled = bool(getattr(tuner, "inc_enabled", True))
+    # Algorithm selection lives on FrameworkSpec (Phase E). Prefill reads
+    # the per-phase fields directly; "auto" must have been resolved by
+    # `optimize_collective_algorithms` upstream.
+    tp_algorithm = fw.tp_algorithm_prefill.lower()
+    ep_algorithm = fw.ep_algorithm_prefill.lower()
+    torus_alg = fw.torus_algorithm.lower()
+    inc_enabled = fw.inc_enabled
 
     if tp_algorithm == "auto" or ep_algorithm == "auto":
         raise ValueError(
-            "TuningSpec has algorithm='auto' for prefill; resolve via "
+            "FrameworkSpec has algorithm='auto' for prefill; resolve via "
             "core.collective_algo_opt.optimize_collective_algorithms(...) "
             "before InferenceCalculator.run()."
         )
@@ -260,10 +269,10 @@ def compute_prefill_comm(
     # decode.md §5.1 and prefill.md §3.2). Cost at the *correct* fabric tier
     # under nested-layout rule (see decode_model.compute_comm for the full
     # rationale and partition_layout.py for the helper).
-    d_kv = D_kv(partition)
+    d_kv = D_kv(partition, fw)
     if PP > 1:
         msg_PP = (tokens * H / d_kv) * b
-        pp_tier_idx = assign_tier_per_axis(partition, system, role="PP")["PP"]
+        pp_tier_idx = assign_tier_per_axis(partition, fw, system, role="PP")["PP"]
         pp_tier = tier_at(system, "PP", pp_tier_idx)
         t_PP = p2p_hop(msg_PP, pp_tier.alpha_us * 1e-6, pp_tier.bw_per_port_GBps * 1e9)
     else:
@@ -279,10 +288,11 @@ def compute_prefill_comm(
         msg_TP = 0.0
 
     # DP-attention swap (decode.md §5.3 + prefill.md §3.2): under
-    # attention_mode="dp" the per-layer attention TP all-reduce is replaced
-    # by a single TP all-gather at the attention → FFN transition. The FFN's
-    # TP all-reduce remains. Per-stage adjustment after aggregate_per_stage.
-    if g_TP > 1 and partition.attention_mode == "dp":
+    # framework.attention_mode="dp" the per-layer attention TP all-reduce is
+    # replaced by a single TP all-gather at the attention → FFN transition.
+    # The FFN's TP all-reduce remains. Per-stage adjustment after
+    # aggregate_per_stage.
+    if g_TP > 1 and fw.attention_mode == "dp":
         t_TP_AG = _cost("TP", "all_gather", msg_TP, g_TP)
     else:
         t_TP_AG = 0.0
@@ -292,8 +302,8 @@ def compute_prefill_comm(
     #   "gather" (default) — full per-step tokens per rank
     #   "scatter" + DP-attn — tokens / G_TP per rank (~G_TP× reduction)
     scatter_direct = (
-        getattr(tuner, "moe_a2a_pattern", "gather") == "scatter"
-        and partition.attention_mode == "dp"
+        fw.moe_a2a_pattern == "scatter"
+        and fw.attention_mode == "dp"
         and g_TP > 1
     )
     if g_EP > 1:
@@ -357,8 +367,11 @@ def compute_prefill_latency(
     flops: PrefillFlopsResults,
     traffic: PrefillTrafficResults,
     comm: PrefillCommResults,
+    framework: FrameworkSpec,
 ) -> PrefillLatencyResults:
     """Hardware prefill latency: single-request, batched, and chunked."""
+
+    fw = framework
 
     # Precision-aware compute peak (see decode_model.effective_peak_flops_TF):
     # peak_flops_TF in system spec is FP16 dense per chip; the working
@@ -368,8 +381,8 @@ def compute_prefill_latency(
 
     PP = partition.PP
     SP = partition.SP
-    rho = tuner.overlap_factor
-    rho_SW = tuner.sw_overlap_factor
+    rho = fw.comm_overlap_factor
+    rho_SW = fw.sw_overlap_factor
 
     # Collective group sizes (notation.md §1) for kernel-launch SW count
     # axis-presence guards. Equal to TP and EP across all three production
@@ -380,14 +393,14 @@ def compute_prefill_latency(
 
     # Abstract sharding factors (notation.md §1) for the LM head and chunked
     # prefill formulas. d_kv composes with SP for KV-attention divisors.
-    d_attn_pf = D_attn(partition)
-    d_kv_pf = D_kv(partition)
+    d_attn_pf = D_attn(partition, fw)
+    d_kv_pf = D_kv(partition, fw)
     d_emb_pf = D_emb(partition)
     if model.moe is not None:
-        d_exp_pf_moe = D_exp(partition, layer_kind="moe", n_exp_cap=max(1, model.moe.n_experts))
+        d_exp_pf_moe = D_exp(partition, fw, layer_kind="moe", n_exp_cap=max(1, model.moe.n_experts))
     else:
-        d_exp_pf_moe = D_exp(partition, layer_kind="dense")
-    d_exp_pf_dense = D_exp(partition, layer_kind="dense")
+        d_exp_pf_moe = D_exp(partition, fw, layer_kind="dense")
+    d_exp_pf_dense = D_exp(partition, fw, layer_kind="dense")
 
     S = tuner.S_input
     B_pf = tuner.B_prefill
@@ -407,26 +420,26 @@ def compute_prefill_latency(
     # The PP-hop term uses the middle-stage 2× factor (recv + send) by
     # default; edge stages do only one direction (off by one k_pp_hop·τ,
     # negligible at PP >> 1).
-    n_TP_calls = tuner.n_TP_collectives if g_TP_pf > 1 else 0
+    n_TP_calls = fw.n_TP_collectives if g_TP_pf > 1 else 0
     # n_EP_collectives counts NCCL API calls directly (dispatch + combine
     # = 2 per MoE layer); see decode_model._t_SW_per_microbatch. EP launches
     # only fire on MoE layers — split the layer term into dense + MoE
     # contributions, matching the L_moe/PP factor in §5.5's t_comm formula.
-    n_EP_calls = tuner.n_EP_collectives if g_EP_pf > 1 else 0
-    n_SP_calls = tuner.n_SP_collectives if SP > 1 else 0
+    n_EP_calls = fw.n_EP_collectives if g_EP_pf > 1 else 0
+    n_SP_calls = fw.n_SP_collectives if SP > 1 else 0
     if model.moe is not None:
         L_moe_total = model.moe.n_moe_layers if model.moe.n_moe_layers else L
     else:
         L_moe_total = 0
-    k_dense = tuner.kernels_per_layer_compute + tuner.kernels_per_collective_call * (n_TP_calls + n_SP_calls)
-    k_moe_extra = tuner.kernels_per_collective_call * n_EP_calls
+    k_dense = fw.kernels_per_layer_compute + fw.kernels_per_collective_call * (n_TP_calls + n_SP_calls)
+    k_moe_extra = fw.kernels_per_collective_call * n_EP_calls
     layers_per_stage = L / PP if PP > 0 else L
     moe_layers_per_stage = L_moe_total / PP if PP > 0 else L_moe_total
-    k_pp_hop = tuner.kernels_per_pp_hop if PP > 1 else 0
+    k_pp_hop = fw.kernels_per_pp_hop if PP > 1 else 0
     t_SW_per_stage = (
-        layers_per_stage * k_dense * tuner.kernel_launch_us * 1e-6
-        + moe_layers_per_stage * k_moe_extra * tuner.kernel_launch_us * 1e-6
-        + k_pp_hop * tuner.kernel_launch_us * 1e-6
+        layers_per_stage * k_dense * fw.kernel_launch_us * 1e-6
+        + moe_layers_per_stage * k_moe_extra * fw.kernel_launch_us * 1e-6
+        + k_pp_hop * fw.kernel_launch_us * 1e-6
     )
 
     def _compose_SW(t_local_gpu: float) -> float:
@@ -453,7 +466,7 @@ def compute_prefill_latency(
             tiers=tiers,
             placement=tuner.placement,
         )
-        eta_beta_B = _eta_beta_at_B(tuner.bw_efficiency, max(1, B))
+        eta_beta_B = _eta_beta_at_B(system.device.bw_efficiency, max(1, B))
         return t_mem_from_placement(
             plc, B=max(1, B), tiers=tiers,
             eta_beta_curve_factor=eta_beta_B,
@@ -488,7 +501,7 @@ def compute_prefill_latency(
     # derate. Applied for consistency with decode and to capture small-S
     # corner cases.
     mb_prefill = max(1, B_pf) * max(1, S) / max(1, PP)
-    eta_TC = _eta_TC_at_mb(tuner.tensor_core_efficiency, mb_prefill)
+    eta_TC = _eta_TC_at_mb(system.device.tensor_core_efficiency, mb_prefill)
     t_prefill_compute_eff = t_prefill_compute / eta_TC if eta_TC > 0 else float("inf")
     t_prefill_mem = _t_mem(traffic.T_theta_device, traffic.T_kv_write_device, B=1)
     t_prefill_local_gpu = max(t_prefill_compute_eff, t_prefill_mem)
@@ -524,7 +537,7 @@ def compute_prefill_latency(
         # collective messages carry per-step activations whose payload grows
         # with tokens per step. α is unchanged; β (payload/BW) grows with B_pf.
         comm_batched = compute_prefill_comm(
-            model, system, partition, tuner, tokens_per_step=B_pf * S,
+            model, system, partition, tuner, fw, tokens_per_step=B_pf * S,
         )
         t_prefill_batched = (
             t_batched_local
@@ -564,7 +577,7 @@ def compute_prefill_latency(
         # α (latency term) is unchanged per chunk; β (payload) scales with C,
         # not with C/S. Linear C/S scaling underestimates α-dominated small-C.
         comm_chunk = compute_prefill_comm(
-            model, system, partition, tuner, tokens_per_step=C,
+            model, system, partition, tuner, fw, tokens_per_step=C,
         )
         t_chunk_comm = comm_chunk.t_prefill_comm
 
@@ -587,7 +600,7 @@ def compute_prefill_latency(
             # η_TC at chunk payload (mb_chunk = B_pf · C / PP). For typical
             # C the saturated curve gives 1.0 — same caveat as unchunked.
             mb_chunk = max(1, B_pf) * max(1, C) / max(1, PP)
-            eta_TC_chunk = _eta_TC_at_mb(tuner.tensor_core_efficiency, mb_chunk)
+            eta_TC_chunk = _eta_TC_at_mb(system.device.tensor_core_efficiency, mb_chunk)
             t_chunk_compute_eff_k = t_chunk_compute_k / eta_TC_chunk if eta_TC_chunk > 0 else float("inf")
             t_chunk_local_gpu_k = max(t_chunk_compute_eff_k, t_chunk_mem_k)
             t_chunk_local_k = _compose_SW(t_chunk_local_gpu_k)
