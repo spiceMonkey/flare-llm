@@ -5,7 +5,7 @@
   "L": 61,
   "H": 7168,
   "n_q": 128,
-  "n_kv": 5,
+  "n_kv": 128,
   "I_dense": 18432,
   "vocab_size": 129280,
   "max_seq_len": 163840,
@@ -18,7 +18,14 @@
     "n_moe_layers": 60
   },
 
-  "_comment_n_kv": "MLA approximation: real KV cache = (d_c=512 + d_rope=64)/2 = 288 per head-pair; n_kv=5 gives H_kv=280 (~3% under). MLA stores compressed latent, not separate K/V heads.",
-  "_comment_k_active": "8 routed experts + 1 shared expert (always active). Shared expert approximated by k=9.",
-  "_comment_n_q": "MLA uses d_head=56 (=7168/128) for the base, but Q projects to d_h=128 internally. Attention FLOPs are approximate."
+  "mla": {
+    "d_c": 512,
+    "d_q_c": 1536,
+    "d_qk_nope": 128,
+    "d_qk_rope": 64,
+    "d_v": 128
+  },
+
+  "_comment_mla": "Multi-head Latent Attention (DSv3-style). With mla set, KV cache uses (d_c + d_qk_rope)·b = 576 bytes/tok/layer at FP8 (vs the prior n_kv=5 approximation that gave ~280); per-layer attention parameters use the 6-matrix sum from attention.md §3.3 (~187 M/layer) instead of the GQA approximation (~109 M/layer). The n_kv field is retained at the canonical n_q value but is ignored when mla is set; it falls back to GQA behavior only if mla is removed.",
+  "_comment_k_active": "8 routed experts + 1 shared expert (always active). Shared expert approximated by k=9."
 }

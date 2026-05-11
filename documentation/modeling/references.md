@@ -29,6 +29,12 @@ ICML 2022. arXiv:2201.05596.
 
 ## Attention and Memory Efficiency
 
+**[VASWANI17]**  
+Vaswani, A., et al. (2017).  
+*Attention Is All You Need.*  
+NeurIPS 2017. arXiv:1706.03762. https://arxiv.org/abs/1706.03762  
+→ The original Transformer paper that introduced multi-head attention. Source for the canonical MHA formulation cited in `attention.md §1.1`.
+
 **[FA1]**  
 Dao, T., Fu, D.Y., Ermon, S., Rudra, A., & Ré, C. (2022).  
 *FlashAttention: Fast and Memory-Efficient Exact Attention with IO-Awareness.*  
@@ -52,6 +58,96 @@ Shazeer, N. (2019).
 *Fast Transformer Decoding: One Write-Head is All You Need.*  
 arXiv:1911.02150.  
 → Multi-query attention origin; $n_{kv}=1$.
+
+**[LI-MLA]**  
+Li, S. (2025).  
+*DeepSeek-V3 Explained 1: Multi-head Latent Attention.*  
+Towards Data Science (January 31, 2025). https://towardsdatascience.com/deepseek-v3-explained-1-multi-head-latent-attention-ed6bee2a67c4/  
+→ Pedagogical explainer of MLA in the context of the MHA → MQA → GQA → MLA progression. Reuses the canonical [GQA] Fig. 1 head-sharing comparison (as its own Fig. 3) to motivate why GQA / MQA are interpolations of MHA. Informs the head-sharing visualization in `attention.md §2.1` and the MHA → GQA → MLA narrative arc across §1–§3.
+
+**[LONGFORMER]**  
+Beltagy, I., Peters, M. E., & Cohan, A. (2020).  
+*Longformer: The Long-Document Transformer.*  
+arXiv:2004.05150. https://arxiv.org/abs/2004.05150  
+→ First production-grade introduction of the sliding-window attention pattern (with optional global-attention tokens for cross-document tasks). Establishes the $O(S \cdot W)$ scaling of windowed attention vs $O(S^2)$ for full attention. Source for the SWA mask design referenced in `attention.md §4.1`.
+
+**[MISTRAL7B]**  
+Jiang, A. Q., et al. (2023).  
+*Mistral 7B.*  
+arXiv:2310.06825. https://arxiv.org/abs/2310.06825  
+→ First widely-deployed dense LLM using sliding-window attention as the per-layer attention primitive ($W = 4096$, all 32 layers SWA, GQA at $n_{kv} = 8$). Source for the worked example in `attention.md §4.7` and the architectural baseline for the pure-SWA design point.
+
+**[GEMMA2]**  
+Gemma Team, Google DeepMind (2024).  
+*Gemma 2: Improving Open Language Models at a Practical Size.*  
+arXiv:2408.00118. https://arxiv.org/abs/2408.00118  
+→ Introduces the 1:1 interleaved sliding-window + full-attention pattern across alternating layers ($W = 4096$). Establishes interleaved SWA as a production design that balances local efficiency with global routing. Cited in `attention.md §4.1` and §4.7.
+
+**[GEMMA3]**  
+Gemma Team, Google DeepMind (2025).  
+*Gemma 3 Technical Report.*  
+Google DeepMind (March 2025). https://goo.gle/Gemma3Report  
+→ Refines the interleaved pattern to a 5:1 SWA:full ratio with a smaller $W = 1024$, demonstrating that very few full-attention layers (~17 % of $L$) suffice for global routing. Source for the Gemma 3 27B numbers in `attention.md §4.7`.
+
+**[GPT-OSS]**  
+OpenAI (2025).  
+*GPT-OSS Model Card.*  
+OpenAI (2025). https://openai.com/research/gpt-oss  
+→ Open-weight model family using interleaved sliding-window + full-attention layers with attention-sink tokens. Mentioned in `attention.md §4.1` as a representative interleaved-SWA production design.
+
+**[STREAMINGLLM]**  
+Xiao, G., Tian, Y., Chen, B., Han, S., & Lewis, M. (2024).  
+*Efficient Streaming Language Models with Attention Sinks.*  
+ICLR 2024. arXiv:2309.17453. https://arxiv.org/abs/2309.17453  
+→ Identifies the attention-sink phenomenon and proposes retaining the first few tokens permanently in the rolling window to stabilize attention distributions when older context is evicted. Cited in `attention.md §4.1` as the mitigation pattern adopted by GPT-OSS.
+
+**[DEEPSEEK-V3.2]**  
+DeepSeek-AI (2025).  
+*DeepSeek-V3.2-Exp Technical Report.*  
+DeepSeek (October 2025). https://github.com/deepseek-ai/DeepSeek-V3.2  
+→ Introduces DeepSeek Sparse Attention (DSA): a lightning indexer scores each past token's relevance to the current query and selects the top $k_{\mathrm{attn}}$ for sparse attention. Built on top of MLA from [DSV3]. Source for `attention.md §5` (entire section).
+
+**[MAMBA]**  
+Gu, A., & Dao, T. (2023).  
+*Mamba: Linear-Time Sequence Modeling with Selective State Spaces.*  
+arXiv:2312.00752. https://arxiv.org/abs/2312.00752  
+→ Introduces selective state-space models (S6) with content-dependent state transitions and a hardware-aware parallel scan. Establishes the SSM-as-attention-replacement design point: per-token state $O(d \cdot d_{\mathrm{state}})$, no growing-with-$S$ KV cache. Cited in `attention.md §6.1` and §6.2 as the canonical SSM primary reference.
+
+**[MAMBA2]**  
+Dao, T., & Gu, A. (2024).  
+*Transformers are SSMs: Generalized Models and Efficient Algorithms Through Structured State Space Duality.*  
+ICML 2024. arXiv:2405.21060. https://arxiv.org/abs/2405.21060  
+→ Generalizes Mamba via structured state space duality (SSD), showing that SSMs and attention can be unified under a common matrix-mixing framework. The Mamba2 SSD-based recurrence is the building block used by most 2024–2025 production hybrid models (Jamba 1.5, Hymba, etc.) Cited in `attention.md §6.1`.
+
+**[JAMBA]**  
+Lieber, O., et al. (AI21 Labs, 2024).  
+*Jamba: A Hybrid Transformer-Mamba Language Model.*  
+arXiv:2403.19887. https://arxiv.org/abs/2403.19887  
+→ Production hybrid model interleaving Mamba and Transformer attention layers in a 1:7 ratio with mixture-of-experts FFN. Establishes the sparse-interleaving design pattern used in `attention.md §6` and the worked example in §6.7.
+
+**[HYMBA]**  
+NVIDIA Research (2024).  
+*Hymba: A Hybrid-head Architecture for Small Language Models.*  
+arXiv:2411.13676. https://arxiv.org/abs/2411.13676  
+→ Within-layer hybrid: each layer runs Mamba and attention heads in parallel, then concatenates outputs. Alternative to Jamba's between-layer interleaving. Cited in `attention.md §6.1` as the parallel-hybrid design point.
+
+**[MINIMAX]**  
+MiniMax (2025).  
+*MiniMax-01: Scaling Foundation Models with Lightning Attention.*  
+arXiv:2501.08313. https://arxiv.org/abs/2501.08313  
+→ Production hybrid using Lightning Attention (a linear-attention variant with chunked computation) interleaved with full-attention layers in a 1:7 ratio. Demonstrates linear-attention path as alternative to SSM in the hybrid design space. Cited in `attention.md §6.1`.
+
+**[RWKV]**  
+Peng, B., et al. (2023).  
+*RWKV: Reinventing RNNs for the Transformer Era.*  
+arXiv:2305.13048. https://arxiv.org/abs/2305.13048  
+→ Linear-attention variant with cumulative-state-update structure, framed as an RNN that can be trained in parallel like a Transformer. One of the early demonstrations of viable production-scale linear attention. Cited in `attention.md §6.1`.
+
+**[RETNET]**  
+Sun, Y., et al. (Microsoft Research, 2023).  
+*Retentive Network: A Successor to Transformer for Large Language Models.*  
+arXiv:2307.08621. https://arxiv.org/abs/2307.08621  
+→ Linear-attention variant with retention-mechanism formulation that admits both parallel (training-friendly) and recurrent (decode-friendly) modes. Cited in `attention.md §6.1` alongside [RWKV] as the linear-attention baseline.
 
 ---
 

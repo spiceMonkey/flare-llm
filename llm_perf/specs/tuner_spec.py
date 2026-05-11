@@ -89,6 +89,26 @@ class TuningSpec:
     #   torus_algorithm="swing" is reserved; raises NotImplementedError for now.
     torus_algorithm: str = "ring"
 
+    # MLA execution mode (attention.md §3.5). Inert when model has no MLA
+    # extension (`model.mla is None`).
+    #   "absorbed"     — production default. Folds W_UK / W_UV into Q / O at
+    #                    compile time so attention runs entirely in the
+    #                    d_c-dimensional latent space. Per-step attention
+    #                    score / value compute scales with d_c (larger
+    #                    constant) but skips per-step K, V reconstruction
+    #                    and avoids the transient per-head K / V buffer.
+    #                    Used by NVIDIA TensorRT-LLM and SGLang's DSv3 path.
+    #   "materialized" — reference / CPU-fallback mode. Reconstructs per-head
+    #                    K, V from the latent each step, then runs standard
+    #                    multi-head attention. Score / value compute scales
+    #                    with the smaller d_qk_nope and d_v dimensions but
+    #                    pays a fixed per-step W_UK / W_UV reconstruction
+    #                    cost and a transient per-head K / V buffer.
+    # Crossover with MLA's compute trade-off is at moderate S; production
+    # deployments at S ≳ 1K generally prefer "absorbed". See attention.md
+    # §3.7 for the exact per-mode FLOP breakdown.
+    mla_mode: str = "absorbed"
+
     # MoE A2A data-flow pattern under DP-attention (decode.md §5.2).
     #   "gather" — gather-then-dispatch (default). TP all-gather brings full
     #              B tokens to every rank before MoE, then dispatch from

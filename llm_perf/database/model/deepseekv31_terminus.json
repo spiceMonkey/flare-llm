@@ -1,13 +1,26 @@
 {
-  "H": 7168,
-  "I_dense": 18432,
-  "L": 61,
-  "bytes_per_param": 1,
-  "max_seq_len": 163840,
-  "moe": null,
-  "n_kv": 128,
-  "n_q": 128,
-  "name": "deepseek_v3",
   "schema": "llm_perf.model",
-  "vocab_size": 129280
+  "name": "deepseek_v3_1_terminus",
+
+  "L": 61,
+  "H": 7168,
+  "n_q": 128,
+  "n_kv": 128,
+  "I_dense": 18432,
+  "vocab_size": 129280,
+  "max_seq_len": 163840,
+  "bytes_per_param": 1,
+
+  "moe": null,
+
+  "mla": {
+    "d_c": 512,
+    "d_q_c": 1536,
+    "d_qk_nope": 128,
+    "d_qk_rope": 64,
+    "d_v": 128
+  },
+
+  "_comment_mla": "Multi-head Latent Attention (DSv3 family). Same MLA dimensions as DeepSeek-R1 / V3.x family. n_kv is the canonical n_q value but is ignored when mla is present.",
+  "_comment_moe": "moe is null in this dense reference config — DSv3.1-Terminus production weights are MoE-shaped; this entry models only the dense layer slice for shape-only experiments."
 }

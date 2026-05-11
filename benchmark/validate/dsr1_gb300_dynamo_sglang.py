@@ -44,8 +44,17 @@ ISL, OSL = 1024, 1024
 # (TP=4 EP=1, EP-inert) is harder to fit at small B (kernel-launch floor
 # dominates 4-token decode); ~38% MAE there is structural and not
 # improvable with current knobs. Overall ~17% MAE across both cuts.
+#
+# Recalibrated post-MLA-migration (mla(stage 1-3): real MLASpec on
+# deepseek_r1_0528). Previous (0.9, 1.0) gave 70.4% overall MAE; new
+# (0.9, 0.0) gives 57.7% / max 242.5%. Same root cause as the other
+# Dynamo drivers: c_serving 1→0 since Dynamo+SGLang absorbs per-seq
+# work into the orchestrator. Note this driver still has high residual
+# MAE — the colocated TP=EP=32, 48 cells at B≥4000 are structurally
+# over-predicted (likely a shared-MoE / DeepEP hot-path the framework
+# doesn't yet model precisely); not addressable via the per-stack knobs.
 DEFAULT_BW_ETA = 0.9
-DEFAULT_C_SERVING_US = 1.0
+DEFAULT_C_SERVING_US = 0.0
 DEFAULT_KERNEL_LAUNCH_US = 12.0
 DEFAULT_MOE_A2A_PATTERN = "scatter"
 

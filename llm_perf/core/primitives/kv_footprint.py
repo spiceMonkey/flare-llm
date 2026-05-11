@@ -29,10 +29,28 @@ def kv_bytes_per_seq(
     partition: PartitionSpec,
     n_tokens: int,
 ) -> float:
-    """Per-device KV bytes for a single sequence of length n_tokens."""
+    """Per-device KV bytes for a single sequence of length n_tokens.
+
+    Branches on attention variant and mode (`attention.md §3.4 / §3.6`):
+    - GQA / MHA: `2 · H_kv · b` per token per layer, divided by D_kv
+      (head-shard under TP-attn, sequence-shard under DP-attn — same
+      byte count).
+    - MLA + DP-attn: head-shared latent `(d_c + d_qk_rope) · b` per token
+      per layer, divided by D_kv (sequence-shard across the DP-attn group
+      — same B/G_TP semantics as GQA).
+    - MLA + TP-attn: latent is replicated on every rank (not
+      head-structured). No D_kv divisor — only SP still applies.
+    """
     L = model.L
-    H_kv = model.H_kv()
     b = model.bytes_per_param
     PP = partition.PP
     SP = partition.SP
+
+    if model.mla is not None:
+        per_tok_per_layer = model.mla.kv_bytes_per_token_per_layer(b)
+        if partition.attention_mode == "tp":
+            return (L / PP) * (n_tokens * per_tok_per_layer) / SP
+        return (L / PP) * (n_tokens * per_tok_per_layer) / (D_kv(partition) * SP)
+
+    H_kv = model.H_kv()
     return (L / PP) * (2 * n_tokens * H_kv * b) / (D_kv(partition) * SP)

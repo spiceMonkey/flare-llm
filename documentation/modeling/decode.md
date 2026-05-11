@@ -141,6 +141,8 @@ $$
 P_{\text{attn}} = P_Q + P_K + P_V + P_O
 $$
 
+> **Variant note.** Models with non-MHA attention (Multi-head Latent Attention (MLA), sliding-window attention, DeepSeek Sparse Attention (DSA), hybrid linear / full attention) substitute a different $P_{\text{attn}}$ formula here. Per-variant decompositions and worked examples are in `attention.md` (e.g. `attention.md §3.3` for MLA's six-matrix per-layer parameter sum). The `decode.md` outer composition (per-device sharding, multi-layer aggregation, traffic, FLOPs roll-up) is unchanged — only this term is replaced.
+
 ### Unified FFN Parameters (Dense or MoE)
 
 Each transformer layer contains an FFN module. In modern LLM architectures, this FFN is almost
@@ -256,6 +258,8 @@ For a single attention layer, the KV cache consists of:
 - Values: $V \in \mathbb{R}^{S \times H_{kv}}$
 
 The KV cache size scales with $H_{kv} = n_{kv} d_{\text{head}}$; using grouped-query attention ($n_{kv} < n_q$) [GQA] or multi-query attention ($n_{kv} = 1$) [MQA] directly reduces this footprint.
+
+> **Variant note.** Multi-head Latent Attention (MLA) further compresses the per-token KV cache by storing a head-shared latent of dimension $d_c + d_{qk,\mathrm{rope}}$ instead of $2 H_{kv}$. For DSv3-class numbers this is roughly 25× smaller than the dense MHA equivalent. See `attention.md §3.4` for the MLA per-token-per-layer formula and `attention.md §3.6` for sharding behavior under TP-attn / DP-attn.
 
 Thus, the total KV elements for one layer are:
 
@@ -564,6 +568,8 @@ T_{\theta,\text{attn}} =
 \frac{P_{\text{attn}} \, b}{D_{\text{attn}}}
 $$
 
+> **Variant note.** For Multi-head Latent Attention (MLA) models, $P_{\text{attn}}$ above is the per-layer MLA parameter sum from `attention.md §3.3`; the per-rank sharding split also differs ($W_{DQ}$, $W_{DKV}$ are not head-shared) and is given by `attention.md §3.6`.
+
 ### FFN parameter traffic
 
 Similarly, the FFN parameters $P_{\text{FFN}}$ are sharded by $D_{\text{exp}}$. Although fused kernels (e.g., FlashMLP) avoid writing intermediate activations (like the gate tensor) to HBM, they still require reading the gate, up, and down projection weights fully.
@@ -662,6 +668,8 @@ T_{\text{KV,layer}}
 \approx
 2 S H_{kv} \, b \quad \text{(per sequence, per layer)}
 $$
+
+> **Variant note.** Multi-head Latent Attention (MLA) replaces $2 H_{kv}$ above with the head-shared latent dimension $(d_c + d_{qk,\mathrm{rope}})$, typically 25× smaller than the equivalent dense MHA. See `attention.md §3.4`.
 
 KV is sharded by $D_{\text{kv}}$ (head or sequence depending on layout/mode; see the §2 intro table above) and by $SP$ (sequence parallelism, when enabled). Each device sees a $\frac{1}{D_{\text{kv}} \cdot SP}$ shard of the per-layer traffic.
 
@@ -770,6 +778,8 @@ F_{\text{proj}} = 4H^2 + 4H H_{kv}
 $$
 
 If $H_{kv} = H$ (MHA), this reduces to $8H^2$.
+
+> **Variant note.** Multi-head Latent Attention (MLA) replaces the projection FLOPs above with the down / up-projection cascade detailed in `attention.md §3.7` ($W_{DQ}$, $W_{UQ}$, $W_{DKV}$, $W_O$ plus optional $W_{UK}$, $W_{UV}$ depending on execution mode). The per-step total differs structurally between materialized and absorbed modes; both are given in `attention.md §3.5` (execution modes) and `§3.7` (per-mode FLOP breakdown).
 
 ## 3.2 Attention Scores and Value Application
 

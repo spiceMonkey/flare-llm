@@ -1,0 +1,44 @@
+flowchart TD
+    h["Embedded token input<br/>h ∈ ℝ^H"]:::tok
+    h --> WDQ
+    h --> WDKV
+
+    WDQ["W_DQ<br/>H × d_q,c"]:::wtdown
+    WDKV["W_DKV<br/>H × (d_c + d_qk,rope)"]:::wtdown
+
+    WDQ --> cQ["c_Q<br/>dim d_q,c"]:::lat
+    WDKV --> cKV["c_KV<br/>dim d_c + d_qk,rope"]:::lat
+
+    cKV -. "append" .-> KV
+    KV[("KV cache<br/>(d_c + d_qk,rope)·b<br/>only the latent")]:::cache
+
+    cQ --> WUQ
+    KV ==> |"read c_KV"| WUK
+    KV ==> |"read c_KV"| WUV
+
+    WUQ["W_UQ<br/>d_q,c × n_q·d_qk"]:::wtup
+    WUK["W_UK<br/>d_c × n_q·d_qk,nope"]:::wtup
+    WUV["W_UV<br/>d_c × n_q·d_v"]:::wtup
+
+    WUQ --> Q["Q<br/>n_q × d_qk"]:::q
+    WUK --> K["K<br/>n_q × d_qk"]:::k
+    WUV --> V["V<br/>n_q × d_v"]:::v
+
+    Q --> Attn
+    K --> Attn
+    V --> Attn
+    Attn["Attention(Q, K, V)<br/>score: q_nope·k_nope + shared q_rope·k_rope; value: V"]:::attn
+
+    Attn --> WO["W_O<br/>n_q·d_v × H"]:::wt
+    WO --> o["Embedded token output<br/>o ∈ ℝ^H"]:::tok
+
+    classDef tok fill:#B3D9FF,stroke:#1976D2,stroke-width:2px,color:#0D47A1
+    classDef wt fill:#ECEFF1,stroke:#546E7A,color:#263238
+    classDef wtdown fill:#CFD8DC,stroke:#455A64,color:#263238
+    classDef wtup fill:#E0E0E0,stroke:#616161,color:#212121
+    classDef lat fill:#D1C4E9,stroke:#5E35B1,color:#311B92
+    classDef q fill:#FFCDD2,stroke:#C62828,color:#B71C1C
+    classDef k fill:#C8E6C9,stroke:#2E7D32,color:#1B5E20
+    classDef v fill:#FFF9C4,stroke:#F57F17,color:#F57F17
+    classDef cache fill:#F8BBD0,stroke:#AD1457,stroke-width:3px,color:#880E4F
+    classDef attn fill:#FFE0B2,stroke:#E65100,stroke-width:2px,color:#BF360C
