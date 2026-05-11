@@ -119,12 +119,12 @@ def system_for(hw: str, dec_gpu: int) -> str | None:
 # fall back by stack class.
 
 CALIBRATED = {
-    # Calibrated by dsr1_gb300_dynamo_sglang.py (~17% MAE)
-    ("gb300", "dynamo-sglang"): dict(bw_eta=0.9, c_serving=1.0, kernel_launch=12.0, pattern="scatter"),
-    # Calibrated by dsr1_gb300_dynamo_trt.py (~18% MAE)
-    ("gb300", "dynamo-trt"):    dict(bw_eta=1.0, c_serving=5.0, kernel_launch=7.0,  pattern="scatter"),
-    # Calibrated by dsr1_gb200_dynamo_trt.py (~21% MAE across 4 cuts)
-    ("gb200", "dynamo-trt"):    dict(bw_eta=0.6, c_serving=5.0, kernel_launch=7.0,  pattern="scatter"),
+    # Recalibrated by dsr1_gb300_dynamo_sglang.py post-MLA-migration (~58% MAE)
+    ("gb300", "dynamo-sglang"): dict(bw_eta=0.9, c_serving=0.0, kernel_launch=12.0, pattern="scatter"),
+    # Recalibrated by dsr1_gb300_dynamo_trt.py post-MLA-migration (~20% MAE)
+    ("gb300", "dynamo-trt"):    dict(bw_eta=1.0, c_serving=0.0, kernel_launch=7.0,  pattern="scatter"),
+    # Recalibrated by dsr1_gb200_dynamo_trt.py post-MLA-migration (~23% MAE across 4 cuts)
+    ("gb200", "dynamo-trt"):    dict(bw_eta=0.5, c_serving=0.0, kernel_launch=7.0,  pattern="scatter"),
     # Calibrated by gpt_oss_120b_gb200_dynamo_trt.py (~9% MAE)
     ("gb200", "dynamo-trt-oss"): dict(bw_eta=1.0, c_serving=22.0, kernel_launch=1.5, pattern="gather"),
     # Calibrated by llama3_70b_b200_trt.py (~27% MAE)
@@ -135,14 +135,22 @@ CALIBRATED = {
 
 # Stack-class fallbacks used when (hw, fw) isn't in CALIBRATED. Roughly
 # matches `decode.md §7.2` per-stack c_serving table; bw_eta picks per
-# chip class from `decode.md §6.2`.
+# chip class from `decode.md §6.2`. Updated post-MLA-migration: the
+# Dynamo-orchestrator stacks absorb per-seq host work into the CUDA-graph
+# launch, so c_serving for the dynamo-* family is set to 0 (the prior
+# 2-5 µs values over-counted at large B once MLA's correct higher
+# M_theta and KV-on-TP-attn pushed predicted t_step up).
 STACK_CLASS = {
     # Aggressively-fused C++/CUDA-Graph runtimes wrapped by an orchestrator.
-    # Low c_serving — the orchestrator absorbs per-step bookkeeping into
-    # one CUDA-Graph launch; per-sequence overhead is the irreducible
-    # sampling/block-table work only.
-    "dynamo-trt":     dict(c_serving=5.0,   kernel_launch=7.0,  pattern="scatter"),
-    "dynamo-sglang":  dict(c_serving=2.0,   kernel_launch=12.0, pattern="scatter"),
+    # c_serving = 0 — the orchestrator absorbs per-step bookkeeping
+    # entirely into one CUDA-Graph launch; per-sequence overhead is
+    # negligible vs the per-step kernel-launch budget.
+    "dynamo-trt":     dict(c_serving=0.0,   kernel_launch=7.0,  pattern="scatter"),
+    "dynamo-sglang":  dict(c_serving=0.0,   kernel_launch=12.0, pattern="scatter"),
+    # dynamo-vllm kept at 2.0 — DSv4-Pro on gb200/dynamo-vllm regresses
+    # at 0.0 (29.8% → 33.2% MAE) so the prior 2.0 default is a better
+    # fit for that stack. Less evidence than dynamo-trt/sglang since the
+    # DSv3-individual drivers don't cover dynamo-vllm cuts.
     "dynamo-vllm":    dict(c_serving=2.0,   kernel_launch=12.0, pattern="scatter"),
     # Raw C++ runtimes (no orchestrator).
     "trt":            dict(c_serving=50.0,  kernel_launch=1.5,  pattern="gather"),

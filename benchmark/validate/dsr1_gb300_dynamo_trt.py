@@ -48,8 +48,17 @@ ISL, OSL = 1024, 1024
 # Blackwell Ultra HBM3e under TRT-LLM appears to sustain very close to
 # nameplate peak, in contrast to gb200/dynamo-trt where bw_eta ≈ 0.7
 # fit better (likely a controller / kernel-fusion improvement).
+#
+# Recalibrated post-MLA-migration (mla(stage 1-3): real MLASpec on
+# deepseek_r1_0528). Previous (1.0, 5.0) gave 42.1% overall MAE with a
+# 111% outlier at TP=EP=16 B=4301; new (1.0, 0.0) gives 20.3% / max
+# 35.5%. Same root cause as the GB200 driver: the c_serving=5 µs/seq
+# term over-counts host overhead for Dynamo+TRT, especially at the
+# large-B co-located cells (TP=EP=16, 32 at B≥4000). bw_eta is unchanged
+# because gb300 / dynamo-trt is structurally insensitive to it across
+# the cells in this dataset.
 DEFAULT_BW_ETA = 1.0
-DEFAULT_C_SERVING_US = 5.0
+DEFAULT_C_SERVING_US = 0.0
 DEFAULT_KERNEL_LAUNCH_US = 7.0
 DEFAULT_MOE_A2A_PATTERN = "scatter"
 
