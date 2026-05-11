@@ -264,6 +264,8 @@ def run_framework(
     provided (e.g. 0.5 for FP4, 1 for FP8). Pass None to use the spec's
     default.
     """
+    from llm_perf.specs import FrameworkSpec  # local import to avoid cycle in some configs
+
     m = load_model_from_db(model)
     if bytes_per_param is not None:
         m = dataclasses.replace(m, bytes_per_param=bytes_per_param)
@@ -272,17 +274,28 @@ def run_framework(
     p = PartitionSpec(PP=PP, TP=TP, EP=EP, SP=SP,
                       attention_mode=attention_mode, layout=layout)
 
+    # Build a FrameworkSpec from the per-driver knobs. The benchmark
+    # callers pass c_serving / kernel_launch / moe_a2a_pattern as raw
+    # constants (matching the historical interface); we marshal them
+    # into a FrameworkSpec on the fly. Other framework fields fall to
+    # FrameworkSpec defaults — sw_overlap_factor=1, mla_mode='absorbed',
+    # inc_enabled=True, kernels_per_*=defaults.
+    fw_kwargs = dict(
+        name="benchmark-driver",
+        c_serving_per_seq_us=c_serving_us,
+        moe_a2a_pattern=moe_a2a_pattern,
+    )
+    if kernel_launch_us is not None:
+        fw_kwargs["kernel_launch_us"] = kernel_launch_us
+    framework = FrameworkSpec(**fw_kwargs)
+
     out: list[FrameworkPoint] = []
     for B in B_sweep:
         kw = dict(S_decode=S_decode, B_decode=B,
-                  t_serving_per_seq_us=c_serving_us,
-                  bw_efficiency=bw_efficiency,
-                  moe_a2a_pattern=moe_a2a_pattern)
-        if kernel_launch_us is not None:
-            kw["kernel_launch_us"] = kernel_launch_us
+                  bw_efficiency=bw_efficiency)
         t = TuningSpec(**kw)
         try:
-            r = InferenceCalculator(m, s, p, t).run()
+            r = InferenceCalculator(m, s, p, t, framework).run()
         except Exception as e:  # don't kill the sweep on one bad B
             print(f"  ERROR at B={B}: {e}", file=sys.stderr)
             continue

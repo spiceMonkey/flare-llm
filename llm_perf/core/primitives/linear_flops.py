@@ -36,9 +36,9 @@ contribution across the prefill pass.
 
 from typing import Optional
 
+from ...specs.framework_spec import FrameworkSpec
 from ...specs.model_spec import LlmModelSpec
 from ...specs.partition_spec import PartitionSpec
-from ...specs.tuner_spec import TuningSpec
 from .mla_flops import mla_proj_flops_per_layer_per_device
 from .sharding_factors import D_attn, D_exp
 
@@ -46,13 +46,13 @@ from .sharding_factors import D_attn, D_exp
 def linear_flops_per_token(
     model: LlmModelSpec,
     partition: PartitionSpec,
-    tuner: Optional[TuningSpec] = None,
+    framework: Optional[FrameworkSpec] = None,
 ) -> float:
     """Per-device, per-token linear FLOPs summed across all layers.
 
-    `tuner` is required for MLA models (passes `mla_mode`); ignored for
-    GQA / MHA models. When omitted on an MLA model, defaults to the
-    production "absorbed" mode (matches `TuningSpec` default).
+    `framework` is required for MLA models (passes `mla_mode`); ignored
+    for GQA / MHA models. When omitted on an MLA model, defaults to the
+    production "absorbed" mode (matches `FrameworkSpec.default()`).
     """
     L = model.L
     H = model.H
@@ -79,7 +79,7 @@ def linear_flops_per_token(
 
     # Per-layer per-device attention projection FLOPs — branch on variant.
     if model.mla is not None:
-        mla_mode = tuner.mla_mode if tuner is not None else "absorbed"
+        mla_mode = framework.mla_mode if framework is not None else "absorbed"
         F_attn_proj = mla_proj_flops_per_layer_per_device(model, partition, mla_mode)
     else:
         H_kv = model.H_kv()

@@ -19,6 +19,7 @@ Public surface (preserved from the pre-refactor four-file split):
 from dataclasses import dataclass
 from typing import Dict, Optional
 
+from ..specs.framework_spec import FrameworkSpec
 from ..specs.model_spec import LlmModelSpec
 from ..specs.system_spec import SystemSpec
 from ..specs.partition_spec import PartitionSpec
@@ -120,6 +121,7 @@ def _t_SW_per_microbatch(
     L: int,
     L_moe: int,
     tuner: TuningSpec,
+    framework: FrameworkSpec,
     partition: PartitionSpec,
 ) -> float:
     """Per-microbatch dispatch budget on a single PP stage.
@@ -150,11 +152,11 @@ def _t_SW_per_microbatch(
 
     Returns 0 when kernel_launch_us is 0 (legacy behavior).
     """
-    tau_us = tuner.kernel_launch_us
+    tau_us = framework.kernel_launch_us
     if tau_us <= 0.0:
         return 0.0
-    k_c = tuner.kernels_per_layer_compute
-    k_coll = tuner.kernels_per_collective_call
+    k_c = framework.kernels_per_layer_compute
+    k_coll = framework.kernels_per_collective_call
     n_TP_calls = tuner.n_TP_collectives if G_TP(partition) > 1 else 0
     # n_EP_collectives counts NCCL API calls directly (dispatch + combine
     # = 2 per MoE layer); each costs one single-direction A2A in dispatch.py.
@@ -167,7 +169,7 @@ def _t_SW_per_microbatch(
     k_moe_extra = k_coll * n_EP_calls
     t_layer = layers_per_stage * k_dense * tau_us * 1e-6
     t_moe = moe_layers_per_stage * k_moe_extra * tau_us * 1e-6
-    k_pp_hop = tuner.kernels_per_pp_hop if partition.PP > 1 else 0
+    k_pp_hop = framework.kernels_per_pp_hop if partition.PP > 1 else 0
     t_pp = k_pp_hop * tau_us * 1e-6
     return t_layer + t_moe + t_pp
 
@@ -243,6 +245,7 @@ def compute_flops(
     model: LlmModelSpec,
     partition: PartitionSpec,
     tuner: TuningSpec,
+    framework: FrameworkSpec,
 ) -> FlopsResults:
     """Per-device decode FLOPs per token (and per step)."""
     L = model.L
@@ -253,7 +256,7 @@ def compute_flops(
     B = tuner.B_decode
 
     # Linear FLOPs per token (proj + FFN + MoE router)
-    F_linear_per_token = linear_flops_per_token(model, partition, tuner)
+    F_linear_per_token = linear_flops_per_token(model, partition, framework)
     # Decode attention (score + value, S-scaling). GQA / MHA: 4·S·H/(D_kv·SP)
     # per token per layer. MLA: variant-specific score / value per layer per
     # device from `mla_score_value_flops_per_layer_per_device` (mode-dependent),
@@ -261,7 +264,7 @@ def compute_flops(
     if model.mla is not None:
         from .primitives.mla_flops import mla_score_value_flops_per_layer_per_device
         F_sv_per_layer = mla_score_value_flops_per_layer_per_device(
-            model, partition, S, tuner.mla_mode
+            model, partition, S, framework.mla_mode
         )
         F_attn_per_token = (L / PP) * F_sv_per_layer / SP
     else:
@@ -317,6 +320,7 @@ def compute_comm(
     system: SystemSpec,
     partition: PartitionSpec,
     tuner: TuningSpec,
+    framework: Optional[FrameworkSpec] = None,
 ) -> CommResults:
     """Per-stage decode communication time (seconds)."""
     H = model.H
@@ -353,7 +357,8 @@ def compute_comm(
     ep_algorithm = getattr(tuner, "ep_algorithm_decode",
                            getattr(tuner, "ep_algorithm", "ring")).lower()
     torus_alg = getattr(tuner, "torus_algorithm", "ring").lower()
-    inc_enabled = bool(getattr(tuner, "inc_enabled", True))
+    fw = framework if framework is not None else FrameworkSpec.default()
+    inc_enabled = fw.inc_enabled
 
     if tp_algorithm == "auto" or ep_algorithm == "auto":
         raise ValueError(
@@ -398,7 +403,7 @@ def compute_comm(
     # Scatter is a no-op outside DP-attn (the structural prerequisite is
     # that attention has DP-sharded the batch across the TP group).
     scatter_direct = (
-        getattr(tuner, "moe_a2a_pattern", "gather") == "scatter"
+        fw.moe_a2a_pattern == "scatter"
         and partition.attention_mode == "dp"
         and g_TP > 1
     )
@@ -492,6 +497,7 @@ def compute_latency(
     system: SystemSpec,
     partition: PartitionSpec,
     tuner: TuningSpec,
+    framework: FrameworkSpec,
     flops: FlopsResults,
     traffic: TrafficResults,
     comm: CommResults,
@@ -565,8 +571,8 @@ def compute_latency(
         L_moe_total = model.moe.n_moe_layers if model.moe.n_moe_layers else model.L
     else:
         L_moe_total = 0
-    t_SW = _t_SW_per_microbatch(model.L, L_moe_total, tuner, partition)
-    rho_SW = tuner.sw_overlap_factor
+    t_SW = _t_SW_per_microbatch(model.L, L_moe_total, tuner, framework, partition)
+    rho_SW = framework.sw_overlap_factor
     # Base + unhidden-overflow form (same pattern as compute/comm overlap in
     # decode.md §6.2). GPU work is the base; SW dispatch overlaps for
     # ρ_SW · t_stage; any remainder serializes after.
@@ -601,7 +607,7 @@ def compute_latency(
     # Per-sequence serving runtime overhead (decode.md §7.2): host-side work
     # that scales linearly with active-sequence count B (block-table gather,
     # sampling, scheduler). Additive — not overlapped with GPU work.
-    t_serving = tuner.t_serving_per_seq_us * max(1, B) * 1e-6
+    t_serving = framework.c_serving_per_seq_us * max(1, B) * 1e-6
 
     t_step_user = t_stage_with_SW * pp_bubble_factor + t_LM + t_serving
     TPOT = t_step_user

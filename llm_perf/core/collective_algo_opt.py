@@ -37,8 +37,9 @@ sentinel (the dispatcher returns 0.0 either way).
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
+from ..specs.framework_spec import FrameworkSpec
 from ..specs.model_spec import LlmModelSpec
 from ..specs.partition_spec import PartitionSpec
 from ..specs.system_spec import SystemSpec, TierSpec
@@ -51,6 +52,7 @@ def optimize_collective_algorithms(
     partition: PartitionSpec,
     system: SystemSpec,
     tuner: TuningSpec,
+    framework: Optional[FrameworkSpec] = None,
 ) -> TuningSpec:
     """Resolve `auto` algorithm fields by per-cell `min(enumerate_options(...))`.
 
@@ -59,16 +61,19 @@ def optimize_collective_algorithms(
       partition: parallelism factors (TP, EP, SP, PP).
       system: system spec (provides tier chains for TP / EP).
       tuner: tuning knobs; `auto` fields will be resolved.
+      framework: SW-stack spec (provides inc_enabled). Defaults to
+                 FrameworkSpec.default() when omitted (inc_enabled=True).
 
     Returns:
       A new TuningSpec with all `auto` fields replaced by concrete names.
       Non-`auto` fields are preserved as-is. INC selection respects
-      `tuner.inc_enabled`.
+      `framework.inc_enabled`.
     """
+    fw = framework if framework is not None else FrameworkSpec.default()
     k_active = model.moe.k_active if model.moe is not None else 1
     H = model.H
     b = model.bytes_per_param
-    inc_enabled = tuner.inc_enabled
+    inc_enabled = fw.inc_enabled
 
     new_fields = {}
 
