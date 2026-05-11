@@ -50,9 +50,9 @@ class InferenceCalculator:
         self.framework = framework if framework is not None else FrameworkSpec.default()
 
     def run(self) -> InferenceResults:
-        memory = compute_memory(self.model, self.system, self.partition, self.tuner)
+        memory = compute_memory(self.model, self.system, self.partition, self.tuner, self.framework)
         flops = compute_flops(self.model, self.partition, self.tuner, self.framework)
-        traffic = compute_traffic(self.model, self.partition, self.tuner)
+        traffic = compute_traffic(self.model, self.partition, self.tuner, self.framework)
         comm = compute_comm(self.model, self.system, self.partition, self.tuner, self.framework)
         latency = compute_latency(self.model, self.system, self.partition, self.tuner, self.framework, flops, traffic, comm)
         return InferenceResults(

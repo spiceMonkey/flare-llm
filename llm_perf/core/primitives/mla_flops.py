@@ -34,6 +34,7 @@ attention-FLOPs term of `decode_model.compute_flops` /
 `prefill_model.compute_prefill_flops`.
 """
 
+from ...specs.framework_spec import FrameworkSpec
 from ...specs.model_spec import LlmModelSpec, MLASpec
 from ...specs.partition_spec import PartitionSpec
 from .sharding_factors import D_attn, D_kv
@@ -42,6 +43,7 @@ from .sharding_factors import D_attn, D_kv
 def mla_proj_flops_per_layer_per_device(
     model: LlmModelSpec,
     partition: PartitionSpec,
+    framework: FrameworkSpec,
     mla_mode: str,
 ) -> float:
     """Per-device per-layer MLA projection FLOPs (S-independent).
@@ -57,7 +59,7 @@ def mla_proj_flops_per_layer_per_device(
     H = model.H
     n_q = model.n_q
     d_qk = mla.d_qk_nope + mla.d_qk_rope
-    d_attn = D_attn(partition)
+    d_attn = D_attn(partition, framework)
 
     # Down-projections are replicated under TP-attn (no D_attn divisor),
     # but for symbol consistency with the GQA path we match its convention:
@@ -83,7 +85,7 @@ def mla_proj_flops_per_layer_per_device(
     # MLA + TP-attn: down-projections replicated (no D_attn divisor),
     # up-projections + W_O head-sharded by G_TP. MLA + DP-attn: D_attn = 1
     # so all-divided-by-1 = full per-token (matches GQA convention).
-    if partition.attention_mode == "tp":
+    if framework.attention_mode == "tp":
         return (F_W_DQ + F_W_DKV) + F_shardable / partition.TP
     return (F_W_DQ + F_W_DKV + F_shardable) / d_attn
 
@@ -91,6 +93,7 @@ def mla_proj_flops_per_layer_per_device(
 def mla_score_value_flops_per_layer_per_device(
     model: LlmModelSpec,
     partition: PartitionSpec,
+    framework: FrameworkSpec,
     S: float,
     mla_mode: str,
 ) -> float:
@@ -106,7 +109,7 @@ def mla_score_value_flops_per_layer_per_device(
     mla: MLASpec = model.mla
     n_q = model.n_q
     d_qk = mla.d_qk_nope + mla.d_qk_rope
-    d_kv = D_kv(partition)
+    d_kv = D_kv(partition, framework)
 
     if mla_mode == "materialized":
         # Score: Q · K^T over (n_q, d_qk), Value: softmax · V over (n_q, d_v)

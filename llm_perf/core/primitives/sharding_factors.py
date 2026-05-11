@@ -14,31 +14,39 @@ configurations. The lookup table:
                                                        (seq)
 
 Dense FFN always uses D_exp = TP regardless of layout (no EP axis to overlap).
-A theoretical fourth combination (co_located + tp) is rejected by
-PartitionSpec validation because no separate TP group exists for head-
-sharding to land on under co-location.
+A theoretical fourth combination (co_located + tp) is rejected by the
+combined `(partition, framework)` invariant check (see compose_check below)
+because no separate TP group exists for head-sharding to land on under
+co-location.
 
-Helpers below resolve each abstract factor from a PartitionSpec instance.
-At the default (orthogonal + tp) every helper collapses to the legacy raw
-TP / EP / SP form, so callers that thread these helpers through their
-formulas remain bitwise-identical to the pre-Phase-2 code.
+Phase H: `attention_mode` and `layout` live on FrameworkSpec, not on
+PartitionSpec. Every helper here takes both `partition` (PP/TP/EP/SP) and
+`framework` (attention_mode/layout). At the default (orthogonal + tp) every
+helper collapses to the legacy raw TP / EP / SP form.
 """
 
+from ...specs.framework_spec import FrameworkSpec
 from ...specs.partition_spec import PartitionSpec
 
 
-def D_attn(partition: PartitionSpec) -> int:
+def D_attn(partition: PartitionSpec, framework: FrameworkSpec) -> int:
     """Effective per-device divisor for attention weights (Q/K/V/O).
 
     Returns TP under TP-attention (head-shard); 1 under DP-attention
     (weights replicated on every TP rank).
     """
-    if partition.attention_mode == "dp":
+    if framework.attention_mode == "dp":
         return 1
     return partition.TP
 
 
-def D_exp(partition: PartitionSpec, *, layer_kind: str = "moe", n_exp_cap: int | None = None) -> int:
+def D_exp(
+    partition: PartitionSpec,
+    framework: FrameworkSpec,
+    *,
+    layer_kind: str = "moe",
+    n_exp_cap: int | None = None,
+) -> int:
     """Effective per-device divisor for FFN / expert weights.
 
     `layer_kind` selects the divisor convention for the layer in question:
@@ -62,12 +70,12 @@ def D_exp(partition: PartitionSpec, *, layer_kind: str = "moe", n_exp_cap: int |
     EP = max(1, partition.EP)
     if n_exp_cap is not None:
         EP = min(EP, max(1, n_exp_cap))
-    if partition.layout == "co_located":
+    if framework.layout == "co_located":
         return EP
     return partition.TP * EP
 
 
-def D_kv(partition: PartitionSpec) -> int:
+def D_kv(partition: PartitionSpec, framework: FrameworkSpec) -> int:
     """Effective per-device divisor for KV cache (head- or sequence-shard).
 
     Excludes the SP axis. Per-device KV memory and traffic always carry an
@@ -79,7 +87,7 @@ def D_kv(partition: PartitionSpec) -> int:
       - max(TP, EP) under co-located layout (sequence-shard across the entire
         replica's GPU set).
     """
-    if partition.layout == "co_located":
+    if framework.layout == "co_located":
         return max(partition.TP, max(1, partition.EP))
     return partition.TP
 
@@ -103,7 +111,7 @@ def G_EP(partition: PartitionSpec) -> int:
     return max(1, partition.EP)
 
 
-def N_replica(partition: PartitionSpec) -> int:
+def N_replica(partition: PartitionSpec, framework: FrameworkSpec) -> int:
     """Devices per model replica.
 
     Orthogonal layout: PP * TP * EP * SP.
@@ -111,6 +119,40 @@ def N_replica(partition: PartitionSpec) -> int:
     physical GPU set).
     """
     EP = max(1, partition.EP)
-    if partition.layout == "co_located":
+    if framework.layout == "co_located":
         return partition.PP * max(partition.TP, EP) * partition.SP
     return partition.PP * partition.TP * EP * partition.SP
+
+
+def compose_check(partition: PartitionSpec, framework: FrameworkSpec) -> None:
+    """Validate the combined `(partition, framework)` invariants.
+
+    Two compose-time invariants — formerly enforced inside
+    PartitionSpec.__post_init__ when `attention_mode` and `layout` lived
+    there — now apply at the (partition, framework) join point. Calculator
+    paths that consume both specs should call this once at the start of
+    pipeline assembly.
+
+    Raises ValueError on:
+      - co-located layout with TP != EP (production deployments overlay
+        TP and EP on the same physical GPUs and use TP == EP, e.g. DSv3
+        TP=EP=8); asymmetric (TP, EP) on a co-located layout is not
+        modeled.
+      - co-located layout with attention_mode != "dp" (no separate TP
+        group exists for head-sharding to land on under co-location).
+    """
+    if framework.layout == "co_located":
+        if framework.attention_mode != "dp":
+            raise ValueError(
+                "compose_check: framework.layout='co_located' forces "
+                "framework.attention_mode='dp' (no separate TP group exists "
+                "for head-sharding to land on under co-location); got "
+                f"attention_mode={framework.attention_mode!r}"
+            )
+        if partition.TP != partition.EP:
+            raise ValueError(
+                "compose_check: framework.layout='co_located' requires "
+                "partition.TP == partition.EP (TP and EP share the same "
+                f"physical GPU set in production deployments); got TP="
+                f"{partition.TP}, EP={partition.EP}"
+            )

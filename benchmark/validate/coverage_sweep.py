@@ -271,11 +271,12 @@ def main() -> int:
                 spec = dataclasses.replace(spec, bytes_per_param=bpp)
                 sys_spec = load_system_from_db(sys_id)
                 sys_spec = dataclasses.replace(sys_spec, num_devices=m.num_decode_gpu)
-                p_spec = PartitionSpec(PP=PP, TP=TP, EP=EP, SP=SP,
-                                       attention_mode=attn_mode, layout=layout)
+                p_spec = PartitionSpec(PP=PP, TP=TP, EP=EP, SP=SP)
                 t_spec = TuningSpec(S_decode=m.isl + m.osl // 2, B_decode=m.B)
                 fw_spec = FrameworkSpec(
                     name="precheck",
+                    attention_mode=attn_mode,
+                    layout=layout,
                     moe_a2a_pattern=knobs["pattern"],
                     kernel_launch_us=knobs["kernel_launch"],
                     c_serving_per_seq_us=knobs["c_serving"],

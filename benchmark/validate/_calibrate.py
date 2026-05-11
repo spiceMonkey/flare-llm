@@ -50,10 +50,10 @@ def calibrate(
             for row in measured:
                 s = system_with_eta(load_system_from_db(system_id),
                                     num_devices=num_devices, bw_eta=bw)
-                p = PartitionSpec(PP=PP, TP=TP, EP=EP, SP=SP,
-                                  attention_mode=attention_mode, layout=layout)
+                p = PartitionSpec(PP=PP, TP=TP, EP=EP, SP=SP)
                 t = TuningSpec(S_decode=S_decode_fn(row), B_decode=row.B)
-                fw = FrameworkSpec(name="calibrate", c_serving_per_seq_us=cs)
+                fw = FrameworkSpec(name="calibrate", c_serving_per_seq_us=cs,
+                                   attention_mode=attention_mode, layout=layout)
                 r = InferenceCalculator(m, s, p, t, fw).run()
                 errs.append((r.latency.TPOT * 1000 - row.tpot_ms) / row.tpot_ms * 100)
             mae = float(np.mean(np.abs(errs)))

@@ -18,7 +18,7 @@ resolves to the innermost tier even when PP physically spans an outer
 fabric tier (e.g., d-Matrix squadrack PP=32 with TP=8 spanning the
 ethernet rack-tier, not just the package D2D mesh).
 
-Under TP+EP co-location (`PartitionSpec.layout == "co_located"`), TP and EP
+Under TP+EP co-location (`FrameworkSpec.layout == "co_located"`), TP and EP
 are overlaid on the same physical GPU set, so the cumulative-reach
 calculation must count them once (as `max(TP, EP)`) rather than as their
 product. The helper `_axis_size_for_reach` encodes this.
@@ -26,6 +26,7 @@ product. The helper `_axis_size_for_reach` encodes this.
 
 from typing import Dict, Tuple
 
+from ...specs.framework_spec import FrameworkSpec
 from ...specs.partition_spec import PartitionSpec
 from ...specs.system_spec import SystemSpec, TierSpec
 
@@ -34,7 +35,7 @@ from ...specs.system_spec import SystemSpec, TierSpec
 DEFAULT_ORDER: Tuple[str, ...] = ("SP", "TP", "EP", "PP")
 
 
-def _axis_size_for_reach(partition: PartitionSpec, axis: str) -> int:
+def _axis_size_for_reach(partition: PartitionSpec, framework: FrameworkSpec, axis: str) -> int:
     """Effective per-axis multiplier for cumulative-reach accumulation.
 
     Returns the raw ``getattr(partition, axis)`` for orthogonal layouts
@@ -48,7 +49,7 @@ def _axis_size_for_reach(partition: PartitionSpec, axis: str) -> int:
     """
     if axis not in ("TP", "EP"):
         return max(1, getattr(partition, axis, 1))
-    if partition.layout != "co_located":
+    if framework.layout != "co_located":
         return max(1, getattr(partition, axis, 1))
     # Co-located: TP and EP share physical GPUs.
     if axis == "TP":
@@ -58,6 +59,7 @@ def _axis_size_for_reach(partition: PartitionSpec, axis: str) -> int:
 
 def assign_tier_per_axis(
     partition: PartitionSpec,
+    framework: FrameworkSpec,
     system: SystemSpec,
     role: str = "TP",
     order: Tuple[str, ...] = DEFAULT_ORDER,
@@ -103,7 +105,7 @@ def assign_tier_per_axis(
         if raw_n <= 1:
             assignment[ax] = 0
             continue
-        cumulative_group *= _axis_size_for_reach(partition, ax)
+        cumulative_group *= _axis_size_for_reach(partition, framework, ax)
         assigned = last_tier  # default: outermost
         for i, r in enumerate(cumulative_reach):
             if r >= cumulative_group:

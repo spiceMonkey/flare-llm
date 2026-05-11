@@ -2,6 +2,7 @@
 from dataclasses import dataclass, field
 from typing import List
 
+from ..specs.framework_spec import FrameworkSpec
 from ..specs.model_spec import LlmModelSpec
 from ..specs.system_spec import SystemSpec
 from ..specs.partition_spec import PartitionSpec
@@ -31,6 +32,7 @@ def compute_memory(
     system: SystemSpec,
     partition: PartitionSpec,
     tuner: TuningSpec,
+    framework: FrameworkSpec,
 ) -> MemoryResults:
     """Compute per-device static memory footprint (bytes).
 
@@ -48,8 +50,8 @@ def compute_memory(
 
     # Parameter memory M_theta_device (dense weights + MoE weights + embedding)
     M_theta_device = (
-        dense_weight_bytes(model, partition)
-        + moe_weight_bytes(model, partition)
+        dense_weight_bytes(model, partition, framework)
+        + moe_weight_bytes(model, partition, framework)
         + embedding_bytes(model, partition)
     )
 
@@ -85,7 +87,7 @@ def compute_memory(
         M_act_device = B * (4 * H + 2 * H_kv) * b
 
     # KV memory M_kv_device (B sequences, each with context S)
-    M_kv_device = B * kv_bytes_per_seq(model, partition, S)
+    M_kv_device = B * kv_bytes_per_seq(model, partition, framework, S)
 
     M_total = M_theta_device + M_act_device + M_kv_device
 
@@ -98,7 +100,7 @@ def compute_memory(
     try:
         placement = resolve_placement(
             T_theta_device=M_theta_device,
-            T_kv_per_request_device=kv_bytes_per_seq(model, partition, S),
+            T_kv_per_request_device=kv_bytes_per_seq(model, partition, framework, S),
             B=max(1, B),
             tiers=tiers,
             placement=tuner.placement,
