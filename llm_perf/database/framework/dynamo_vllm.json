@@ -1,17 +1,23 @@
 {
   "schema": "llm_perf.framework",
   "name": "dynamo-vllm",
-
   "c_serving_per_seq_us": 2.0,
   "kernel_launch_us": 12.0,
   "kernels_per_layer_compute": 10,
   "kernels_per_collective_call": 2,
   "kernels_per_pp_hop": 2,
   "sw_overlap_factor": 1.0,
-
   "moe_a2a_pattern": "scatter",
   "mla_mode": "absorbed",
   "inc_enabled": true,
-
-  "_comment_c_serving": "2 µs/seq — DSv4-Pro on gb200/dynamo-vllm regresses at 0 µs (29.8% MAE → 33.2%) so 2 µs is a better fit for this stack. vLLM's per-seq Python paths are heavier than SGLang's even under Dynamo, so c_serving doesn't fully zero out. Distinct from raw vllm (20 µs) because Dynamo absorbs the bulk of the bookkeeping; only the irreducible Python sampling glue leaks through. See decode.md §7.2 for the per-stack ranges."
+  "_comment_c_serving": "2 \u00b5s/seq \u2014 DSv4-Pro on gb200/dynamo-vllm regresses at 0 \u00b5s (29.8% MAE \u2192 33.2%) so 2 \u00b5s is a better fit for this stack. vLLM's per-seq Python paths are heavier than SGLang's even under Dynamo, so c_serving doesn't fully zero out. Distinct from raw vllm (20 \u00b5s) because Dynamo absorbs the bulk of the bookkeeping; only the irreducible Python sampling glue leaks through. See decode.md \u00a77.2 for the per-stack ranges.",
+  "tp_algorithm_decode": "auto",
+  "tp_algorithm_prefill": "auto",
+  "ep_algorithm_decode": "auto",
+  "ep_algorithm_prefill": "auto",
+  "torus_algorithm": "ring",
+  "n_TP_collectives": 2,
+  "n_EP_collectives": 2,
+  "n_SP_collectives": 1,
+  "overlap_factor": 0.0
 }

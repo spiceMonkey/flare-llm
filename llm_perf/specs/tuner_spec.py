@@ -34,47 +34,15 @@ class MemoryPlacementSpec:
 @dataclass
 class TuningSpec:
     """
-    Execution / approximation knobs that are independent of the partition layout.
+    Workload knobs and chip-side calibration curves. Orthogonal to:
+      - ModelSpec (architecture)
+      - SystemSpec (hardware + per-tier eta)
+      - PartitionSpec (sharding)
+      - FrameworkSpec (SW-stack runtime: host overhead, collective algos,
+                       MLA mode, MoE A2A pattern, etc.)
     """
     # Scenario sequence length
     S_decode: int = 2048
-
-    # Per-phase × per-collective algorithm choice.
-    #   Admissible values: "ring", "tree", "auto".
-    #   "auto" is a placeholder — must be resolved by
-    #   `core/collective_algo_opt.optimize_collective_algorithms(...)` before
-    #   passing the tuner to `InferenceCalculator.run()`. Reaching the
-    #   dispatcher with "auto" raises ValueError.
-    #   SP is always ring AG (no knob — only shipped option per
-    #   collectives/01_collective_algorithms.md §6).
-    #   The legacy fields `tp_algorithm` / `ep_algorithm` are deprecated
-    #   single-knob aliases; the loader copies them into both _decode and
-    #   _prefill when the per-phase fields are unspecified.
-    tp_algorithm_decode: str = "ring"
-    tp_algorithm_prefill: str = "ring"
-    ep_algorithm_decode: str = "ring"
-    ep_algorithm_prefill: str = "ring"
-
-    # Legacy single-knob fields (deprecated; loader-only fallbacks). New code
-    # should set the per-phase fields directly.
-    tp_algorithm: str = "ring"
-    ep_algorithm: str = "ring"
-
-    # NCCL API call counts per layer. These match both the cost-model
-    # accumulator (decode.md §5.5) and the SW launch counter (decode.md §6.3.2)
-    # so a single field describes both.
-    # n_TP_collectives: TP all-reduces per layer (post-attn + post-FFN = 2).
-    # n_EP_collectives: MoE A2A calls per MoE layer (dispatch + combine = 2);
-    #     each call costs one single-direction A2A — see dispatch.py's
-    #     `_cost("moe_a2a", ...)`.
-    # n_SP_collectives: SP all-gathers per layer (1 with ring SP).
-    n_TP_collectives: int = 2
-    n_EP_collectives: int = 2
-    n_SP_collectives: int = 1
-
-    # Overlap factor ρ in [0, 1]: Fraction of local time utilized to hide comms.
-    # t_stage = t_local + max(0, t_comm - ρ * t_local)
-    overlap_factor: float = 0.0
 
     # Batch size for decode phase (B=1 is single-request decode)
     B_decode: int = 1
@@ -84,23 +52,24 @@ class TuningSpec:
     B_prefill: int = 1          # number of requests batched in prefill
     chunk_size: int = 0         # chunked prefill C (0 = no chunking)
 
-    # Topology-specific collective algorithms. Inert on crossbar fabrics;
-    # consumed by core/primitives/dispatch.cost_collective.
-    #   torus_algorithm="swing" is reserved; raises NotImplementedError for now.
-    torus_algorithm: str = "ring"
-
     # ── Framework-axis fields moved to FrameworkSpec ───────────────────
-    # The following fields used to live here and now live on FrameworkSpec:
-    #   mla_mode, moe_a2a_pattern, inc_enabled,
-    #   kernels_per_layer_compute, kernels_per_collective_call,
-    #   kernels_per_pp_hop, kernel_launch_us, sw_overlap_factor,
-    #   t_serving_per_seq_us (renamed → c_serving_per_seq_us).
-    # These describe the SW stack's runtime behavior (host overhead model,
-    # kernel-launch budget, MLA execution mode, MoE A2A pattern) and are
-    # orthogonal to the workload knobs that remain on TuningSpec.
-    # Pre-canned per-stack JSONs live in `database/framework/`; load via
-    # `load_framework_from_db("dynamo_trt")` etc. See FrameworkSpec for
-    # the full schema and decode.md §7.1, §7.2 for the underlying model.
+    # The following fields used to live here; they are now on FrameworkSpec:
+    #   Phase B (mla(stage 5/framework-spec phase B)):
+    #     - c_serving_per_seq_us (renamed from t_serving_per_seq_us)
+    #     - kernel_launch_us, kernels_per_layer_compute,
+    #       kernels_per_collective_call, kernels_per_pp_hop
+    #     - sw_overlap_factor
+    #     - moe_a2a_pattern, mla_mode, inc_enabled
+    #   Phase E:
+    #     - tp_algorithm_decode / tp_algorithm_prefill
+    #     - ep_algorithm_decode / ep_algorithm_prefill
+    #     - tp_algorithm / ep_algorithm (legacy single-knob aliases — DROPPED)
+    #     - torus_algorithm
+    #     - n_TP_collectives / n_EP_collectives / n_SP_collectives
+    #     - overlap_factor (ρ comm/compute overlap; mirrors sw_overlap_factor)
+    # See FrameworkSpec docstring + database/framework/ for stack JSONs.
+    # Loader rejects legacy tuner JSONs that still set these fields with
+    # a clear migration hint pointing at load_framework_from_db().
 
     # Per-data-class memory tier placement (sram.md §1.3). Defaults are
     # "auto"/"auto" — greedy fastest-first, which collapses to legacy

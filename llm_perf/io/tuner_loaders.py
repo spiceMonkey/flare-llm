@@ -5,12 +5,6 @@ from typing import Any, Dict, Optional
 from ..specs.tuner_spec import MemoryPlacementSpec, TuningSpec
 from ..utils import (
     validate_positive_int_fields,
-    validate_nonnegative_int_fields,
-    validate_nonnegative_float_fields,
-    validate_positive_float_fields,
-    TP_ALGORITHMS,
-    EP_ALGORITHMS,
-    TORUS_ALGORITHMS,
 )
 
 
@@ -46,38 +40,6 @@ def tuning_spec_from_json_dict(cfg: Dict[str, Any]) -> TuningSpec:
     if not schema.startswith("llm_perf.tuner"):
         raise ValueError(f"Unsupported tuner schema: {schema}")
 
-    # Legacy single-knob fields (deprecated; preserved for back-compat).
-    tp_algorithm = str(cfg.get("tp_algorithm", "ring")).lower()
-    ep_algorithm = str(cfg.get("ep_algorithm", "ring")).lower()
-    torus_algorithm = str(cfg.get("torus_algorithm", "ring")).lower()
-
-    # Per-phase × per-collective fields (new in PR2.4). When omitted, fall
-    # back to the legacy single-knob value.
-    tp_algorithm_decode = str(cfg.get("tp_algorithm_decode", tp_algorithm)).lower()
-    tp_algorithm_prefill = str(cfg.get("tp_algorithm_prefill", tp_algorithm)).lower()
-    ep_algorithm_decode = str(cfg.get("ep_algorithm_decode", ep_algorithm)).lower()
-    ep_algorithm_prefill = str(cfg.get("ep_algorithm_prefill", ep_algorithm)).lower()
-
-    for name, val in [
-        ("tp_algorithm", tp_algorithm),
-        ("tp_algorithm_decode", tp_algorithm_decode),
-        ("tp_algorithm_prefill", tp_algorithm_prefill),
-    ]:
-        if val not in TP_ALGORITHMS:
-            raise ValueError(f"Unsupported {name}: {val!r}; allowed: {list(TP_ALGORITHMS)}")
-    for name, val in [
-        ("ep_algorithm", ep_algorithm),
-        ("ep_algorithm_decode", ep_algorithm_decode),
-        ("ep_algorithm_prefill", ep_algorithm_prefill),
-    ]:
-        if val not in EP_ALGORITHMS:
-            raise ValueError(f"Unsupported {name}: {val!r}; allowed: {list(EP_ALGORITHMS)}")
-    if torus_algorithm not in TORUS_ALGORITHMS:
-        raise ValueError(
-            f"Unsupported torus_algorithm: {torus_algorithm!r}; "
-            f"allowed: {list(TORUS_ALGORITHMS)}"
-        )
-
     # Positive integer checks
     validate_positive_int_fields(
         cfg,
@@ -85,39 +47,22 @@ def tuning_spec_from_json_dict(cfg: Dict[str, Any]) -> TuningSpec:
         prefix="tuning configuration",
     )
 
-    # Nonnegative integer checks
-    validate_nonnegative_int_fields(
-        cfg,
-        [
-            "n_TP_collectives",
-            "n_EP_collectives",
-            "n_SP_collectives",
-        ],
-        prefix="tuning configuration",
-    )
-
-    # Nonnegative floats: overlap_factor
-    validate_nonnegative_float_fields(
-        cfg,
-        ["overlap_factor"],
-        prefix="tuning configuration",
-    )
-
-    # Additional check for overlap_factor <= 1.0
-    if float(cfg.get("overlap_factor", 0.0)) > 1.0:
-        raise ValueError(f"overlap_factor must be <= 1.0, got {cfg['overlap_factor']}")
-
-    # Framework-axis fields (kernels_per_*, kernel_launch_us,
-    # sw_overlap_factor, moe_a2a_pattern, mla_mode, inc_enabled,
-    # t_serving_per_seq_us) moved to FrameworkSpec — see
-    # `framework_spec.py`. Tuner JSONs that still set these fields will
-    # be rejected with a clear error so users know to migrate to a
-    # framework JSON.
+    # Framework-axis fields moved to FrameworkSpec across two phases.
+    # Tuner JSONs that still set them are rejected with a clear migration
+    # hint pointing at `load_framework_from_db('<stack>')`.
     _moved_to_framework = (
+        # Phase B (host overhead + execution mode):
         "kernels_per_layer_compute", "kernels_per_collective_call",
         "kernels_per_pp_hop", "kernel_launch_us", "sw_overlap_factor",
         "moe_a2a_pattern", "mla_mode", "inc_enabled",
         "t_serving_per_seq_us",
+        # Phase E (collective dispatch + comm/compute overlap):
+        "tp_algorithm_decode", "tp_algorithm_prefill",
+        "ep_algorithm_decode", "ep_algorithm_prefill",
+        "tp_algorithm", "ep_algorithm",  # deprecated single-knob aliases
+        "torus_algorithm",
+        "n_TP_collectives", "n_EP_collectives", "n_SP_collectives",
+        "overlap_factor",
     )
     leaked = [f for f in _moved_to_framework if f in cfg]
     if leaked:
@@ -190,22 +135,11 @@ def tuning_spec_from_json_dict(cfg: Dict[str, Any]) -> TuningSpec:
 
     _defaults = TuningSpec()
     return TuningSpec(
-        n_TP_collectives=int(cfg.get("n_TP_collectives", 2)),
-        n_EP_collectives=int(cfg.get("n_EP_collectives", 2)),
-        n_SP_collectives=int(cfg.get("n_SP_collectives", 1)),
-        overlap_factor=float(cfg.get("overlap_factor", 0.0)),
         S_decode=int(cfg.get("S_decode", 2048)),
-        tp_algorithm=tp_algorithm,
-        ep_algorithm=ep_algorithm,
-        tp_algorithm_decode=tp_algorithm_decode,
-        tp_algorithm_prefill=tp_algorithm_prefill,
-        ep_algorithm_decode=ep_algorithm_decode,
-        ep_algorithm_prefill=ep_algorithm_prefill,
         B_decode=int(cfg.get("B_decode", 1)),
         S_input=int(cfg.get("S_input", 0)),
         B_prefill=int(cfg.get("B_prefill", 1)),
         chunk_size=int(cfg.get("chunk_size", 0)),
-        torus_algorithm=torus_algorithm,
         placement=placement,
         tensor_core_efficiency=eta_TC if eta_TC is not None else _defaults.tensor_core_efficiency,
         bw_efficiency=eta_BW if eta_BW is not None else _defaults.bw_efficiency,

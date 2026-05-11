@@ -157,11 +157,11 @@ def _t_SW_per_microbatch(
         return 0.0
     k_c = framework.kernels_per_layer_compute
     k_coll = framework.kernels_per_collective_call
-    n_TP_calls = tuner.n_TP_collectives if G_TP(partition) > 1 else 0
+    n_TP_calls = framework.n_TP_collectives if G_TP(partition) > 1 else 0
     # n_EP_collectives counts NCCL API calls directly (dispatch + combine
     # = 2 per MoE layer); each costs one single-direction A2A in dispatch.py.
-    n_EP_calls = tuner.n_EP_collectives if G_EP(partition) > 1 else 0
-    n_SP_calls = tuner.n_SP_collectives if partition.SP > 1 else 0
+    n_EP_calls = framework.n_EP_collectives if G_EP(partition) > 1 else 0
+    n_SP_calls = framework.n_SP_collectives if partition.SP > 1 else 0
     PP = max(1, partition.PP)
     layers_per_stage = L / PP
     moe_layers_per_stage = L_moe / PP
@@ -332,15 +332,19 @@ def compute_comm(
     B = max(1, tuner.B_decode)
     b = model.bytes_per_param
 
+    # FrameworkSpec carries collective algorithms + counts + comm overlap
+    # (Phase E). Default fallback when no framework was passed.
+    fw = framework if framework is not None else FrameworkSpec.default()
+
     # Collective group sizes (notation.md §1; equal to TP and EP across all
     # three production-relevant configurations, but threaded via helpers for
     # consistency with the abstract divisor symbols D_kv / D_emb).
     g_TP = G_TP(partition)
     g_EP = G_EP(partition)
 
-    n_TP = tuner.n_TP_collectives
-    n_EP = tuner.n_EP_collectives
-    n_SP = tuner.n_SP_collectives
+    n_TP = fw.n_TP_collectives
+    n_EP = fw.n_EP_collectives
+    n_SP = fw.n_SP_collectives
 
     if model.moe is not None:
         N_exp = max(1, model.moe.n_experts)
@@ -350,19 +354,17 @@ def compute_comm(
         g_EP = 1
         k = 1
 
-    # Decode reads the per-phase fields; falls back to legacy single-knob
-    # if the per-phase field is at default and the legacy field was overridden.
-    tp_algorithm = getattr(tuner, "tp_algorithm_decode",
-                           getattr(tuner, "tp_algorithm", "ring")).lower()
-    ep_algorithm = getattr(tuner, "ep_algorithm_decode",
-                           getattr(tuner, "ep_algorithm", "ring")).lower()
-    torus_alg = getattr(tuner, "torus_algorithm", "ring").lower()
-    fw = framework if framework is not None else FrameworkSpec.default()
+    # Algorithm selection lives on FrameworkSpec (Phase E). Decode reads
+    # the per-phase fields directly; "auto" must have been resolved by
+    # `optimize_collective_algorithms` upstream.
+    tp_algorithm = fw.tp_algorithm_decode.lower()
+    ep_algorithm = fw.ep_algorithm_decode.lower()
+    torus_alg = fw.torus_algorithm.lower()
     inc_enabled = fw.inc_enabled
 
     if tp_algorithm == "auto" or ep_algorithm == "auto":
         raise ValueError(
-            "TuningSpec has algorithm='auto' for decode; resolve via "
+            "FrameworkSpec has algorithm='auto' for decode; resolve via "
             "core.collective_algo_opt.optimize_collective_algorithms(...) "
             "before InferenceCalculator.run()."
         )
@@ -560,7 +562,7 @@ def compute_latency(
     t_local = max(t_compute_eff, t_mem)
 
     t_comm = comm.t_comm_stage
-    rho = tuner.overlap_factor
+    rho = framework.overlap_factor
     t_stage = t_local + max(0.0, t_comm - rho * t_local)
 
     # Per-microbatch per-stage CPU dispatch budget (kernel_launch_overhead.md §5).

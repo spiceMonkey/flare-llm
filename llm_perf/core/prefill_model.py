@@ -227,9 +227,10 @@ def compute_prefill_comm(
     g_TP = G_TP(partition)
     g_EP = G_EP(partition)
 
-    n_TP = tuner.n_TP_collectives
-    n_EP = tuner.n_EP_collectives
-    n_SP = tuner.n_SP_collectives
+    fw = framework if framework is not None else FrameworkSpec.default()
+    n_TP = fw.n_TP_collectives
+    n_EP = fw.n_EP_collectives
+    n_SP = fw.n_SP_collectives
 
     # Resolve EP group size up front so the dispatcher sees the correct radix.
     if model.moe is not None:
@@ -240,18 +241,17 @@ def compute_prefill_comm(
         g_EP = 1
         k_active = 1
 
-    # Prefill reads the per-phase fields; falls back to legacy single-knob.
-    tp_algorithm = getattr(tuner, "tp_algorithm_prefill",
-                           getattr(tuner, "tp_algorithm", "ring")).lower()
-    ep_algorithm = getattr(tuner, "ep_algorithm_prefill",
-                           getattr(tuner, "ep_algorithm", "ring")).lower()
-    torus_alg = getattr(tuner, "torus_algorithm", "ring").lower()
-    fw = framework if framework is not None else FrameworkSpec.default()
+    # Algorithm selection lives on FrameworkSpec (Phase E). Prefill reads
+    # the per-phase fields directly; "auto" must have been resolved by
+    # `optimize_collective_algorithms` upstream.
+    tp_algorithm = fw.tp_algorithm_prefill.lower()
+    ep_algorithm = fw.ep_algorithm_prefill.lower()
+    torus_alg = fw.torus_algorithm.lower()
     inc_enabled = fw.inc_enabled
 
     if tp_algorithm == "auto" or ep_algorithm == "auto":
         raise ValueError(
-            "TuningSpec has algorithm='auto' for prefill; resolve via "
+            "FrameworkSpec has algorithm='auto' for prefill; resolve via "
             "core.collective_algo_opt.optimize_collective_algorithms(...) "
             "before InferenceCalculator.run()."
         )
@@ -378,7 +378,7 @@ def compute_prefill_latency(
 
     PP = partition.PP
     SP = partition.SP
-    rho = tuner.overlap_factor
+    rho = fw.overlap_factor
     rho_SW = fw.sw_overlap_factor
 
     # Collective group sizes (notation.md §1) for kernel-launch SW count
@@ -417,13 +417,13 @@ def compute_prefill_latency(
     # The PP-hop term uses the middle-stage 2× factor (recv + send) by
     # default; edge stages do only one direction (off by one k_pp_hop·τ,
     # negligible at PP >> 1).
-    n_TP_calls = tuner.n_TP_collectives if g_TP_pf > 1 else 0
+    n_TP_calls = fw.n_TP_collectives if g_TP_pf > 1 else 0
     # n_EP_collectives counts NCCL API calls directly (dispatch + combine
     # = 2 per MoE layer); see decode_model._t_SW_per_microbatch. EP launches
     # only fire on MoE layers — split the layer term into dense + MoE
     # contributions, matching the L_moe/PP factor in §5.5's t_comm formula.
-    n_EP_calls = tuner.n_EP_collectives if g_EP_pf > 1 else 0
-    n_SP_calls = tuner.n_SP_collectives if SP > 1 else 0
+    n_EP_calls = fw.n_EP_collectives if g_EP_pf > 1 else 0
+    n_SP_calls = fw.n_SP_collectives if SP > 1 else 0
     if model.moe is not None:
         L_moe_total = model.moe.n_moe_layers if model.moe.n_moe_layers else L
     else:
