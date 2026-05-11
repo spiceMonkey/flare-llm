@@ -197,7 +197,7 @@ def test_T1_single_tier():
 
 # ────────────────────────────────────────────────────────────
 # T2 — Multi-tier crossbar chain equivalence
-#   Modeled after gb200.nvl576.hierarchical (NVLink scale-up + IB scale-out).
+#   Modeled after gb200.multibox (NVLink scale-up + IB scale-out).
 # ────────────────────────────────────────────────────────────
 
 def test_T2_multi_tier():

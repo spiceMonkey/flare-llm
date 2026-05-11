@@ -48,9 +48,19 @@ MODELS = [
 
 SYSTEMS = [
     "example.sys",
-    "gb200.nvl576.ideal",
-    "gb200.nvl576.hierarchical",
+    # Multi-tier NVL576 baseline. Loaded with framework.inc_enabled=False
+    # below to capture the no-INC SW path (matches the prior
+    # gb200.nvl576.hierarchical.json semantics, which was deleted in favor
+    # of the multibox template + framework toggle pattern).
+    "gb200.multibox",
     "tpu.v5p.pod",
+    # NOTE: hypothetical / topology-variant systems used by the pareto_*
+    # notebooks (flat 576-port "ideal", rail-optimized "rail.inc",
+    # dmatrix.server.fast) are constructed inline in those notebooks via
+    # deepcopy + small mutation. The recapture workstream that fixes this
+    # script (post-Phase-E, also needs FrameworkSpec migration + drop of
+    # the removed load_partition_from_db import) should reproduce them
+    # the same way if golden coverage of those scenarios is wanted.
 ]
 
 # (PP, TP, EP, SP). Each row exercises a distinct sharding regime.
