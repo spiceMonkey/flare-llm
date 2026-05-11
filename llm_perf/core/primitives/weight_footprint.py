@@ -36,7 +36,7 @@ def _split_layers(model: LlmModelSpec) -> tuple[int, int, int, int]:
 
 
 def _per_layer_attn_params(model: LlmModelSpec) -> float:
-    """Per-layer attention parameter count, branching on attention variant.
+    """Per-layer attention parameter count (cluster-total, before sharding).
 
     GQA / MHA: `2H² + 2HH_kv` (the §2.3 form, reducing to `4H²` at MHA
     limit). MLA: sum of six matrices from `attention.md §3.3`, computed
@@ -49,15 +49,34 @@ def _per_layer_attn_params(model: LlmModelSpec) -> float:
     return 2 * H**2 + 2 * H * H_kv
 
 
+def _per_layer_attn_params_per_device(model: LlmModelSpec, partition: PartitionSpec) -> float:
+    """Per-device per-layer attention parameter count (after sharding).
+
+    Branches on attention variant and mode:
+    - GQA / MHA all modes, MLA + DP-attn:  `_per_layer_attn_params(model) / D_attn`
+      (existing convention — `D_attn = TP` under TP-attn, `1` under DP-attn).
+    - MLA + TP-attn: down-projections (W_DQ, W_DKV) are not head-structured
+      and stay replicated on every rank, while up-projections (W_UQ, W_UK,
+      W_UV, W_O) are head-sharded by G_TP. Returns
+      `replicated + shardable / G_TP`. See `attention.md §3.6`.
+    """
+    if model.mla is not None and partition.attention_mode == "tp":
+        H, n_q = model.H, model.n_q
+        P_repl = model.mla.per_layer_attn_params_replicated(H, n_q)
+        P_shrd = model.mla.per_layer_attn_params_shardable(H, n_q)
+        return P_repl + P_shrd / partition.TP
+    return _per_layer_attn_params(model) / D_attn(partition)
+
+
 def dense_weight_bytes(model: LlmModelSpec, partition: PartitionSpec) -> float:
     """Per-device weight bytes for the dense-layer slice of the model.
 
-        M_theta_dense = (L_dense / PP) · (P_attn/D_attn + 3HI_dense/TP) · b
+        M_theta_dense = (L_dense / PP) · (attn_per_device + 3HI_dense/TP) · b
 
-    where P_attn is the per-layer attention parameter count from
-    `_per_layer_attn_params` (GQA/MHA: 2H² + 2HH_kv; MLA: 6-matrix sum).
-    Dense FFN always uses /TP regardless of layout. Attention follows
-    D_attn.
+    where `attn_per_device` is the per-device per-layer attention parameter
+    count from `_per_layer_attn_params_per_device` (handles GQA / MHA's
+    P/D_attn and MLA's TP-attn-aware shardable / replicated split).
+    Dense FFN always uses /TP regardless of layout.
     """
     L = model.L
     if model.moe is not None:
@@ -70,23 +89,21 @@ def dense_weight_bytes(model: LlmModelSpec, partition: PartitionSpec) -> float:
     I_dense = model.I_dense
     b = model.bytes_per_param
     PP = partition.PP
-    d_attn = D_attn(partition)
     d_exp_dense = D_exp(partition, layer_kind="dense")
 
-    P_attn = _per_layer_attn_params(model)
+    P_attn_dev = _per_layer_attn_params_per_device(model, partition)
 
     return (L_dense / PP) * (
-        P_attn / d_attn + (3 * H * I_dense) / d_exp_dense
+        P_attn_dev + (3 * H * I_dense) / d_exp_dense
     ) * b
 
 
 def moe_weight_bytes(model: LlmModelSpec, partition: PartitionSpec) -> float:
     """Per-device weight bytes for the MoE-layer slice of the model.
 
-        M_theta_moe = (L_moe / PP) · (P_attn/D_attn + 3HI_moe·N_exp/D_exp) · b
+        M_theta_moe = (L_moe / PP) · (attn_per_device + 3HI_moe·N_exp/D_exp) · b
 
-    Returns 0.0 for dense-only models. P_attn branches on attention
-    variant via `_per_layer_attn_params`.
+    Returns 0.0 for dense-only models.
     """
     if model.moe is None:
         return 0.0
@@ -99,13 +116,12 @@ def moe_weight_bytes(model: LlmModelSpec, partition: PartitionSpec) -> float:
     H = model.H
     b = model.bytes_per_param
     PP = partition.PP
-    d_attn = D_attn(partition)
     d_exp_moe = D_exp(partition, layer_kind="moe", n_exp_cap=N_exp)
 
-    P_attn = _per_layer_attn_params(model)
+    P_attn_dev = _per_layer_attn_params_per_device(model, partition)
 
     return (L_moe / PP) * (
-        P_attn / d_attn + (3 * H * I_moe * N_exp) / d_exp_moe
+        P_attn_dev + (3 * H * I_moe * N_exp) / d_exp_moe
     ) * b
 
 

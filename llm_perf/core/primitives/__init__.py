@@ -69,6 +69,10 @@ from .weight_footprint import (
 )
 from .kv_footprint import kv_bytes_per_seq
 from .linear_flops import linear_flops_per_token
+from .mla_flops import (
+    mla_proj_flops_per_layer_per_device,
+    mla_score_value_flops_per_layer_per_device,
+)
 from .dispatch import cost_collective, enumerate_options
 from .partition_layout import (
     DEFAULT_ORDER as NESTED_LAYOUT_ORDER,
@@ -138,6 +142,8 @@ __all__ = [
     "embedding_bytes",
     "kv_bytes_per_seq",
     "linear_flops_per_token",
+    "mla_proj_flops_per_layer_per_device",
+    "mla_score_value_flops_per_layer_per_device",
     # dispatcher
     "cost_collective",
     "enumerate_options",

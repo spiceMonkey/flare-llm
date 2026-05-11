@@ -47,14 +47,38 @@ class MLASpec:
 
         See `attention.md §3.3` for the derivation.
         """
+        return (
+            self.per_layer_attn_params_replicated(H, n_q)
+            + self.per_layer_attn_params_shardable(H, n_q)
+        )
+
+    def per_layer_attn_params_replicated(self, H: int, n_q: int) -> int:
+        """Down-projection params: W_DQ + W_DKV.
+
+        Not head-structured — under TP-attention these are replicated on
+        every rank (`attention.md §3.6`). `n_q` is unused but retained for
+        API symmetry with `per_layer_attn_params_shardable`.
+        """
+        del n_q  # unused — down-projections do not depend on head count
+        return (
+            H * self.d_q_c                       # W_DQ
+            + H * (self.d_c + self.d_qk_rope)    # W_DKV
+        )
+
+    def per_layer_attn_params_shardable(self, H: int, n_q: int) -> int:
+        """Up-projection + output params: W_UQ + W_UK + W_UV + W_O.
+
+        Head-structured — under TP-attention these divide by G_TP across
+        ranks (`attention.md §3.6`). Independent of execution mode (the
+        materialized vs absorbed distinction in §3.5 affects only when
+        W_UK / W_UV multiply by data, not whether they exist).
+        """
         d_qk = self.d_qk_nope + self.d_qk_rope
         return (
-            H * self.d_q_c                      # W_DQ
-            + self.d_q_c * n_q * d_qk           # W_UQ
-            + H * (self.d_c + self.d_qk_rope)   # W_DKV
-            + n_q * self.d_c * self.d_qk_nope   # W_UK
-            + n_q * self.d_c * self.d_v         # W_UV
-            + n_q * self.d_v * H                # W_O
+            self.d_q_c * n_q * d_qk              # W_UQ
+            + n_q * self.d_c * self.d_qk_nope    # W_UK
+            + n_q * self.d_c * self.d_v          # W_UV
+            + n_q * self.d_v * H                 # W_O
         )
 
 

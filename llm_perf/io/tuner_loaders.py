@@ -150,6 +150,13 @@ def tuning_spec_from_json_dict(cfg: Dict[str, Any]) -> TuningSpec:
             f"'scatter', got {moe_a2a_pattern!r}"
         )
 
+    mla_mode = cfg.get("mla_mode", "absorbed")
+    if mla_mode not in ("absorbed", "materialized"):
+        raise ValueError(
+            f"tuning configuration: 'mla_mode' must be 'absorbed' or "
+            f"'materialized', got {mla_mode!r}"
+        )
+
     eta_BW_cfg = cfg.get("bw_efficiency", None)
     if eta_BW_cfg is None:
         eta_BW: Optional[Dict[int, float]] = None
@@ -210,6 +217,7 @@ def tuning_spec_from_json_dict(cfg: Dict[str, Any]) -> TuningSpec:
         torus_algorithm=torus_algorithm,
         inc_enabled=bool(cfg.get("inc_enabled", True)),
         moe_a2a_pattern=str(cfg.get("moe_a2a_pattern", _defaults.moe_a2a_pattern)),
+        mla_mode=mla_mode,
         placement=placement,
         kernels_per_layer_compute=int(cfg.get("kernels_per_layer_compute", _defaults.kernels_per_layer_compute)),
         kernels_per_collective_call=int(cfg.get("kernels_per_collective_call", _defaults.kernels_per_collective_call)),
