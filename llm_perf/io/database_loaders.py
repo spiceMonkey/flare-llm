@@ -74,7 +74,7 @@ def load_model_from_db(model_id: str):
 # constructed at the call site (drivers, sweeps, notebooks) — they're
 # runtime sweep parameters, not curated catalog entries. The
 # `load_partition_spec` file-path loader stays in io.partition_loaders
-# for ad-hoc one-off JSONs. Recommended attention_mode + layout per
+# for ad-hoc one-off JSONs. Recommended attention_mode + tp_ep_layout per
 # stack now live on FrameworkSpec (see database/framework/).
 # Tuners (S_decode, flash_attn_gain, overlap, algorithms, etc.)
 # ─────────────────────────────────────────────

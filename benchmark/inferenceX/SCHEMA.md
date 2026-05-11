@@ -84,5 +84,5 @@ breakdowns `input_tput_per_gpu` / `output_tput_per_gpu` (tok/s/GPU).
 - For models in the snapshot that have `disagg=True` rows with
   `decode_dp_attention=True` and `decode_tp == decode_ep == num_decode_gpu`,
   the deployment is the co-located TP+EP shape natively modeled by
-  `PartitionSpec(layout="co_located", attention_mode="dp")` — see
+  `FrameworkSpec(tp_ep_layout="co_located", attention_mode="dp")` — see
   `notation.md §1` and `decode.md §6.3`.

@@ -18,7 +18,7 @@ resolves to the innermost tier even when PP physically spans an outer
 fabric tier (e.g., d-Matrix squadrack PP=32 with TP=8 spanning the
 ethernet rack-tier, not just the package D2D mesh).
 
-Under TP+EP co-location (`FrameworkSpec.layout == "co_located"`), TP and EP
+Under TP+EP co-location (`FrameworkSpec.tp_ep_layout == "co_located"`), TP and EP
 are overlaid on the same physical GPU set, so the cumulative-reach
 calculation must count them once (as `max(TP, EP)`) rather than as their
 product. The helper `_axis_size_for_reach` encodes this.
@@ -49,7 +49,7 @@ def _axis_size_for_reach(partition: PartitionSpec, framework: FrameworkSpec, axi
     """
     if axis not in ("TP", "EP"):
         return max(1, getattr(partition, axis, 1))
-    if framework.layout != "co_located":
+    if framework.tp_ep_layout != "co_located":
         return max(1, getattr(partition, axis, 1))
     # Co-located: TP and EP share physical GPUs.
     if axis == "TP":
@@ -99,8 +99,8 @@ def assign_tier_per_axis(
     for ax in order:
         # Raw axis size still drives the "is this axis trivial?" check —
         # if the user set EP=1, the EP collective never fires (orthogonal
-        # or co-located). The cumulative-reach multiplier is layout-aware
-        # via _axis_size_for_reach.
+        # or co-located). The cumulative-reach multiplier is tp_ep_layout-
+        # aware via _axis_size_for_reach.
         raw_n = max(1, getattr(partition, ax, 1))
         if raw_n <= 1:
             assignment[ax] = 0

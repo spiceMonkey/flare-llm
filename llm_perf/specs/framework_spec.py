@@ -7,7 +7,7 @@ axes:
 
     ModelSpec    = architecture (LlmModelSpec, MoESpec, MLASpec)
     SystemSpec   = hardware (DeviceSpec, FabricSpec, MemoryTierSpec)
-    PartitionSpec = sharding (PP, TP, EP, SP, attention_mode, layout)
+    PartitionSpec = sharding (PP, TP, EP, SP)
     TuningSpec   = workload (S, B, chunk_size, placement, speculation,
                    chip-side derate curves: tensor_core_efficiency,
                    bw_efficiency)
@@ -159,14 +159,13 @@ class FrameworkSpec:
     n_EP_collectives: int = 2
     n_SP_collectives: int = 1
 
-    # ── Recommended sharding mode + layout (Phase G) ───────────────────
-    # Per-stack default attention_mode + layout. Captures the production
-    # convention for this stack (e.g. Dynamo+TRT on DSv3 uses DP-attn
-    # co-located because MLA's latent is not head-structured — see
-    # attention.md §3.6). Callers that construct PartitionSpec inline
-    # may use these as the recommended defaults; PartitionSpec carries
-    # the actual values consumed by the calculator (downstream code
-    # reads partition.attention_mode / partition.layout unchanged).
+    # ── Attention dispatch + TP/EP physical overlay (Phase H) ──────────
+    # Per-stack defaults for two cross-cutting choices that affect every
+    # downstream sharding factor (D_attn, D_kv, D_exp, N_replica). Both
+    # are stack-axis decisions captured here so PartitionSpec can stay
+    # purely numeric (PP/TP/EP/SP). The cross-spec invariant
+    # (tp_ep_layout='co_located' forces attention_mode='dp' AND TP == EP)
+    # is enforced by sharding_factors.compose_check(partition, framework).
     #
     # attention_mode (dispatch policy for the attention block):
     #   "tp" — head-shard the K, V matrices across the TP group; per-rank
@@ -177,15 +176,16 @@ class FrameworkSpec:
     #          on Dynamo-orchestrator stacks (TP-attn buys no KV
     #          reduction for MLA — attention.md §3.6).
     #
-    # layout (whether TP and EP groups overlay on the same physical GPUs):
-    #   "orthogonal" — TP and EP are independent axes. Default for raw-
-    #                  TRT and other stacks that don't co-locate.
+    # tp_ep_layout (whether TP and EP groups overlay on the same physical GPUs):
+    #   "orthogonal" — TP and EP are independent axes. Replica spans
+    #                  PP*TP*EP*SP devices. Default for raw-TRT and other
+    #                  stacks that don't co-locate.
     #   "co_located" — TP and EP overlay on the same GPU set (TP == EP).
-    #                  Required by some DeepEP-style scatter-direct
-    #                  dispatch. Production-default for Dynamo+TRT/
-    #                  SGLang on MoE models.
+    #                  Replica spans PP*max(TP,EP)*SP devices. Required by
+    #                  DeepEP-style scatter-direct dispatch. Production-
+    #                  default for Dynamo+TRT/SGLang on MoE models.
     attention_mode: str = "tp"
-    layout: str = "orthogonal"
+    tp_ep_layout: str = "orthogonal"
 
     # ── Comm/compute overlap (decode.md §6.2) ──────────────────────────
     # Fraction ρ_comm of GPU compute time used to hide collective comm

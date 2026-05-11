@@ -46,7 +46,7 @@ def compute_kv_paging(
     PP = partition.PP
     SP = partition.SP
 
-    # KV head/seq divisor (notation.md §1) — TP under orthogonal layout,
+    # KV head/seq divisor (notation.md §1) — TP under orthogonal tp_ep_layout,
     # max(TP, EP) under co-located. Composes with SP for per-device KV bytes.
     d_kv = D_kv(partition, framework)
 

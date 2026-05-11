@@ -20,7 +20,7 @@ Other terms unchanged:
 - 6HI_dense/TP — dense FFN (gate, up, down), I_dense wide, always
   TP-sharded (no EP axis to overlap on dense).
 - 6HkI_moe/D_exp — MoE FFN: k active experts per token, sharded by D_exp
-  (= TP*EP under orthogonal layout, EP under co-located).
+  (= TP*EP under orthogonal tp_ep_layout, EP under co-located).
 - 2HN_exp — MoE router gate GEMM (H → N_exp), unsharded
   (see documentation/modeling/decode.md §3.4).
 
@@ -49,9 +49,9 @@ def linear_flops_per_token(
     """Per-device, per-token linear FLOPs summed across all layers.
 
     `framework` selects MLA mode (`mla_mode`) and the attention dispatch
-    pattern (`attention_mode`, `layout`) consumed by the sharding-factor
-    helpers. `attention_mode` / `layout` are ignored for GQA / MHA models;
-    `mla_mode` is ignored for non-MLA models.
+    pattern (`attention_mode`, `tp_ep_layout`) consumed by the sharding-
+    factor helpers. `attention_mode` / `tp_ep_layout` are ignored for
+    GQA / MHA models; `mla_mode` is ignored for non-MLA models.
     """
     L = model.L
     H = model.H

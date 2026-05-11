@@ -9,7 +9,7 @@ triple:
 
   2. CO-LOCATED (DSv3 production shape, dec_tp=dec_ep=N on N GPUs,
      dec_dp_attention=True): natively modeled by
-     PartitionSpec(layout="co_located", attention_mode="dp"). InferenceX
+     PartitionSpec(tp_ep_layout="co_located", attention_mode="dp"). InferenceX
      publishes three replica sizes — 8, 16, 32 GPU.
 
   3. ORTHO multi-replica (TP=8 EP=8 dec=32, dp_attn=False): the
@@ -88,7 +88,7 @@ def run_exact(args) -> tuple[list[tuple], int]:
     framework = run_framework(
         model="deepseek_r1_0528", system_id=SYSTEM,
         PP=1, TP=bucket[0], EP=1, SP=1,
-        attention_mode="tp", layout="orthogonal",
+        attention_mode="tp", tp_ep_layout="orthogonal",
         num_devices=bucket[2], S_decode=ISL + OSL // 2,
         B_sweep=log_spaced_B(2048),
         flops_eta=args.flops_eta, bw_eta=args.bw_eta,
@@ -103,7 +103,7 @@ def run_exact(args) -> tuple[list[tuple], int]:
         pred = predict_at(
             model="deepseek_r1_0528", system_id=SYSTEM,
             PP=1, TP=bucket[0], EP=1, SP=1,
-            attention_mode="tp", layout="orthogonal",
+            attention_mode="tp", tp_ep_layout="orthogonal",
             num_devices=bucket[2], S_decode=ISL + OSL // 2, B=m.B,
             flops_eta=args.flops_eta, bw_eta=args.bw_eta,
             c_serving_us=args.c_serving_us,
@@ -146,7 +146,7 @@ def run_colocated(args) -> tuple[list[tuple], int]:
         framework = run_framework(
             model="deepseek_r1_0528", system_id=SYSTEM,
             PP=1, TP=tp_ep, EP=tp_ep, SP=1,
-            attention_mode="dp", layout="co_located",
+            attention_mode="dp", tp_ep_layout="co_located",
             num_devices=tp_ep, S_decode=ISL + OSL // 2,
             B_sweep=log_spaced_B(8192),
             flops_eta=args.flops_eta, bw_eta=args.bw_eta,
@@ -159,7 +159,7 @@ def run_colocated(args) -> tuple[list[tuple], int]:
             pred = predict_at(
                 model="deepseek_r1_0528", system_id=SYSTEM,
                 PP=1, TP=tp_ep, EP=tp_ep, SP=1,
-                attention_mode="dp", layout="co_located",
+                attention_mode="dp", tp_ep_layout="co_located",
                 num_devices=tp_ep, S_decode=ISL + OSL // 2, B=m.B,
                 flops_eta=args.flops_eta, bw_eta=args.bw_eta,
                 c_serving_us=args.c_serving_us,
@@ -173,7 +173,7 @@ def run_colocated(args) -> tuple[list[tuple], int]:
         plot_tpot_vs_B(
             framework=framework, measured=measured,
             title=f"DSR1 / GB200 / Dynamo-TRT — CO-LOCATED TP=EP={tp_ep} on {tp_ep}-GPU replica",
-            subtitle=f"layout=co_located attention_mode=dp PP=1 TP={tp_ep} EP={tp_ep} SP=1 | "
+            subtitle=f"tp_ep_layout=co_located attention_mode=dp PP=1 TP={tp_ep} EP={tp_ep} SP=1 | "
                      f"ISL={ISL} OSL={OSL} FP4 | sys={SYSTEM} | {topology_tag(SYSTEM)} | {eta_subtitle(args.flops_eta, args.bw_eta, args.c_serving_us)}",
             out_path=out,
         )
@@ -205,7 +205,7 @@ def run_ortho(args) -> tuple[list[tuple], int]:
     framework = run_framework(
         model="deepseek_r1_0528", system_id=SYSTEM,
         PP=1, TP=8, EP=8, SP=1,
-        attention_mode="tp", layout="orthogonal",
+        attention_mode="tp", tp_ep_layout="orthogonal",
         num_devices=32, S_decode=ISL + OSL // 2,
         B_sweep=log_spaced_B(2048),
         flops_eta=args.flops_eta, bw_eta=args.bw_eta,
@@ -218,7 +218,7 @@ def run_ortho(args) -> tuple[list[tuple], int]:
         pred = predict_at(
             model="deepseek_r1_0528", system_id=SYSTEM,
             PP=1, TP=8, EP=8, SP=1,
-            attention_mode="tp", layout="orthogonal",
+            attention_mode="tp", tp_ep_layout="orthogonal",
             num_devices=32, S_decode=ISL + OSL // 2, B=m.B,
             flops_eta=args.flops_eta, bw_eta=args.bw_eta,
             c_serving_us=args.c_serving_us,
@@ -232,7 +232,7 @@ def run_ortho(args) -> tuple[list[tuple], int]:
     plot_tpot_vs_B(
         framework=framework, measured=measured,
         title="DSR1 / GB200 / Dynamo-TRT — ORTHO TP=8 EP=8 dec=32 (4 replicas, TP-attn)",
-        subtitle=f"PP=1 TP=8 EP=8 attention_mode=tp layout=orthogonal | "
+        subtitle=f"PP=1 TP=8 EP=8 attention_mode=tp tp_ep_layout=orthogonal | "
                  f"ISL={ISL} OSL={OSL} FP4 | "
                  f"sys={SYSTEM} | {topology_tag(SYSTEM)} | {eta_subtitle(args.flops_eta, args.bw_eta, args.c_serving_us)}",
         out_path=out,

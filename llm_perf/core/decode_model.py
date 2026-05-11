@@ -601,7 +601,7 @@ def compute_latency(
     #   t_LM = max(F_LM/R_gpu, T_LM/BW_top)
     # Added outside γ_pp because the LM head fires once per step regardless of
     # bubble depth (it is not pipelined across PP stages). D_emb = TP across all
-    # three layout/attention-mode configurations (notation.md §1).
+    # three tp_ep_layout/attention_mode configurations (notation.md §1).
     V = model.vocab_size
     d_emb = D_emb(partition)
     b = model.bytes_per_param
@@ -622,9 +622,9 @@ def compute_latency(
 
     TPS_single = B / t_step_user if t_step_user > 0 else 0.0
 
-    # Replica size depends on layout (notation.md §1): orthogonal uses the full
-    # product PP·TP·EP·SP; co-located uses PP·max(TP,EP)·SP since TP and EP
-    # share the same physical GPU set.
+    # Replica size depends on tp_ep_layout (notation.md §1): orthogonal uses
+    # the full product PP·TP·EP·SP; co-located uses PP·max(TP,EP)·SP since TP
+    # and EP share the same physical GPU set.
     replica_size = N_replica(partition, framework)
     DP = system.num_devices // replica_size
     TTPS = DP * TPS_single

@@ -21,5 +21,5 @@
   "n_SP_collectives": 1,
   "comm_overlap_factor": 0.0,
   "attention_mode": "dp",
-  "layout": "co_located"
+  "tp_ep_layout": "co_located"
 }

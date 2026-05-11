@@ -245,7 +245,7 @@ def run_framework(
     EP: int,
     SP: int,
     attention_mode: str = "tp",
-    layout: str = "orthogonal",
+    tp_ep_layout: str = "orthogonal",
     num_devices: int,
     S_decode: int,
     B_sweep: Sequence[int],
@@ -281,7 +281,7 @@ def run_framework(
     fw_kwargs = dict(
         name="benchmark-driver",
         attention_mode=attention_mode,
-        layout=layout,
+        tp_ep_layout=tp_ep_layout,
         c_serving_per_seq_us=c_serving_us,
         moe_a2a_pattern=moe_a2a_pattern,
     )
@@ -335,7 +335,7 @@ def predict_at(
     system_id: str,
     PP: int, TP: int, EP: int, SP: int,
     attention_mode: str = "tp",
-    layout: str = "orthogonal",
+    tp_ep_layout: str = "orthogonal",
     num_devices: int,
     S_decode: int,
     B: int,
@@ -350,7 +350,7 @@ def predict_at(
     pts = run_framework(
         model=model, system_id=system_id,
         PP=PP, TP=TP, EP=EP, SP=SP,
-        attention_mode=attention_mode, layout=layout,
+        attention_mode=attention_mode, tp_ep_layout=tp_ep_layout,
         num_devices=num_devices, S_decode=S_decode,
         B_sweep=[B],
         flops_eta=flops_eta, bw_eta=bw_eta, c_serving_us=c_serving_us,
