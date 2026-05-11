@@ -259,7 +259,7 @@ For a single attention layer, the KV cache consists of:
 
 The KV cache size scales with $H_{kv} = n_{kv} d_{\text{head}}$; using grouped-query attention ($n_{kv} < n_q$) [GQA] or multi-query attention ($n_{kv} = 1$) [MQA] directly reduces this footprint.
 
-> **Variant note.** Multi-head Latent Attention (MLA) further compresses the per-token KV cache by storing a head-shared latent of dimension $d_c + d_{qk,\mathrm{rope}}$ instead of $2 H_{kv}$. For DSv3-class numbers this is roughly 25× smaller than the dense MHA equivalent. See `attention.md §3.4` for the MLA per-token-per-layer formula and `attention.md §3.7` for sharding behavior under TP-attn / DP-attn.
+> **Variant note.** Multi-head Latent Attention (MLA) further compresses the per-token KV cache by storing a head-shared latent of dimension $d_c + d_{qk,\mathrm{rope}}$ instead of $2 H_{kv}$. For DSv3-class numbers this is roughly 25× smaller than the dense MHA equivalent. See `attention.md §3.4` for the MLA per-token-per-layer formula and `attention.md §3.6` for sharding behavior under TP-attn / DP-attn.
 
 Thus, the total KV elements for one layer are:
 
@@ -568,7 +568,7 @@ T_{\theta,\text{attn}} =
 \frac{P_{\text{attn}} \, b}{D_{\text{attn}}}
 $$
 
-> **Variant note.** For Multi-head Latent Attention (MLA) models, $P_{\text{attn}}$ above is the per-layer MLA parameter sum from `attention.md §3.3`; the per-rank sharding split also differs ($W_{DQ}$, $W_{DKV}$ are not head-shared) and is given by `attention.md §3.7`.
+> **Variant note.** For Multi-head Latent Attention (MLA) models, $P_{\text{attn}}$ above is the per-layer MLA parameter sum from `attention.md §3.3`; the per-rank sharding split also differs ($W_{DQ}$, $W_{DKV}$ are not head-shared) and is given by `attention.md §3.6`.
 
 ### FFN parameter traffic
 
@@ -779,7 +779,7 @@ $$
 
 If $H_{kv} = H$ (MHA), this reduces to $8H^2$.
 
-> **Variant note.** Multi-head Latent Attention (MLA) replaces the projection FLOPs above with the down / up-projection cascade detailed in `attention.md §3.6` ($W_{DQ}$, $W_{UQ}$, $W_{DKV}$, $W_O$ plus optional $W_{UK}$, $W_{UV}$ depending on execution mode). The per-step total differs structurally between materialized and absorbed modes; both are given in `attention.md §3.5–§3.6`.
+> **Variant note.** Multi-head Latent Attention (MLA) replaces the projection FLOPs above with the down / up-projection cascade detailed in `attention.md §3.7` ($W_{DQ}$, $W_{UQ}$, $W_{DKV}$, $W_O$ plus optional $W_{UK}$, $W_{UV}$ depending on execution mode). The per-step total differs structurally between materialized and absorbed modes; both are given in `attention.md §3.5` (execution modes) and `§3.7` (per-mode FLOP breakdown).
 
 ## 3.2 Attention Scores and Value Application
 

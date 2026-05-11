@@ -98,7 +98,7 @@ $$
 
 This matches the decode projection formula multiplied by $S_{\text{input}}$, reflecting the transition from GEMV to GEMM.
 
-> **Variant note.** Multi-head Latent Attention (MLA) replaces the projection FLOPs with a six-matrix decomposition over compressed Q and KV latents. Per-token compute under both materialized and absorbed execution modes is given in `attention.md §3.6`; KV cache write per prefill token is $(d_c + d_{qk,\mathrm{rope}}) \cdot b$ instead of $2 H_{kv} \cdot b$.
+> **Variant note.** Multi-head Latent Attention (MLA) replaces the projection FLOPs with a six-matrix decomposition over compressed Q and KV latents. Per-token compute under both materialized and absorbed execution modes is given in `attention.md §3.7`; KV cache write per prefill token is $(d_c + d_{qk,\mathrm{rope}}) \cdot b$ instead of $2 H_{kv} \cdot b$.
 
 ---
 

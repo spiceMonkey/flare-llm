@@ -545,8 +545,8 @@ The `decode.md` and `prefill.md` cost formulas assume standard multi-head attent
 - **Multi-Head Attention (MHA)** (`attention.md §1`) — original transformer formulation; LLaMA-1, GPT-3. Standard symbols ($H$, $n_q$, $d_{\mathrm{head}}$) from §3 above; no extensions.
 - **Grouped-Query Attention (GQA)** (`attention.md §2`) — LLaMA-3, Mistral, Qwen-2/3, most modern dense LLMs. Adds $n_{kv}$ (already listed in §3 above).
 - **Multi-head Latent Attention (MLA)** (`attention.md §3`) — DeepSeek-V3 / R1, DeepSeek-V4-Pro, GLM-5, Kimi-K2.5. Symbols: $d_c$, $d_{q,c}$, $d_{qk,\mathrm{nope}}$, $d_{qk,\mathrm{rope}}$, $d_v$ (already listed in §3 above).
-- **Sliding-window attention** (`attention.md §4`, placeholder) — Mistral, GPT-OSS, Gemma. Symbol: $W$ (per-token attention window).
-- **DeepSeek Sparse Attention (DSA)** (`attention.md §5`, placeholder) — DeepSeek-V4-Pro, GLM-5. Symbol: $k_{\mathrm{attn}}$ (top-$k$ tokens attended).
-- **Hybrid linear / full attention** (`attention.md §6`, placeholder) — Qwen-3.5, Jamba, Hymba. Symbol: per-layer `layer_type` selector.
+- **Sliding-window attention (SWA)** (`attention.md §4`) — Mistral 7B, Gemma 2 / 3, GPT-OSS. Symbols: $W$ (per-token attention window), $L_{\mathrm{swa}}$ / $L_{\mathrm{full}}$ (per-layer-type counts for interleaved variants), $S_{\mathrm{eff}} = \min(S, W)$ (effective per-layer attention span).
+- **DeepSeek Sparse Attention (DSA)** (`attention.md §5`) — DeepSeek-V3.2-Exp. Symbols: $k_{\mathrm{attn}}$ (top-$k$ past tokens attended per query), $d_{\mathrm{idx}}$ (indexer feature dimension, cached per token).
+- **Hybrid linear / full attention** (`attention.md §6`) — Jamba, Hymba, MiniMax-01. Symbols: per-layer $\mathrm{layer\_type}[i] \in \{\text{full}, \text{lin}\}$ selector, $L_{\mathrm{full}}$ / $L_{\mathrm{lin}}$ (per-layer-type counts), $d_{\mathrm{state}}$ (SSM state dimension for Mamba-class linear layers), $M_{\mathrm{state,SSM}}$ (per-sequence per-layer SSM state size, fixed in $S$).
 
 When a model uses a non-MHA variant, the `decode.md` and `prefill.md` formulas for $P_{\mathrm{attn}}$, $M_{\mathrm{KV}}$, $T_{\mathrm{KV}}$, and $F_{\mathrm{attn}}$ carry inline references to the matching `attention.md` subsection.
