@@ -1,5 +1,5 @@
 
-from .model_spec import LlmModelSpec, MoESpec
+from .model_spec import LlmModelSpec, MLASpec, MoESpec
 from .system_spec import (
     CrossbarTier,
     DeviceSpec,
@@ -17,6 +17,7 @@ from .disagg_spec import DisaggSpec
 
 __all__ = [
     "LlmModelSpec",
+    "MLASpec",
     "MoESpec",
     "DeviceSpec",
     "FabricSpec",

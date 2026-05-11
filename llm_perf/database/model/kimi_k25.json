@@ -5,7 +5,7 @@
   "L": 61,
   "H": 7168,
   "n_q": 64,
-  "n_kv": 5,
+  "n_kv": 64,
   "I_dense": 18432,
   "vocab_size": 163840,
   "max_seq_len": 262144,
@@ -18,8 +18,16 @@
     "n_moe_layers": 60
   },
 
+  "mla": {
+    "d_c": 512,
+    "d_q_c": 1536,
+    "d_qk_nope": 128,
+    "d_qk_rope": 64,
+    "d_v": 128
+  },
+
   "_comment_arch": "DeepSeek-V3 architecture (MLA + MoE) per text_config. Vision tower (vt_*) parameters not modeled — multimodal extension off the language path.",
-  "_comment_n_kv": "MLA approximation: kv_lora_rank=512, qk_nope_head_dim=128, qk_rope_head_dim=64, v_head_dim=128; n_kv=5 gives H_kv=560 (~3% over). The explicit num_key_value_heads=64 is the head-equivalent count, not the compressed latent count.",
+  "_comment_mla": "Multi-head Latent Attention (DSv3 family): kv_lora_rank → d_c=512, qk_nope_head_dim=128, qk_rope_head_dim=64, v_head_dim=128, q_lora_rank → d_q_c=1536. Per-token-per-layer KV = (d_c + d_qk_rope) bytes at FP8 = 576 B. n_kv is the canonical n_q=64 and is ignored when mla is present.",
   "_comment_k_active": "8 routed experts + 1 shared expert (always active). Shared expert approximated by k=9.",
   "_comment_n_moe_layers": "first_k_dense_replace=1 → first layer is dense, remaining 60 are MoE."
 }

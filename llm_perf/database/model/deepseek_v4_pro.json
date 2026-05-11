@@ -5,7 +5,7 @@
   "L": 61,
   "H": 7168,
   "n_q": 128,
-  "n_kv": 5,
+  "n_kv": 128,
   "I_dense": 18432,
   "vocab_size": 129280,
   "max_seq_len": 1048576,
@@ -18,7 +18,15 @@
     "n_moe_layers": 61
   },
 
-  "_comment_n_kv": "MLA approximation (same family as DeepSeek-R1): real KV cache = compressed latent + RoPE; n_kv=5 gives ~3% under on KV footprint. MLA stores compressed latent, not separate K/V heads.",
+  "mla": {
+    "d_c": 512,
+    "d_q_c": 1536,
+    "d_qk_nope": 128,
+    "d_qk_rope": 64,
+    "d_v": 128
+  },
+
+  "_comment_mla": "Multi-head Latent Attention (DSv3 family). Real KV cache stores the head-shared latent (d_c + d_qk_rope) = 576 dims at FP4 = 288 bytes/tok/layer; matches the DSv3 worked example in attention.md §3.8. n_kv is set to canonical n_q and is ignored when mla is present.",
   "_comment_k_active": "6 routed experts + 1 shared expert (always active). Shared expert approximated by k=7.",
-  "_comment_caveats": "Architecture-specific extensions NOT modeled: Compressed Sparse Attention (CSA), Heavily Compressed Attention (HCA), Multi-Token Prediction (MTP) head with num_nextn_predict_layers=1, sliding_window=128 on attention. These reduce real per-token compute and KV traffic vs the framework's MHA/MoE generic forms; predicted decode latency is therefore an upper bound."
+  "_comment_caveats": "Architecture-specific extensions NOT modeled: Compressed Sparse Attention (CSA), Heavily Compressed Attention (HCA), Multi-Token Prediction (MTP) head with num_nextn_predict_layers=1, sliding_window=128 on attention. These reduce real per-token compute and KV traffic vs the framework's MLA + MoE generic forms; predicted decode latency is therefore an upper bound."
 }
