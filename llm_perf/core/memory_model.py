@@ -42,7 +42,6 @@ def compute_memory(
     """
 
     H = model.H
-    H_kv = model.H_kv()
     b = model.bytes_per_param
     S = tuner.S_decode
     B = tuner.B_decode
@@ -58,7 +57,32 @@ def compute_memory(
     # Activations stay in registers / shared memory and are not modeled by
     # the placement layer (sram.md §1.3); they count against the device's
     # fastest tier's capacity for the fit check below.
-    M_act_device = B * (4 * H + 2 * H_kv) * b
+    #
+    # Branches on attention variant. Both forms are rough proxies for the
+    # actual one-layer attention working set; the dominant downstream
+    # terms (M_theta_device, M_kv_device) are accurate, and activation
+    # memory is typically small in absolute terms (MB-scale at B=1).
+    # - GQA / MHA: 4H residual / FFN intermediate + 2 H_kv for the K, V
+    #   per-head buffers (matches the historical convention).
+    # - MLA: 4H residual / FFN intermediate
+    #        + n_q · d_qk for the materialized per-head Q (always built
+    #          at runtime via W_UQ)
+    #        + n_q · d_v for the per-head attention output (fed to W_O)
+    #        + (d_c + d_qk_rope) for the on-die copy of c_KV used during
+    #          attention (read-only working buffer; not the cache itself).
+    if model.mla is not None:
+        mla = model.mla
+        n_q = model.n_q
+        d_qk = mla.d_qk_nope + mla.d_qk_rope
+        M_act_device = B * (
+            4 * H
+            + n_q * d_qk
+            + n_q * mla.d_v
+            + (mla.d_c + mla.d_qk_rope)
+        ) * b
+    else:
+        H_kv = model.H_kv()
+        M_act_device = B * (4 * H + 2 * H_kv) * b
 
     # KV memory M_kv_device (B sequences, each with context S)
     M_kv_device = B * kv_bytes_per_seq(model, partition, S)
