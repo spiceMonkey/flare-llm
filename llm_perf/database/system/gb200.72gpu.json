@@ -17,7 +17,9 @@
           "name": "intra-rack-nvswitch",
           "ports": 72,
           "bw_per_port_GBps": 900.0,
-          "alpha_us": 0.5
+          "alpha_us": 0.5,
+          "inc": "nvls",
+          "inc_alpha_us": 0.2
         }
       ]
     }
@@ -34,5 +36,5 @@
     "eta": 1.0,
     "delta_alpha_us": 0.0
   },
-  "_comment": "GB200 NVL72: Blackwell B200, 192 GB HBM3E @ 8 TB/s, FP16 dense 2250 TFLOPS/GPU per the framework convention (peak_flops_TF stores FP16 dense per chip; lower precisions scale linearly by bytes_per_param: FP8 = 4500, FP4 = 9000), NVLink5 1.8 TB/s bidir (900 GB/s single-direction). All 72 GPUs in a single NVLink domain via 9 NVSwitch Gen3 chips (7.2 TB/s single-dir each, 64.8 TB/s system aggregate). eta=1.0 means no efficiency discount applied by default."
+  "_comment": "GB200 NVL72: Blackwell B200, 192 GB HBM3E @ 8 TB/s, FP16 dense 2250 TFLOPS/GPU per the framework convention (peak_flops_TF stores FP16 dense per chip; lower precisions scale linearly by bytes_per_param: FP8 = 4500, FP4 = 9000), NVLink5 1.8 TB/s bidir (900 GB/s single-direction). All 72 GPUs in a single NVLink domain via 9 NVSwitch Gen3 chips (7.2 TB/s single-dir each, 64.8 TB/s system aggregate). NVSwitch5 is NVLS-capable hardware (in-network all-reduce/all-gather via switch ALU + multicast); `inc: nvls` discloses the capability. Whether the runtime engages NVLS is a framework decision (`FrameworkSpec.inc_enabled`) — production Dynamo+TRT/SGLang runs typically did not enable it during the InferenceX measurement window, so benchmark validators set `inc_enabled=False`. Notebooks that study INC effects (pareto_collective_algorithms, pareto_vs_kernel_launch, pareto_vs_mem_alpha*) keep the default `inc_enabled=True` so the cost model engages NVLS. eta=1.0 means no efficiency discount applied by default."
 }
