@@ -53,7 +53,7 @@ ISL, OSL = 1024, 1024
 # MAE — the colocated TP=EP=32, 48 cells at B≥4000 are structurally
 # over-predicted (likely a shared-MoE / DeepEP hot-path the framework
 # doesn't yet model precisely); not addressable via the per-stack knobs.
-DEFAULT_BW_ETA = 0.9
+DEFAULT_BW_ETA = 1.0
 DEFAULT_C_SERVING_US = 0.0
 DEFAULT_KERNEL_LAUNCH_US = 12.0
 DEFAULT_MOE_A2A_PATTERN = "scatter"

@@ -65,7 +65,7 @@ ISL, OSL = 1024, 1024
 # the bulk of the improvement: Dynamo+TRT absorbs per-seq host work into
 # the CUDA-graph launch, so the framework's per-seq overhead term
 # over-counts at large B (the offending TP=EP=16,32 cells run at B≥4000).
-DEFAULT_BW_ETA = 0.5
+DEFAULT_BW_ETA = 0.7143
 DEFAULT_C_SERVING_US = 0.0
 DEFAULT_KERNEL_LAUNCH_US = 7.0
 DEFAULT_MOE_A2A_PATTERN = "scatter"

@@ -38,7 +38,7 @@ TP_SHAPES = (1, 2, 4, 8)
 # gpt_oss_120b_h200_trt — at small B (typical for Llama on B200/TRT) the
 # host loop is in the under-amortized regime where per-sequence cost is
 # closer to floor.
-DEFAULT_BW_ETA = 0.4
+DEFAULT_BW_ETA = 0.5714
 DEFAULT_C_SERVING_US = 50.0
 
 

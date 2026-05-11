@@ -121,17 +121,17 @@ def system_for(hw: str, dec_gpu: int) -> str | None:
 
 CALIBRATED = {
     # Recalibrated by dsr1_gb300_dynamo_sglang.py post-MLA-migration (~58% MAE)
-    ("gb300", "dynamo-sglang"): dict(bw_eta=0.9, c_serving=0.0, kernel_launch=12.0, pattern="scatter"),
+    ("gb300", "dynamo-sglang"): dict(bw_eta=1.0, c_serving=0.0, kernel_launch=12.0, pattern="scatter"),
     # Recalibrated by dsr1_gb300_dynamo_trt.py post-MLA-migration (~20% MAE)
-    ("gb300", "dynamo-trt"):    dict(bw_eta=1.0, c_serving=0.0, kernel_launch=7.0,  pattern="scatter"),
+    ("gb300", "dynamo-trt"):    dict(bw_eta=1.1111, c_serving=0.0, kernel_launch=7.0,  pattern="scatter"),
     # Recalibrated by dsr1_gb200_dynamo_trt.py post-MLA-migration (~23% MAE across 4 cuts)
-    ("gb200", "dynamo-trt"):    dict(bw_eta=0.5, c_serving=0.0, kernel_launch=7.0,  pattern="scatter"),
+    ("gb200", "dynamo-trt"):    dict(bw_eta=0.7143, c_serving=0.0, kernel_launch=7.0,  pattern="scatter"),
     # Calibrated by gpt_oss_120b_gb200_dynamo_trt.py (~9% MAE)
-    ("gb200", "dynamo-trt-oss"): dict(bw_eta=1.0, c_serving=22.0, kernel_launch=1.5, pattern="gather"),
+    ("gb200", "dynamo-trt-oss"): dict(bw_eta=1.4286, c_serving=22.0, kernel_launch=1.5, pattern="gather"),
     # Calibrated by llama3_70b_b200_trt.py (~27% MAE)
-    ("b200", "trt"):            dict(bw_eta=0.4, c_serving=0.0,  kernel_launch=1.5, pattern="gather"),
+    ("b200", "trt"):            dict(bw_eta=0.5714, c_serving=0.0,  kernel_launch=1.5, pattern="gather"),
     # Calibrated by llama3_70b_h200_trt.py (~12% MAE)
-    ("h200", "trt"):            dict(bw_eta=0.55, c_serving=75.0, kernel_launch=1.5, pattern="gather"),
+    ("h200", "trt"):            dict(bw_eta=0.7857, c_serving=75.0, kernel_launch=1.5, pattern="gather"),
 }
 
 # Stack-class fallbacks used when (hw, fw) isn't in CALIBRATED. Roughly
@@ -164,9 +164,14 @@ STACK_CLASS = {
 
 # Per-chip bw_eta default (HBM3e on Blackwell sustains higher than HBM3 on Hopper).
 BW_ETA_BY_CHIP = {
-    "b200": 0.7, "b300": 0.8,
-    "gb200": 0.7, "gb300": 0.9,
-    "h100": 0.55, "h200": 0.55,
+    # Per-chip bw_eta default — Phase F: chip baselines now live on
+    # DeviceSpec (hbm_eta_beta in system JSONs). This table reduces to
+    # the identity (1.0 everywhere); kept for callers that still index
+    # by chip name. Stack-specific ratios live in CALIBRATED entries
+    # above (per-(hw, fw)) or in per-driver DEFAULT_BW_ETA constants.
+    "b200": 1.0, "b300": 1.0,
+    "gb200": 1.0, "gb300": 1.0,
+    "h100": 1.0, "h200": 1.0,
 }
 
 

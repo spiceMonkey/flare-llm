@@ -429,6 +429,11 @@ def system_spec_from_json_dict(cfg: Dict[str, Any]) -> SystemSpec:
         raise ValueError(
             f"device configuration: 'peak_flops_eta' must be in (0, 1], got {peak_flops_eta}"
         )
+    hbm_eta_beta = float(dev_cfg.get("hbm_eta_beta", 1.0))
+    if not (0.0 < hbm_eta_beta <= 1.0):
+        raise ValueError(
+            f"device configuration: 'hbm_eta_beta' must be in (0, 1], got {hbm_eta_beta}"
+        )
     tc_curve = _parse_efficiency_curve(
         dev_cfg.get("tensor_core_efficiency"), key_name="mb",
         prefix="device configuration: 'tensor_core_efficiency'",
@@ -449,6 +454,7 @@ def system_spec_from_json_dict(cfg: Dict[str, Any]) -> SystemSpec:
         sram_bandwidth_TBps=sram_bandwidth_TBps,
         tiers=tiers,
         peak_flops_eta=peak_flops_eta,
+        hbm_eta_beta=hbm_eta_beta,
         tensor_core_efficiency=tc_curve,
         bw_efficiency=bw_curve,
     )

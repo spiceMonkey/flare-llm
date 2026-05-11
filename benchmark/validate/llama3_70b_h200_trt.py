@@ -34,7 +34,7 @@ TP_SHAPES = (1, 2, 4, 8)
 # entire validator suite, suggesting Hopper's mature stack is well-modeled
 # by the framework once these two knobs are dialed in. Hopper HBM3 sustains
 # ~55% of peak (lower than HBM3e on Blackwell because of older controllers).
-DEFAULT_BW_ETA = 0.55
+DEFAULT_BW_ETA = 0.7857
 DEFAULT_C_SERVING_US = 75.0
 
 

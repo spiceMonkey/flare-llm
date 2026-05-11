@@ -82,6 +82,18 @@ class DeviceSpec:
     # existing system JSON's pre-Phase-F behavior).
     peak_flops_eta: float = 1.0
 
+    # ── Static HBM BW deflator on legacy single-tier path (Phase F) ────
+    # Convenience field: the chip-baseline "sustained / nameplate" HBM
+    # BW factor, applied to the auto-materialized HBM tier when the
+    # device uses the legacy single-tier convention (no explicit
+    # `tiers` block). Lets a user encode the chip baseline in the
+    # system JSON without converting to explicit tiers.
+    # Multi-tier devices that ship explicit `tiers` blocks should set
+    # eta_beta per tier directly (this field is ignored when `tiers` is
+    # non-empty).
+    # 1.0 = chip sustains nameplate HBM BW (legacy default).
+    hbm_eta_beta: float = 1.0
+
     # ── Dynamic compute curve (Phase F; was on TuningSpec) ─────────────
     # Tensor Core efficiency η_TC(mb) — piecewise-linear curve mapping
     # microbatch size mb (= B / PP) to a derate factor in [0, 1] applied
@@ -138,7 +150,7 @@ class DeviceSpec:
                 capacity_GB=self.hbm_capacity_GB,
                 bandwidth_GBps=self.hbm_bandwidth_GBps,
                 alpha_us=0.0,
-                eta_beta=1.0,
+                eta_beta=self.hbm_eta_beta,
             )
         )
         return materialized

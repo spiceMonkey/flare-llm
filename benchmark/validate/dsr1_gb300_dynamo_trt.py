@@ -57,7 +57,7 @@ ISL, OSL = 1024, 1024
 # large-B co-located cells (TP=EP=16, 32 at B≥4000). bw_eta is unchanged
 # because gb300 / dynamo-trt is structurally insensitive to it across
 # the cells in this dataset.
-DEFAULT_BW_ETA = 1.0
+DEFAULT_BW_ETA = 1.1111
 DEFAULT_C_SERVING_US = 0.0
 DEFAULT_KERNEL_LAUNCH_US = 7.0
 DEFAULT_MOE_A2A_PATTERN = "scatter"

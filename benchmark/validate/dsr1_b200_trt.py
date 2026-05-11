@@ -38,7 +38,7 @@ TP, EP, NUM = 8, 1, 8
 # (bw_eta=0.7, c_serving=100 µs/seq). The 100 µs is at the high end of
 # §7.2's 30–60 µs Python-heavy stack range — note raw TRT-LLM's per-step
 # loop is C++ but exposes more individual kernel launches than Dynamo.
-DEFAULT_BW_ETA = 0.7
+DEFAULT_BW_ETA = 1.0
 DEFAULT_C_SERVING_US = 100.0
 
 

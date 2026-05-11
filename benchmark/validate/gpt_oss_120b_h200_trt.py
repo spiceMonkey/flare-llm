@@ -30,7 +30,7 @@ TP_SHAPES = (1, 2, 4, 8)
 # calibration, suggesting the c_serving for raw TRT-LLM is consistent
 # across HW generations (Hopper / Blackwell). Per-sequence host overhead
 # is primarily a property of the framework, not the GPU.
-DEFAULT_BW_ETA = 0.7
+DEFAULT_BW_ETA = 1.0
 DEFAULT_C_SERVING_US = 100.0
 
 
