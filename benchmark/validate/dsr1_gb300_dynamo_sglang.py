@@ -8,7 +8,7 @@ triple, all `disagg=True` (separate prefill cluster):
      framework-modelable directly.
   2. CO-LOCATED (DSv3 production shape, dec_tp=dec_ep=N on N GPUs,
      dec_dp_attention=True): natively modeled by
-     PartitionSpec(layout="co_located", attention_mode="dp"). InferenceX
+     PartitionSpec(tp_ep_layout="co_located", attention_mode="dp"). InferenceX
      publishes three replica sizes — 8, 32, 48 GPU.
 
 Cross-check vs `dsr1_gb200_dynamo_trt.py`: same model, different rack
@@ -53,7 +53,7 @@ ISL, OSL = 1024, 1024
 # MAE — the colocated TP=EP=32, 48 cells at B≥4000 are structurally
 # over-predicted (likely a shared-MoE / DeepEP hot-path the framework
 # doesn't yet model precisely); not addressable via the per-stack knobs.
-DEFAULT_BW_ETA = 0.9
+DEFAULT_BW_ETA = 1.0
 DEFAULT_C_SERVING_US = 0.0
 DEFAULT_KERNEL_LAUNCH_US = 12.0
 DEFAULT_MOE_A2A_PATTERN = "scatter"
@@ -79,7 +79,7 @@ def run_exact(args) -> tuple[list[tuple], int]:
         framework = run_framework(
             model="deepseek_r1_0528", system_id=SYSTEM,
             PP=1, TP=4, EP=1, SP=1,
-            attention_mode="tp", layout="orthogonal",
+            attention_mode="tp", tp_ep_layout="orthogonal",
             num_devices=dec, S_decode=ISL + OSL // 2,
             B_sweep=log_spaced_B(2048),
             flops_eta=args.flops_eta, bw_eta=args.bw_eta,
@@ -92,7 +92,7 @@ def run_exact(args) -> tuple[list[tuple], int]:
             pred = predict_at(
                 model="deepseek_r1_0528", system_id=SYSTEM,
                 PP=1, TP=4, EP=1, SP=1,
-                attention_mode="tp", layout="orthogonal",
+                attention_mode="tp", tp_ep_layout="orthogonal",
                 num_devices=dec, S_decode=ISL + OSL // 2, B=m.B,
                 flops_eta=args.flops_eta, bw_eta=args.bw_eta,
                 c_serving_us=args.c_serving_us,
@@ -135,7 +135,7 @@ def run_colocated(args) -> tuple[list[tuple], int]:
         framework = run_framework(
             model="deepseek_r1_0528", system_id=SYSTEM,
             PP=1, TP=tp_ep, EP=tp_ep, SP=1,
-            attention_mode="dp", layout="co_located",
+            attention_mode="dp", tp_ep_layout="co_located",
             num_devices=tp_ep, S_decode=ISL + OSL // 2,
             B_sweep=log_spaced_B(8192),
             flops_eta=args.flops_eta, bw_eta=args.bw_eta,
@@ -148,7 +148,7 @@ def run_colocated(args) -> tuple[list[tuple], int]:
             pred = predict_at(
                 model="deepseek_r1_0528", system_id=SYSTEM,
                 PP=1, TP=tp_ep, EP=tp_ep, SP=1,
-                attention_mode="dp", layout="co_located",
+                attention_mode="dp", tp_ep_layout="co_located",
                 num_devices=tp_ep, S_decode=ISL + OSL // 2, B=m.B,
                 flops_eta=args.flops_eta, bw_eta=args.bw_eta,
                 c_serving_us=args.c_serving_us,
@@ -162,7 +162,7 @@ def run_colocated(args) -> tuple[list[tuple], int]:
         plot_tpot_vs_B(
             framework=framework, measured=measured,
             title=f"DSR1 / GB300 / Dynamo+SGLang — CO-LOCATED TP=EP={tp_ep} on {tp_ep}-GPU replica",
-            subtitle=f"layout=co_located attention_mode=dp PP=1 TP={tp_ep} EP={tp_ep} SP=1 | "
+            subtitle=f"tp_ep_layout=co_located attention_mode=dp PP=1 TP={tp_ep} EP={tp_ep} SP=1 | "
                      f"ISL={ISL} OSL={OSL} FP4 | sys={SYSTEM} | {topology_tag(SYSTEM)} | {eta_subtitle(args.flops_eta, args.bw_eta, args.c_serving_us)}",
             out_path=out,
         )

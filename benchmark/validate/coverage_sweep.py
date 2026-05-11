@@ -38,6 +38,7 @@ from common import (  # noqa: E402
 )
 from llm_perf import InferenceCalculator  # noqa: E402
 from llm_perf.io import load_model_from_db, load_system_from_db  # noqa: E402
+from llm_perf.specs.framework_spec import FrameworkSpec  # noqa: E402
 from llm_perf.specs.partition_spec import PartitionSpec  # noqa: E402
 from llm_perf.specs.tuner_spec import TuningSpec  # noqa: E402
 
@@ -81,34 +82,29 @@ SYSTEM_ID = {
     "h100": "h100.8gpu", "h200": "h200.8gpu",
 }
 
-# Multi-box specs (NVLink intra-box + IB inter-box). Phase 3 covers
-# all NVIDIA chip families with InferenceX multi-box rows. Maps
-# (chip, dec_gpu) → spec id.
-MULTIBOX_SYSTEM_ID = {
-    # Blackwell (B-series): NVLink5 + ConnectX-8 XDR
-    ("b200", 16): "b200.16gpu", ("b200", 24): "b200.24gpu",
-    ("b200", 40): "b200.40gpu", ("b200", 48): "b200.48gpu",
-    ("b200", 64): "b200.64gpu",
-    ("b300", 16): "b300.16gpu", ("b300", 20): "b300.20gpu",
-    ("b300", 24): "b300.24gpu", ("b300", 32): "b300.32gpu",
-    ("b300", 40): "b300.40gpu", ("b300", 64): "b300.64gpu",
-    # Hopper (H-series): NVLink4 + ConnectX-7 NDR
-    ("h100", 16): "h100.16gpu", ("h100", 48): "h100.48gpu",
-    ("h200", 16): "h200.16gpu", ("h200", 48): "h200.48gpu",
-    ("h200", 56): "h200.56gpu", ("h200", 64): "h200.64gpu",
-    ("h200", 72): "h200.72gpu",
+# Multi-box deployment templates. One JSON per chip family (NVLink intra-box +
+# IB inter-box); the cluster-wide `num_devices` and the IB tier's `ports` are
+# parameterized at load-time by `common.system_with_eta(num_devices=N)`, which
+# auto-resizes the outer fabric tier to ceil(N / inner_island_size). Phase 3
+# covers all NVIDIA chip families with InferenceX multi-box rows.
+MULTIBOX_TEMPLATE = {
+    "b200": "b200.multibox",   # NVLink5 + ConnectX-8 XDR
+    "b300": "b300.multibox",   # NVLink5 + ConnectX-8 XDR
+    "h100": "h100.multibox",   # NVLink4 + ConnectX-7 NDR
+    "h200": "h200.multibox",   # NVLink4 + ConnectX-7 NDR
 }
 
 
 def system_for(hw: str, dec_gpu: int) -> str | None:
     """Return the best system spec id for a (chip, dec_gpu) tuple, or None
-    if no spec exists (multi-box H100/H200/AMD)."""
+    if no spec exists (AMD)."""
     if hw not in ISLAND_SIZE:
         return None
     if dec_gpu <= ISLAND_SIZE[hw]:
         return SYSTEM_ID[hw]
-    # > island — try multi-box specs
-    return MULTIBOX_SYSTEM_ID.get((hw, dec_gpu))
+    # > island — use the chip family's multibox template; system_with_eta
+    # parameterizes both num_devices and the IB tier's ports.
+    return MULTIBOX_TEMPLATE.get(hw)
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -120,17 +116,17 @@ def system_for(hw: str, dec_gpu: int) -> str | None:
 
 CALIBRATED = {
     # Recalibrated by dsr1_gb300_dynamo_sglang.py post-MLA-migration (~58% MAE)
-    ("gb300", "dynamo-sglang"): dict(bw_eta=0.9, c_serving=0.0, kernel_launch=12.0, pattern="scatter"),
+    ("gb300", "dynamo-sglang"): dict(bw_eta=1.0, c_serving=0.0, kernel_launch=12.0, pattern="scatter"),
     # Recalibrated by dsr1_gb300_dynamo_trt.py post-MLA-migration (~20% MAE)
-    ("gb300", "dynamo-trt"):    dict(bw_eta=1.0, c_serving=0.0, kernel_launch=7.0,  pattern="scatter"),
+    ("gb300", "dynamo-trt"):    dict(bw_eta=1.1111, c_serving=0.0, kernel_launch=7.0,  pattern="scatter"),
     # Recalibrated by dsr1_gb200_dynamo_trt.py post-MLA-migration (~23% MAE across 4 cuts)
-    ("gb200", "dynamo-trt"):    dict(bw_eta=0.5, c_serving=0.0, kernel_launch=7.0,  pattern="scatter"),
+    ("gb200", "dynamo-trt"):    dict(bw_eta=0.7143, c_serving=0.0, kernel_launch=7.0,  pattern="scatter"),
     # Calibrated by gpt_oss_120b_gb200_dynamo_trt.py (~9% MAE)
-    ("gb200", "dynamo-trt-oss"): dict(bw_eta=1.0, c_serving=22.0, kernel_launch=1.5, pattern="gather"),
+    ("gb200", "dynamo-trt-oss"): dict(bw_eta=1.4286, c_serving=22.0, kernel_launch=1.5, pattern="gather"),
     # Calibrated by llama3_70b_b200_trt.py (~27% MAE)
-    ("b200", "trt"):            dict(bw_eta=0.4, c_serving=0.0,  kernel_launch=1.5, pattern="gather"),
+    ("b200", "trt"):            dict(bw_eta=0.5714, c_serving=0.0,  kernel_launch=1.5, pattern="gather"),
     # Calibrated by llama3_70b_h200_trt.py (~12% MAE)
-    ("h200", "trt"):            dict(bw_eta=0.55, c_serving=75.0, kernel_launch=1.5, pattern="gather"),
+    ("h200", "trt"):            dict(bw_eta=0.7857, c_serving=75.0, kernel_launch=1.5, pattern="gather"),
 }
 
 # Stack-class fallbacks used when (hw, fw) isn't in CALIBRATED. Roughly
@@ -163,9 +159,14 @@ STACK_CLASS = {
 
 # Per-chip bw_eta default (HBM3e on Blackwell sustains higher than HBM3 on Hopper).
 BW_ETA_BY_CHIP = {
-    "b200": 0.7, "b300": 0.8,
-    "gb200": 0.7, "gb300": 0.9,
-    "h100": 0.55, "h200": 0.55,
+    # Per-chip bw_eta default — Phase F: chip baselines now live on
+    # DeviceSpec (hbm_eta_beta in system JSONs). This table reduces to
+    # the identity (1.0 everywhere); kept for callers that still index
+    # by chip name. Stack-specific ratios live in CALIBRATED entries
+    # above (per-(hw, fw)) or in per-driver DEFAULT_BW_ETA constants.
+    "b200": 1.0, "b300": 1.0,
+    "gb200": 1.0, "gb300": 1.0,
+    "h100": 1.0, "h200": 1.0,
 }
 
 
@@ -189,7 +190,7 @@ def get_knobs(hw: str, fw: str) -> dict:
 
 
 def infer_partition(m) -> tuple[int, int, int, int, str, str]:
-    """Pick (PP, TP, EP, SP, attention_mode, layout) from a measured row."""
+    """Pick (PP, TP, EP, SP, attention_mode, tp_ep_layout) from a measured row."""
     PP, SP = 1, 1
     TP, EP = m.decode_tp, max(1, m.decode_ep)
     dec = m.num_decode_gpu
@@ -252,7 +253,7 @@ def main() -> int:
                 continue  # no spec (multi-box H100/H200 or AMD — Phase 3/4)
 
             knobs = get_knobs(m.hardware, m.framework)
-            PP, TP, EP, SP, attn_mode, layout = infer_partition(m)
+            PP, TP, EP, SP, attn_mode, tp_ep_layout = infer_partition(m)
 
             # Pre-flight: skip rows where the model can't structurally fit on
             # the labeled (PP*TP*EP*SP) GPUs. The InferenceX dataset has rows
@@ -265,11 +266,17 @@ def main() -> int:
                 spec = dataclasses.replace(spec, bytes_per_param=bpp)
                 sys_spec = load_system_from_db(sys_id)
                 sys_spec = dataclasses.replace(sys_spec, num_devices=m.num_decode_gpu)
-                p_spec = PartitionSpec(PP=PP, TP=TP, EP=EP, SP=SP,
-                                       attention_mode=attn_mode, layout=layout)
-                t_spec = TuningSpec(S_decode=m.isl + m.osl // 2, B_decode=m.B,
-                                    moe_a2a_pattern=knobs["pattern"])
-                r_check = InferenceCalculator(spec, sys_spec, p_spec, t_spec).run()
+                p_spec = PartitionSpec(PP=PP, TP=TP, EP=EP, SP=SP)
+                t_spec = TuningSpec(S_decode=m.isl + m.osl // 2, B_decode=m.B)
+                fw_spec = FrameworkSpec(
+                    name="precheck",
+                    attention_mode=attn_mode,
+                    tp_ep_layout=tp_ep_layout,
+                    moe_a2a_pattern=knobs["pattern"],
+                    kernel_launch_us=knobs["kernel_launch"],
+                    c_serving_per_seq_us=knobs["c_serving"],
+                )
+                r_check = InferenceCalculator(spec, sys_spec, p_spec, t_spec, fw_spec).run()
                 if not r_check.memory.fits_in_HBM:
                     skipped_oom += 1
                     if args.verbose:
@@ -285,7 +292,7 @@ def main() -> int:
                 pred = predict_at(
                     model=framework_model, system_id=sys_id,
                     PP=PP, TP=TP, EP=EP, SP=SP,
-                    attention_mode=attn_mode, layout=layout,
+                    attention_mode=attn_mode, tp_ep_layout=tp_ep_layout,
                     num_devices=m.num_decode_gpu, S_decode=m.isl + m.osl // 2, B=m.B,
                     flops_eta=1.0, bw_eta=knobs["bw_eta"],
                     c_serving_us=knobs["c_serving"],
@@ -308,7 +315,7 @@ def main() -> int:
                 # unique partition shape gets one plot with all measured
                 # points for that shape overlaid on the framework sweep.
                 pkey = (inf_model, m.hardware, m.framework,
-                        m.num_decode_gpu, TP, EP, attn_mode, layout)
+                        m.num_decode_gpu, TP, EP, attn_mode, tp_ep_layout)
                 measured_by_plot[pkey].append(m)
                 if pkey not in plot_meta:
                     plot_meta[pkey] = dict(
@@ -318,7 +325,7 @@ def main() -> int:
                         sys_id=sys_id,
                         S_decode=m.isl + m.osl // 2,
                         PP=PP, TP=TP, EP=EP, SP=SP,
-                        attn_mode=attn_mode, layout=layout,
+                        attn_mode=attn_mode, tp_ep_layout=tp_ep_layout,
                         num_devices=m.num_decode_gpu,
                     )
 
@@ -326,14 +333,14 @@ def main() -> int:
     if args.plot and measured_by_plot:
         plotted = 0
         for pkey, measured_pts in sorted(measured_by_plot.items()):
-            inf_model, hw, fw, dec, TP, EP, attn_mode, layout = pkey
+            inf_model, hw, fw, dec, TP, EP, attn_mode, tp_ep_layout = pkey
             meta = plot_meta[pkey]
             B_max = max(2 * max(m.B for m in measured_pts), 256)
             try:
                 framework = run_framework(
                     model=meta["framework_model"], system_id=meta["sys_id"],
                     PP=meta["PP"], TP=TP, EP=EP, SP=meta["SP"],
-                    attention_mode=attn_mode, layout=layout,
+                    attention_mode=attn_mode, tp_ep_layout=tp_ep_layout,
                     num_devices=dec, S_decode=meta["S_decode"],
                     B_sweep=log_spaced_B(B_max),
                     flops_eta=1.0, bw_eta=meta["knobs"]["bw_eta"],
@@ -347,12 +354,12 @@ def main() -> int:
                     print(f"  PLOT-SKIP {inf_model} {hw}/{fw} TP={TP} EP={EP} dec={dec}: {e}", file=sys.stderr)
                 continue
 
-            slug = f"{inf_model.replace('/', '_').replace(' ', '_')}__{hw}_{fw}__TP{TP}_EP{EP}_dec{dec}_{attn_mode}_{layout}"
+            slug = f"{inf_model.replace('/', '_').replace(' ', '_')}__{hw}_{fw}__TP{TP}_EP{EP}_dec{dec}_{attn_mode}_{tp_ep_layout}"
             out = args.out_dir / f"sweep__{slug}.png"
             topo = topology_tag(meta["sys_id"])
             plot_tpot_vs_B(
                 framework=framework, measured=measured_pts,
-                title=f"{inf_model} / {hw} / {fw} — TP={TP} EP={EP} dec={dec} ({attn_mode}, {layout})",
+                title=f"{inf_model} / {hw} / {fw} — TP={TP} EP={EP} dec={dec} ({attn_mode}, {tp_ep_layout})",
                 subtitle=(f"PP={meta['PP']} TP={TP} EP={EP} SP={meta['SP']} | ISL={meta['S_decode']*2//3} OSL={meta['S_decode']*2//3} | "
                           f"sys={meta['sys_id']} | {topo} | "
                           f"bw_eta={meta['knobs']['bw_eta']:.2f} c_serving={meta['knobs']['c_serving']:.0f}us "

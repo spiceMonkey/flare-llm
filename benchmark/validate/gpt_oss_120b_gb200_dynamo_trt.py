@@ -30,7 +30,7 @@ TP, EP, NUM = 4, 1, 4
 # range for "production CUDA-Graph stacks". Confirms the 22 µs anchor is
 # Dynamo-specific (raw TRT-LLM needs c_serving 4–5× higher; see
 # dsr1_b200_trt and llama3_70b_*).
-DEFAULT_BW_ETA = 1.0
+DEFAULT_BW_ETA = 1.4286
 DEFAULT_C_SERVING_US = 22.0
 
 
@@ -54,7 +54,7 @@ def main() -> int:
     framework = run_framework(
         model="gpt_oss_120b", system_id=SYSTEM,
         PP=1, TP=TP, EP=EP, SP=1,
-        attention_mode="tp", layout="orthogonal",
+        attention_mode="tp", tp_ep_layout="orthogonal",
         num_devices=NUM, S_decode=ISL + OSL // 2,
         B_sweep=log_spaced_B(512),
         flops_eta=args.flops_eta, bw_eta=args.bw_eta,
@@ -65,7 +65,7 @@ def main() -> int:
         pred = predict_at(
             model="gpt_oss_120b", system_id=SYSTEM,
             PP=1, TP=TP, EP=EP, SP=1,
-            attention_mode="tp", layout="orthogonal",
+            attention_mode="tp", tp_ep_layout="orthogonal",
             num_devices=NUM, S_decode=ISL + OSL // 2, B=m.B,
             flops_eta=args.flops_eta, bw_eta=args.bw_eta,
             c_serving_us=args.c_serving_us,

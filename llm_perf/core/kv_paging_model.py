@@ -1,6 +1,7 @@
 
 import math
 from dataclasses import dataclass
+from ..specs.framework_spec import FrameworkSpec
 from ..specs.model_spec import LlmModelSpec
 from ..specs.system_spec import SystemSpec
 from ..specs.partition_spec import PartitionSpec
@@ -33,6 +34,7 @@ def compute_kv_paging(
     system: SystemSpec,
     partition: PartitionSpec,
     tuner: TuningSpec,
+    framework: FrameworkSpec,
     memory: MemoryResults,
     paging: KVPagingConfig,
 ) -> KVPagingResults:
@@ -44,9 +46,9 @@ def compute_kv_paging(
     PP = partition.PP
     SP = partition.SP
 
-    # KV head/seq divisor (notation.md §1) — TP under orthogonal layout,
+    # KV head/seq divisor (notation.md §1) — TP under orthogonal tp_ep_layout,
     # max(TP, EP) under co-located. Composes with SP for per-device KV bytes.
-    d_kv = D_kv(partition)
+    d_kv = D_kv(partition, framework)
 
     block_size = paging.block_size
 
@@ -56,7 +58,7 @@ def compute_kv_paging(
     # head-structured, so D_kv does not apply (attention.md §3.6).
     if model.mla is not None:
         kv_base_per_tok_per_layer = model.mla.kv_bytes_per_token_per_layer(b)
-        d_kv_eff = 1 if partition.attention_mode == "tp" else d_kv
+        d_kv_eff = 1 if framework.attention_mode == "tp" else d_kv
     else:
         kv_base_per_tok_per_layer = 2 * model.H_kv() * b
         d_kv_eff = d_kv

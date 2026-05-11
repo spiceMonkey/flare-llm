@@ -38,7 +38,7 @@ TP_SHAPES = (1, 2, 4, 8)
 # gpt_oss_120b_h200_trt — at small B (typical for Llama on B200/TRT) the
 # host loop is in the under-amortized regime where per-sequence cost is
 # closer to floor.
-DEFAULT_BW_ETA = 0.4
+DEFAULT_BW_ETA = 0.5714
 DEFAULT_C_SERVING_US = 50.0
 
 
@@ -65,7 +65,7 @@ def main() -> int:
         framework = run_framework(
             model="llama3.1_70b", system_id=SYSTEM,
             PP=1, TP=tp, EP=1, SP=1,
-            attention_mode="tp", layout="orthogonal",
+            attention_mode="tp", tp_ep_layout="orthogonal",
             num_devices=tp, S_decode=ISL + OSL // 2,
             B_sweep=log_spaced_B(512),
             flops_eta=args.flops_eta, bw_eta=args.bw_eta,
@@ -77,7 +77,7 @@ def main() -> int:
             pred = predict_at(
                 model="llama3.1_70b", system_id=SYSTEM,
                 PP=1, TP=tp, EP=1, SP=1,
-                attention_mode="tp", layout="orthogonal",
+                attention_mode="tp", tp_ep_layout="orthogonal",
                 num_devices=tp, S_decode=ISL + OSL // 2, B=m.B,
                 flops_eta=args.flops_eta, bw_eta=args.bw_eta,
                 c_serving_us=args.c_serving_us, bytes_per_param=1,

@@ -38,7 +38,7 @@ TP, EP, NUM = 8, 1, 8
 # (bw_eta=0.7, c_serving=100 µs/seq). The 100 µs is at the high end of
 # §7.2's 30–60 µs Python-heavy stack range — note raw TRT-LLM's per-step
 # loop is C++ but exposes more individual kernel launches than Dynamo.
-DEFAULT_BW_ETA = 0.7
+DEFAULT_BW_ETA = 1.0
 DEFAULT_C_SERVING_US = 100.0
 
 
@@ -62,7 +62,7 @@ def main() -> int:
     framework = run_framework(
         model="deepseek_r1_0528", system_id=SYSTEM,
         PP=1, TP=TP, EP=EP, SP=1,
-        attention_mode="tp", layout="orthogonal",
+        attention_mode="tp", tp_ep_layout="orthogonal",
         num_devices=NUM, S_decode=ISL + OSL // 2,
         B_sweep=log_spaced_B(8192),
         flops_eta=args.flops_eta, bw_eta=args.bw_eta,
@@ -74,7 +74,7 @@ def main() -> int:
         pred = predict_at(
             model="deepseek_r1_0528", system_id=SYSTEM,
             PP=1, TP=TP, EP=EP, SP=1,
-            attention_mode="tp", layout="orthogonal",
+            attention_mode="tp", tp_ep_layout="orthogonal",
             num_devices=NUM, S_decode=ISL + OSL // 2, B=m.B,
             flops_eta=args.flops_eta, bw_eta=args.bw_eta,
             c_serving_us=args.c_serving_us, bytes_per_param=0.5,

@@ -1,12 +1,14 @@
 {
   "schema": "llm_perf.system",
-  "name": "b300_32gpu_dgx_multibox",
-  "num_devices": 32,
+  "name": "b300_multibox",
+  "num_devices": 16,
   "device": {
     "name": "B300-SXM",
     "hbm_capacity_GB": 288.0,
     "hbm_bandwidth_GBps": 12000.0,
-    "peak_flops_TF": 2500.0
+    "peak_flops_TF": 2500.0,
+    "peak_flops_eta": 1.0,
+    "hbm_eta_beta": 0.8
   },
   "fabrics": {
     "nvlink5": {
@@ -23,7 +25,7 @@
       "tiers": [
         {
           "name": "inter-box-quantum-xdr",
-          "ports": 4,
+          "ports": 2,
           "bw_per_port_GBps": 100.0,
           "alpha_us": 2.5
         }
@@ -54,5 +56,5 @@
     "eta": 1.0,
     "delta_alpha_us": 0.0
   },
-  "_comment": "NVIDIA HGX/DGX Blackwell Ultra B300 multi-box deployment: 4 8-GPU boxes (4\u00d78 = 32 GPU topology, 32 GPUs in active use). Intra-box: NVLink5 1.8 TB/s bidir (900 GB/s single-direction) per GPU through 4 NVSwitch5 chips. Inter-box: ConnectX-8 XDR InfiniBand (800 Gbps = 100 GB/s single-direction per GPU through dedicated NIC), ~2.5 \u03bcs IB transport latency. A collective \u22648 ranks stays on nvlink5; collectives spanning 32 ranks escalate to ib (paying \u03b1 = 0.5 + 2.5 = 3.0 us and being bandwidth-floored to 100 GB/s). Same chip as b300.8gpu single-box spec."
+  "_comment": "NVIDIA HGX/DGX Blackwell Ultra B300 multi-box deployment template (8-GPU NVLink5 islands stitched by ConnectX-8 XDR InfiniBand at ~2.5 us/100 GB/s). num_devices and ib.ports are auto-overridden by `system_with_eta(..., num_devices=N)`. Intra-box: NVLink5 1.8 TB/s bidir per GPU through 4 NVSwitch5 chips. Inter-box: ConnectX-8 XDR (100 GB/s/GPU). Same chip as b300.8gpu single-box spec."
 }

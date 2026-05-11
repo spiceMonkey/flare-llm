@@ -84,7 +84,7 @@ def test_squadrack_pp_tier_assignment() -> None:
 
 def test_nvl72_single_tier() -> None:
     print("\ntest_nvl72_single_tier")
-    s = load_system_spec("llm_perf/database/system/gb200.nvl72.nvls.json")
+    s = load_system_spec("llm_perf/database/system/gb200.72gpu.json")
     # Single tier with 72 ports. Every axis maps to tier 0.
 
     for shape in [

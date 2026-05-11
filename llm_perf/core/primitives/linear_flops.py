@@ -20,7 +20,7 @@ Other terms unchanged:
 - 6HI_dense/TP — dense FFN (gate, up, down), I_dense wide, always
   TP-sharded (no EP axis to overlap on dense).
 - 6HkI_moe/D_exp — MoE FFN: k active experts per token, sharded by D_exp
-  (= TP*EP under orthogonal layout, EP under co-located).
+  (= TP*EP under orthogonal tp_ep_layout, EP under co-located).
 - 2HN_exp — MoE router gate GEMM (H → N_exp), unsharded
   (see documentation/modeling/decode.md §3.4).
 
@@ -34,11 +34,9 @@ For prefill, `linear_flops_per_token * S_input` gives the full linear
 contribution across the prefill pass.
 """
 
-from typing import Optional
-
+from ...specs.framework_spec import FrameworkSpec
 from ...specs.model_spec import LlmModelSpec
 from ...specs.partition_spec import PartitionSpec
-from ...specs.tuner_spec import TuningSpec
 from .mla_flops import mla_proj_flops_per_layer_per_device
 from .sharding_factors import D_attn, D_exp
 
@@ -46,25 +44,26 @@ from .sharding_factors import D_attn, D_exp
 def linear_flops_per_token(
     model: LlmModelSpec,
     partition: PartitionSpec,
-    tuner: Optional[TuningSpec] = None,
+    framework: FrameworkSpec,
 ) -> float:
     """Per-device, per-token linear FLOPs summed across all layers.
 
-    `tuner` is required for MLA models (passes `mla_mode`); ignored for
-    GQA / MHA models. When omitted on an MLA model, defaults to the
-    production "absorbed" mode (matches `TuningSpec` default).
+    `framework` selects MLA mode (`mla_mode`) and the attention dispatch
+    pattern (`attention_mode`, `tp_ep_layout`) consumed by the sharding-
+    factor helpers. `attention_mode` / `tp_ep_layout` are ignored for
+    GQA / MHA models; `mla_mode` is ignored for non-MLA models.
     """
     L = model.L
     H = model.H
     PP = partition.PP
-    d_attn = D_attn(partition)
-    d_exp_dense = D_exp(partition, layer_kind="dense")
+    d_attn = D_attn(partition, framework)
+    d_exp_dense = D_exp(partition, framework, layer_kind="dense")
 
     if model.moe is not None:
         L_moe = model.moe.n_moe_layers if model.moe.n_moe_layers else L
         L_dense = L - L_moe
         N_exp = max(1, model.moe.n_experts)
-        d_exp_moe = D_exp(partition, layer_kind="moe", n_exp_cap=N_exp)
+        d_exp_moe = D_exp(partition, framework, layer_kind="moe", n_exp_cap=N_exp)
         k = model.moe.k_active
         I_moe = model.moe.I_moe
     else:
@@ -79,8 +78,9 @@ def linear_flops_per_token(
 
     # Per-layer per-device attention projection FLOPs — branch on variant.
     if model.mla is not None:
-        mla_mode = tuner.mla_mode if tuner is not None else "absorbed"
-        F_attn_proj = mla_proj_flops_per_layer_per_device(model, partition, mla_mode)
+        F_attn_proj = mla_proj_flops_per_layer_per_device(
+            model, partition, framework, framework.mla_mode
+        )
     else:
         H_kv = model.H_kv()
         F_attn_proj = (4 * H**2 + 4 * H * H_kv) / d_attn

@@ -14,7 +14,7 @@ from llm_perf.io import load_model_spec
 from llm_perf.utils import convert_hf_config_to_model_json
 from llm_perf.specs.model_spec import LlmModelSpec
 
-HF_FILE_PATH = Path("llm_perf/database/model/external.model/hf") 
+HF_FILE_PATH = Path("archives/hf")
 HF_FILE_NAME = "qwen3_vl_235b_a22b_thinking_fp8.json"
 HF_SAMPLE = HF_FILE_PATH / HF_FILE_NAME
 
