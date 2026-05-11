@@ -89,45 +89,18 @@ class TuningSpec:
     #   torus_algorithm="swing" is reserved; raises NotImplementedError for now.
     torus_algorithm: str = "ring"
 
-    # MLA execution mode (attention.md §3.5). Inert when model has no MLA
-    # extension (`model.mla is None`).
-    #   "absorbed"     — production default. Folds W_UK / W_UV into Q / O at
-    #                    compile time so attention runs entirely in the
-    #                    d_c-dimensional latent space. Per-step attention
-    #                    score / value compute scales with d_c (larger
-    #                    constant) but skips per-step K, V reconstruction
-    #                    and avoids the transient per-head K / V buffer.
-    #                    Used by NVIDIA TensorRT-LLM and SGLang's DSv3 path.
-    #   "materialized" — reference / CPU-fallback mode. Reconstructs per-head
-    #                    K, V from the latent each step, then runs standard
-    #                    multi-head attention. Score / value compute scales
-    #                    with the smaller d_qk_nope and d_v dimensions but
-    #                    pays a fixed per-step W_UK / W_UV reconstruction
-    #                    cost and a transient per-head K / V buffer.
-    # Crossover with MLA's compute trade-off is at moderate S; production
-    # deployments at S ≳ 1K generally prefer "absorbed". See attention.md
-    # §3.7 for the exact per-mode FLOP breakdown.
-    mla_mode: str = "absorbed"
-
-    # MoE A2A data-flow pattern under DP-attention (decode.md §5.2).
-    #   "gather" — gather-then-dispatch (default). TP all-gather brings full
-    #              B tokens to every rank before MoE, then dispatch from
-    #              full B. Per-rank dispatch payload = B·k·H·b. Conservative
-    #              ceiling shipped by general-purpose MoE backends.
-    #   "scatter" — scatter-direct. No AG before MoE; dispatch operates on
-    #              per-rank attention-sharded tokens of size B/G_TP. Per-rank
-    #              dispatch payload = (B/G_TP)·k·H·b — a ~G_TP× reduction.
-    #              Production DSv3/R1 pattern when DeepEP-style backends are
-    #              in use. Requires attention_mode="dp" (no-op otherwise).
-    moe_a2a_pattern: str = "gather"
-
-    # In-network collectives opt-out. When True (default), dispatcher routes
-    # AR/AG over any crossbar tier chain whose every tier declares inc != "none"
-    # to the INC primitives (n_α collapse + BW-eff doubling for AR).
-    # Set False to force software ring/tree fallback — useful for A/B
-    # measurements and for hardware where SHARP is disabled at runtime.
-    # Inert on tier chains where any crossed tier has inc == "none".
-    inc_enabled: bool = True
+    # ── Framework-axis fields moved to FrameworkSpec ───────────────────
+    # The following fields used to live here and now live on FrameworkSpec:
+    #   mla_mode, moe_a2a_pattern, inc_enabled,
+    #   kernels_per_layer_compute, kernels_per_collective_call,
+    #   kernels_per_pp_hop, kernel_launch_us, sw_overlap_factor,
+    #   t_serving_per_seq_us (renamed → c_serving_per_seq_us).
+    # These describe the SW stack's runtime behavior (host overhead model,
+    # kernel-launch budget, MLA execution mode, MoE A2A pattern) and are
+    # orthogonal to the workload knobs that remain on TuningSpec.
+    # Pre-canned per-stack JSONs live in `database/framework/`; load via
+    # `load_framework_from_db("dynamo_trt")` etc. See FrameworkSpec for
+    # the full schema and decode.md §7.1, §7.2 for the underlying model.
 
     # Per-data-class memory tier placement (sram.md §1.3). Defaults are
     # "auto"/"auto" — greedy fastest-first, which collapses to legacy
@@ -135,48 +108,6 @@ class TuningSpec:
     # weights or KV to a named tier (e.g. d-Matrix Capacity Mode pins
     # weights to "lpddr5" to free SRAM for larger batch / context).
     placement: MemoryPlacementSpec = field(default_factory=MemoryPlacementSpec)
-
-    # ── SW overhead modeling (kernel_launch_overhead.md §5) ─────────────
-    # Per-microbatch dispatch budget on each PP stage (same units as t_stage):
-    #     t_SW = τ_launch · [
-    #              (L / PP)     · (k_compute + k_collective · (n_TP + n_SP))
-    #            + (L_moe / PP) · k_collective · n_EP
-    #            + k_pp_hop
-    #          ]
-    # where the n_* terms are the per-layer collective call counts above
-    # (zeroed for axes where the parallelism is 1, i.e. that collective
-    # never fires). EP launches only fire on the L_moe/PP MoE layers this
-    # stage owns (mirrors the L_moe/PP factor in §5.5's t_comm formula).
-    # The PP-hop term contributes k_pp_hop launches per microbatch transit
-    # and is inert when PP = 1.
-    #
-    # Production-realistic defaults: CUDA Graphs on (τ_launch ≈ 1.5 μs),
-    # ~10 kernels per layer (after typical fusion), ~2 kernels per NCCL
-    # collective call, full async overlap (ρ_SW = 1) so SW acts as a
-    # *floor* on t_step_user — kicks in only when t_SW > t_stage. To
-    # disable the SW term entirely (legacy roofline), set
-    # `kernel_launch_us = 0.0` in tuner JSON.
-    kernels_per_layer_compute: int = 10
-    kernels_per_collective_call: int = 2
-    # Kernels per PP boundary on each device, per microbatch: 1 recv from
-    # upstream + 1 send to downstream = 2 (middle stages). Edge stages do
-    # only one direction; the formula below treats every stage as middle
-    # for simplicity (off by one PP × τ on edge stages, negligible at PP>>1).
-    # Set to 1 if `ncclSendRecv` (or a custom kernel) fuses the pair.
-    kernels_per_pp_hop: int = 2
-    kernel_launch_us: float = 1.5       # 0 disables; ~1.5 μs with CUDA Graphs, ~7 μs without
-    # ρ_SW ∈ [0, 1]; 1 = full async overlap (SW hidden by GPU work).
-    # **Caveat:** 1.0 is the upper-end case — accurate for CUDA-Graphs-replayed
-    # steady-state on TensorRT-LLM / vLLM / SGLang where the CPU is one
-    # `cudaGraphLaunch` per microbatch and has 1000× slack. Empirically these
-    # stacks measure ~0.85-0.95. Eager-mode PyTorch / Python serving sees
-    # ρ_SW ~0.3-0.6 because Python interpreter overhead breaks the
-    # CPU-runs-ahead invariant. The 1.0 default matches the framework's
-    # roofline philosophy (upper bound; dial down to model imperfections).
-    # Note that t_SW is still a *hard floor* when t_SW > t_stage regardless
-    # of ρ_SW, so the optimistic default does not hide the dispatch tax in
-    # the SW-bound regime.
-    sw_overlap_factor: float = 1.0
 
     # Tensor Core efficiency curve η_TC(mb) for compute roofline.
     # Maps microbatch size mb (= B / PP) to a derate factor in [0, 1].
@@ -218,21 +149,4 @@ class TuningSpec:
     # verify-step roofline (decode.md §8.3, §9.4).
     n_tok_draft: int = 0
     p_accept: float = 0.0
-
-    # ── Per-sequence serving runtime overhead (decode.md §7.2) ─────────
-    # Host-side per-step work that scales with the active-sequence count B:
-    # PagedAttention block-table gather, continuous-batching scheduler
-    # decisions, per-sequence sampling (top-k/top-p/multinomial), token
-    # append + KV bookkeeping. Distinct from `kernel_launch_us` (per-kernel
-    # dispatch, near-constant in B) — this term is per-sequence per-step
-    # and grows linearly with B.
-    #
-    #   t_serving = t_serving_per_seq_us · B · 1e-6     [seconds]
-    #
-    # Added additively to t_step_user (no overlap; the host work sits on the
-    # critical path between consecutive forward passes). Default 0.0
-    # preserves the pre-extension behavior. Representative anchors:
-    # ~10 µs/seq for fused C++ stacks, ~20-30 µs/seq for production
-    # CUDA-Graph stacks, ~30-60 µs/seq for Python-heavy stacks.
-    t_serving_per_seq_us: float = 0.0
 

@@ -21,6 +21,7 @@ from common import (  # noqa: E402
     load_measured, system_with_eta,
     load_model_from_db, load_system_from_db,
 )
+from llm_perf.specs import FrameworkSpec  # noqa: E402
 
 
 def calibrate(
@@ -51,9 +52,9 @@ def calibrate(
                                     num_devices=num_devices, bw_eta=bw)
                 p = PartitionSpec(PP=PP, TP=TP, EP=EP, SP=SP,
                                   attention_mode=attention_mode, layout=layout)
-                t = TuningSpec(S_decode=S_decode_fn(row),
-                               B_decode=row.B, t_serving_per_seq_us=cs)
-                r = InferenceCalculator(m, s, p, t).run()
+                t = TuningSpec(S_decode=S_decode_fn(row), B_decode=row.B)
+                fw = FrameworkSpec(name="calibrate", c_serving_per_seq_us=cs)
+                r = InferenceCalculator(m, s, p, t, fw).run()
                 errs.append((r.latency.TPOT * 1000 - row.tpot_ms) / row.tpot_ms * 100)
             mae = float(np.mean(np.abs(errs)))
             if mae < best[0]:

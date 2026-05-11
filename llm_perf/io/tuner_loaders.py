@@ -107,17 +107,25 @@ def tuning_spec_from_json_dict(cfg: Dict[str, Any]) -> TuningSpec:
     if float(cfg.get("overlap_factor", 0.0)) > 1.0:
         raise ValueError(f"overlap_factor must be <= 1.0, got {cfg['overlap_factor']}")
 
-    # SW-overhead fields (kernel_launch_overhead.md §5). All optional;
-    # defaults disable the term so legacy tuner JSONs keep their meaning.
-    sw_int_fields = [f for f in ("kernels_per_layer_compute", "kernels_per_collective_call", "kernels_per_pp_hop") if f in cfg]
-    if sw_int_fields:
-        validate_nonnegative_int_fields(cfg, sw_int_fields, prefix="tuning configuration")
-    sw_float_fields = [f for f in ("kernel_launch_us", "sw_overlap_factor") if f in cfg]
-    if sw_float_fields:
-        validate_nonnegative_float_fields(cfg, sw_float_fields, prefix="tuning configuration")
-    if float(cfg.get("sw_overlap_factor", 1.0)) > 1.0:
+    # Framework-axis fields (kernels_per_*, kernel_launch_us,
+    # sw_overlap_factor, moe_a2a_pattern, mla_mode, inc_enabled,
+    # t_serving_per_seq_us) moved to FrameworkSpec — see
+    # `framework_spec.py`. Tuner JSONs that still set these fields will
+    # be rejected with a clear error so users know to migrate to a
+    # framework JSON.
+    _moved_to_framework = (
+        "kernels_per_layer_compute", "kernels_per_collective_call",
+        "kernels_per_pp_hop", "kernel_launch_us", "sw_overlap_factor",
+        "moe_a2a_pattern", "mla_mode", "inc_enabled",
+        "t_serving_per_seq_us",
+    )
+    leaked = [f for f in _moved_to_framework if f in cfg]
+    if leaked:
         raise ValueError(
-            f"sw_overlap_factor must be <= 1.0, got {cfg['sw_overlap_factor']}"
+            f"tuning configuration: fields {leaked} were moved to "
+            f"FrameworkSpec — load a framework JSON via "
+            f"`load_framework_from_db('<stack>')` instead. See "
+            f"`llm_perf/database/framework/` for available stacks."
         )
 
     eta_TC_cfg = cfg.get("tensor_core_efficiency", None)
@@ -142,20 +150,6 @@ def tuning_spec_from_json_dict(cfg: Dict[str, Any]) -> TuningSpec:
                     f"tensor_core_efficiency[{mb}]: efficiency must be in [0, 1], got {eta}"
                 )
             eta_TC[mb] = eta
-
-    moe_a2a_pattern = cfg.get("moe_a2a_pattern", "gather")
-    if moe_a2a_pattern not in ("gather", "scatter"):
-        raise ValueError(
-            f"tuning configuration: 'moe_a2a_pattern' must be 'gather' or "
-            f"'scatter', got {moe_a2a_pattern!r}"
-        )
-
-    mla_mode = cfg.get("mla_mode", "absorbed")
-    if mla_mode not in ("absorbed", "materialized"):
-        raise ValueError(
-            f"tuning configuration: 'mla_mode' must be 'absorbed' or "
-            f"'materialized', got {mla_mode!r}"
-        )
 
     eta_BW_cfg = cfg.get("bw_efficiency", None)
     if eta_BW_cfg is None:
@@ -194,9 +188,6 @@ def tuning_spec_from_json_dict(cfg: Dict[str, Any]) -> TuningSpec:
         auto_priority=str(placement_cfg.get("auto_priority", "weights")),
     )
 
-    # SW-overhead fields fall back to TuningSpec dataclass defaults when
-    # absent from JSON — keeps a single source of truth for the production
-    # baseline.
     _defaults = TuningSpec()
     return TuningSpec(
         n_TP_collectives=int(cfg.get("n_TP_collectives", 2)),
@@ -215,20 +206,11 @@ def tuning_spec_from_json_dict(cfg: Dict[str, Any]) -> TuningSpec:
         B_prefill=int(cfg.get("B_prefill", 1)),
         chunk_size=int(cfg.get("chunk_size", 0)),
         torus_algorithm=torus_algorithm,
-        inc_enabled=bool(cfg.get("inc_enabled", True)),
-        moe_a2a_pattern=str(cfg.get("moe_a2a_pattern", _defaults.moe_a2a_pattern)),
-        mla_mode=mla_mode,
         placement=placement,
-        kernels_per_layer_compute=int(cfg.get("kernels_per_layer_compute", _defaults.kernels_per_layer_compute)),
-        kernels_per_collective_call=int(cfg.get("kernels_per_collective_call", _defaults.kernels_per_collective_call)),
-        kernels_per_pp_hop=int(cfg.get("kernels_per_pp_hop", _defaults.kernels_per_pp_hop)),
-        kernel_launch_us=float(cfg.get("kernel_launch_us", _defaults.kernel_launch_us)),
-        sw_overlap_factor=float(cfg.get("sw_overlap_factor", _defaults.sw_overlap_factor)),
         tensor_core_efficiency=eta_TC if eta_TC is not None else _defaults.tensor_core_efficiency,
         bw_efficiency=eta_BW if eta_BW is not None else _defaults.bw_efficiency,
         n_tok_draft=int(cfg.get("n_tok_draft", _defaults.n_tok_draft)),
         p_accept=float(cfg.get("p_accept", _defaults.p_accept)),
-        t_serving_per_seq_us=float(cfg.get("t_serving_per_seq_us", _defaults.t_serving_per_seq_us)),
     )
 
 

@@ -1,6 +1,8 @@
 
 import math
 from dataclasses import dataclass
+from typing import Optional
+from ..specs.framework_spec import FrameworkSpec
 from ..specs.model_spec import LlmModelSpec
 from ..specs.system_spec import SystemSpec
 from ..specs.partition_spec import PartitionSpec
@@ -87,6 +89,7 @@ def compute_prefill_flops(
     model: LlmModelSpec,
     partition: PartitionSpec,
     tuner: TuningSpec,
+    framework: Optional[FrameworkSpec] = None,
 ) -> PrefillFlopsResults:
     """Per-device prefill FLOPs. Doc: documentation/modeling/prefill.md §1.5
 
@@ -94,6 +97,8 @@ def compute_prefill_flops(
     `linear_flops_per_token` primitive scaled by S_input. Attention is
     phase-specific (S² scaling) and stays inline.
     """
+
+    fw = framework if framework is not None else FrameworkSpec.default()
 
     L = model.L
     H = model.H
@@ -103,7 +108,7 @@ def compute_prefill_flops(
     I_dense = model.I_dense
 
     # Linear FLOPs for the full pass: per-token contribution × S_input tokens
-    F_linear_device = linear_flops_per_token(model, partition, tuner) * S
+    F_linear_device = linear_flops_per_token(model, partition, fw) * S
 
     # Attention FLOPs (score + value, per pass: per-token form scaled by S
     # query positions). GQA / MHA: 4·S²·H per layer / (D_kv·SP). MLA:
@@ -112,7 +117,7 @@ def compute_prefill_flops(
     if model.mla is not None:
         from .primitives.mla_flops import mla_score_value_flops_per_layer_per_device
         F_sv_per_layer_per_device_per_token = (
-            mla_score_value_flops_per_layer_per_device(model, partition, S, tuner.mla_mode)
+            mla_score_value_flops_per_layer_per_device(model, partition, S, fw.mla_mode)
         )
         F_attn_device = (L / PP) * F_sv_per_layer_per_device_per_token * S / SP
     else:
@@ -135,10 +140,10 @@ def compute_prefill_flops(
         # which gives the unsharded form. Keep it simple: use per-device with
         # current partition (not strictly "unsharded" but matches the post-
         # MLA convention of "what the partition produces").
-        F_proj_per_token = mla_proj_flops_per_layer_per_device(model, partition, tuner.mla_mode)
+        F_proj_per_token = mla_proj_flops_per_layer_per_device(model, partition, fw.mla_mode)
         F_proj = F_proj_per_token * S
         F_attn = mla_score_value_flops_per_layer_per_device(
-            model, partition, S, tuner.mla_mode
+            model, partition, S, fw.mla_mode
         ) * S
     else:
         H_kv = model.H_kv()
@@ -195,6 +200,7 @@ def compute_prefill_comm(
     system: SystemSpec,
     partition: PartitionSpec,
     tuner: TuningSpec,
+    framework: Optional[FrameworkSpec] = None,
     *,
     tokens_per_step: int | None = None,
 ) -> PrefillCommResults:
@@ -240,7 +246,8 @@ def compute_prefill_comm(
     ep_algorithm = getattr(tuner, "ep_algorithm_prefill",
                            getattr(tuner, "ep_algorithm", "ring")).lower()
     torus_alg = getattr(tuner, "torus_algorithm", "ring").lower()
-    inc_enabled = bool(getattr(tuner, "inc_enabled", True))
+    fw = framework if framework is not None else FrameworkSpec.default()
+    inc_enabled = fw.inc_enabled
 
     if tp_algorithm == "auto" or ep_algorithm == "auto":
         raise ValueError(
@@ -292,7 +299,7 @@ def compute_prefill_comm(
     #   "gather" (default) — full per-step tokens per rank
     #   "scatter" + DP-attn — tokens / G_TP per rank (~G_TP× reduction)
     scatter_direct = (
-        getattr(tuner, "moe_a2a_pattern", "gather") == "scatter"
+        fw.moe_a2a_pattern == "scatter"
         and partition.attention_mode == "dp"
         and g_TP > 1
     )
@@ -357,8 +364,11 @@ def compute_prefill_latency(
     flops: PrefillFlopsResults,
     traffic: PrefillTrafficResults,
     comm: PrefillCommResults,
+    framework: Optional[FrameworkSpec] = None,
 ) -> PrefillLatencyResults:
     """Hardware prefill latency: single-request, batched, and chunked."""
+
+    fw = framework if framework is not None else FrameworkSpec.default()
 
     # Precision-aware compute peak (see decode_model.effective_peak_flops_TF):
     # peak_flops_TF in system spec is FP16 dense per chip; the working
@@ -369,7 +379,7 @@ def compute_prefill_latency(
     PP = partition.PP
     SP = partition.SP
     rho = tuner.overlap_factor
-    rho_SW = tuner.sw_overlap_factor
+    rho_SW = fw.sw_overlap_factor
 
     # Collective group sizes (notation.md §1) for kernel-launch SW count
     # axis-presence guards. Equal to TP and EP across all three production
@@ -418,15 +428,15 @@ def compute_prefill_latency(
         L_moe_total = model.moe.n_moe_layers if model.moe.n_moe_layers else L
     else:
         L_moe_total = 0
-    k_dense = tuner.kernels_per_layer_compute + tuner.kernels_per_collective_call * (n_TP_calls + n_SP_calls)
-    k_moe_extra = tuner.kernels_per_collective_call * n_EP_calls
+    k_dense = fw.kernels_per_layer_compute + fw.kernels_per_collective_call * (n_TP_calls + n_SP_calls)
+    k_moe_extra = fw.kernels_per_collective_call * n_EP_calls
     layers_per_stage = L / PP if PP > 0 else L
     moe_layers_per_stage = L_moe_total / PP if PP > 0 else L_moe_total
-    k_pp_hop = tuner.kernels_per_pp_hop if PP > 1 else 0
+    k_pp_hop = fw.kernels_per_pp_hop if PP > 1 else 0
     t_SW_per_stage = (
-        layers_per_stage * k_dense * tuner.kernel_launch_us * 1e-6
-        + moe_layers_per_stage * k_moe_extra * tuner.kernel_launch_us * 1e-6
-        + k_pp_hop * tuner.kernel_launch_us * 1e-6
+        layers_per_stage * k_dense * fw.kernel_launch_us * 1e-6
+        + moe_layers_per_stage * k_moe_extra * fw.kernel_launch_us * 1e-6
+        + k_pp_hop * fw.kernel_launch_us * 1e-6
     )
 
     def _compose_SW(t_local_gpu: float) -> float:

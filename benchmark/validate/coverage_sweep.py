@@ -38,6 +38,7 @@ from common import (  # noqa: E402
 )
 from llm_perf import InferenceCalculator  # noqa: E402
 from llm_perf.io import load_model_from_db, load_system_from_db  # noqa: E402
+from llm_perf.specs.framework_spec import FrameworkSpec  # noqa: E402
 from llm_perf.specs.partition_spec import PartitionSpec  # noqa: E402
 from llm_perf.specs.tuner_spec import TuningSpec  # noqa: E402
 
@@ -267,9 +268,14 @@ def main() -> int:
                 sys_spec = dataclasses.replace(sys_spec, num_devices=m.num_decode_gpu)
                 p_spec = PartitionSpec(PP=PP, TP=TP, EP=EP, SP=SP,
                                        attention_mode=attn_mode, layout=layout)
-                t_spec = TuningSpec(S_decode=m.isl + m.osl // 2, B_decode=m.B,
-                                    moe_a2a_pattern=knobs["pattern"])
-                r_check = InferenceCalculator(spec, sys_spec, p_spec, t_spec).run()
+                t_spec = TuningSpec(S_decode=m.isl + m.osl // 2, B_decode=m.B)
+                fw_spec = FrameworkSpec(
+                    name="precheck",
+                    moe_a2a_pattern=knobs["pattern"],
+                    kernel_launch_us=knobs["kernel_launch"],
+                    c_serving_per_seq_us=knobs["c_serving"],
+                )
+                r_check = InferenceCalculator(spec, sys_spec, p_spec, t_spec, fw_spec).run()
                 if not r_check.memory.fits_in_HBM:
                     skipped_oom += 1
                     if args.verbose:
