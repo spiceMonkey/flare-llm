@@ -271,17 +271,17 @@ def run_framework(
         m = dataclasses.replace(m, bytes_per_param=bytes_per_param)
     s = system_with_eta(load_system_from_db(system_id), num_devices=num_devices,
                         flops_eta=flops_eta, bw_eta=bw_eta)
-    p = PartitionSpec(PP=PP, TP=TP, EP=EP, SP=SP,
-                      attention_mode=attention_mode, layout=layout)
+    p = PartitionSpec(PP=PP, TP=TP, EP=EP, SP=SP)
 
-    # Build a FrameworkSpec from the per-driver knobs. The benchmark
-    # callers pass c_serving / kernel_launch / moe_a2a_pattern as raw
-    # constants (matching the historical interface); we marshal them
-    # into a FrameworkSpec on the fly. Other framework fields fall to
+    # Build a FrameworkSpec from the per-driver knobs. Phase H: attention_mode
+    # and layout flow here from the driver since they're stack-axis decisions
+    # (not sharding-factor decisions). Other framework fields fall to
     # FrameworkSpec defaults — sw_overlap_factor=1, mla_mode='absorbed',
     # inc_enabled=True, kernels_per_*=defaults.
     fw_kwargs = dict(
         name="benchmark-driver",
+        attention_mode=attention_mode,
+        layout=layout,
         c_serving_per_seq_us=c_serving_us,
         moe_a2a_pattern=moe_a2a_pattern,
     )

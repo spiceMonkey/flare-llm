@@ -267,11 +267,11 @@ def compute_flops(
     if model.mla is not None:
         from .primitives.mla_flops import mla_score_value_flops_per_layer_per_device
         F_sv_per_layer = mla_score_value_flops_per_layer_per_device(
-            model, partition, S, framework.mla_mode
+            model, partition, framework, S, framework.mla_mode
         )
         F_attn_per_token = (L / PP) * F_sv_per_layer / SP
     else:
-        F_attn_per_token = (L / PP) * (4 * S * H) / (D_kv(partition) * SP)
+        F_attn_per_token = (L / PP) * (4 * S * H) / (D_kv(partition, framework) * SP)
 
     F_token_device = F_linear_per_token + F_attn_per_token
     F_layer_per_device = F_token_device / (L / PP) if L > 0 else 0.0
@@ -292,15 +292,19 @@ def compute_traffic(
     model: LlmModelSpec,
     partition: PartitionSpec,
     tuner: TuningSpec,
+    framework: FrameworkSpec,
 ) -> TrafficResults:
     """Per-token HBM traffic per device (weights + KV cache read)."""
     S = tuner.S_decode
     B = tuner.B_decode
 
     # Parameter traffic (embedding is outside the forward path by convention).
-    T_theta = dense_weight_bytes(model, partition) + moe_weight_bytes(model, partition)
+    T_theta = (
+        dense_weight_bytes(model, partition, framework)
+        + moe_weight_bytes(model, partition, framework)
+    )
     # KV read traffic for one sequence of S context tokens.
-    T_kv = kv_bytes_per_seq(model, partition, S)
+    T_kv = kv_bytes_per_seq(model, partition, framework, S)
 
     T_token_eff = T_theta + T_kv
     # Batched step: weights loaded once, KV read per sequence in the batch.
@@ -323,7 +327,7 @@ def compute_comm(
     system: SystemSpec,
     partition: PartitionSpec,
     tuner: TuningSpec,
-    framework: Optional[FrameworkSpec] = None,
+    framework: FrameworkSpec,
 ) -> CommResults:
     """Per-stage decode communication time (seconds)."""
     H = model.H
@@ -335,9 +339,7 @@ def compute_comm(
     B = max(1, tuner.B_decode)
     b = model.bytes_per_param
 
-    # FrameworkSpec carries collective algorithms + counts + comm overlap
-    # (Phase E). Default fallback when no framework was passed.
-    fw = framework if framework is not None else FrameworkSpec.default()
+    fw = framework
 
     # Collective group sizes (notation.md §1; equal to TP and EP across all
     # three production-relevant configurations, but threaded via helpers for
@@ -388,10 +390,10 @@ def compute_comm(
     # under nested layout, PP boundaries can cross outer tiers (PCIe / IB)
     # when PP × inner-axes (TP, EP, SP) exceeds an inner tier's reach.
     # `assign_tier_per_axis` resolves the right tier per partition.
-    d_kv = D_kv(partition)
+    d_kv = D_kv(partition, framework)
     if PP > 1:
         msg_PP = B * (H / d_kv) * b
-        pp_tier_idx = assign_tier_per_axis(partition, system, role="PP")["PP"]
+        pp_tier_idx = assign_tier_per_axis(partition, framework, system, role="PP")["PP"]
         pp_tier = tier_at(system, "PP", pp_tier_idx)
         bw_Bps = pp_tier.bw_per_port_GBps * 1e9
         alpha_s = pp_tier.alpha_us * 1e-6
@@ -409,7 +411,7 @@ def compute_comm(
     # that attention has DP-sharded the batch across the TP group).
     scatter_direct = (
         fw.moe_a2a_pattern == "scatter"
-        and partition.attention_mode == "dp"
+        and fw.attention_mode == "dp"
         and g_TP > 1
     )
     if g_EP > 1:
@@ -431,11 +433,11 @@ def compute_comm(
         msg_TP = 0.0
 
     # DP-attention swap (decode.md §5.3 + notation.md §1 lookup): under
-    # attention_mode="dp", the per-layer attention TP all-reduce is replaced
-    # by a single TP all-gather at the attention → FFN transition. The FFN's
-    # TP all-reduce remains. Here we precompute the AG cost; the per-stage
-    # adjustment happens after aggregate_per_stage below.
-    if g_TP > 1 and partition.attention_mode == "dp":
+    # framework.attention_mode="dp", the per-layer attention TP all-reduce is
+    # replaced by a single TP all-gather at the attention → FFN transition.
+    # The FFN's TP all-reduce remains. Here we precompute the AG cost; the
+    # per-stage adjustment happens after aggregate_per_stage below.
+    if g_TP > 1 and fw.attention_mode == "dp":
         t_TP_AG = _cost("TP", "all_gather", msg_TP, g_TP)
     else:
         t_TP_AG = 0.0
@@ -623,7 +625,7 @@ def compute_latency(
     # Replica size depends on layout (notation.md §1): orthogonal uses the full
     # product PP·TP·EP·SP; co-located uses PP·max(TP,EP)·SP since TP and EP
     # share the same physical GPU set.
-    replica_size = N_replica(partition)
+    replica_size = N_replica(partition, framework)
     DP = system.num_devices // replica_size
     TTPS = DP * TPS_single
 

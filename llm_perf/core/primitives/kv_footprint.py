@@ -19,6 +19,7 @@ prefill per-pass write) and KV memory (batched decode residency, paged
 block sizing). Callers multiply by B sequences / B_prefill as needed.
 """
 
+from ...specs.framework_spec import FrameworkSpec
 from ...specs.model_spec import LlmModelSpec
 from ...specs.partition_spec import PartitionSpec
 from .sharding_factors import D_kv
@@ -27,6 +28,7 @@ from .sharding_factors import D_kv
 def kv_bytes_per_seq(
     model: LlmModelSpec,
     partition: PartitionSpec,
+    framework: FrameworkSpec,
     n_tokens: int,
 ) -> float:
     """Per-device KV bytes for a single sequence of length n_tokens.
@@ -48,9 +50,9 @@ def kv_bytes_per_seq(
 
     if model.mla is not None:
         per_tok_per_layer = model.mla.kv_bytes_per_token_per_layer(b)
-        if partition.attention_mode == "tp":
+        if framework.attention_mode == "tp":
             return (L / PP) * (n_tokens * per_tok_per_layer) / SP
-        return (L / PP) * (n_tokens * per_tok_per_layer) / (D_kv(partition) * SP)
+        return (L / PP) * (n_tokens * per_tok_per_layer) / (D_kv(partition, framework) * SP)
 
     H_kv = model.H_kv()
-    return (L / PP) * (2 * n_tokens * H_kv * b) / (D_kv(partition) * SP)
+    return (L / PP) * (2 * n_tokens * H_kv * b) / (D_kv(partition, framework) * SP)
