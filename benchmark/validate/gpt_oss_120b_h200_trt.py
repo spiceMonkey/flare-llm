@@ -57,7 +57,7 @@ def main() -> int:
         framework = run_framework(
             model="gpt_oss_120b", system_id=SYSTEM,
             PP=1, TP=tp, EP=1, SP=1,
-            attention_mode="tp", layout="orthogonal",
+            attention_mode="tp", tp_ep_layout="orthogonal",
             num_devices=tp, S_decode=ISL + OSL // 2,
             B_sweep=log_spaced_B(512),
             flops_eta=args.flops_eta, bw_eta=args.bw_eta,
@@ -67,7 +67,7 @@ def main() -> int:
             pred = predict_at(
                 model="gpt_oss_120b", system_id=SYSTEM,
                 PP=1, TP=tp, EP=1, SP=1,
-                attention_mode="tp", layout="orthogonal",
+                attention_mode="tp", tp_ep_layout="orthogonal",
                 num_devices=tp, S_decode=ISL + OSL // 2, B=m.B,
                 flops_eta=args.flops_eta, bw_eta=args.bw_eta,
                 c_serving_us=args.c_serving_us,

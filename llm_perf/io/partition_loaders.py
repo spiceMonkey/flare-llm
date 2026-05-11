@@ -25,21 +25,25 @@ def partition_spec_from_json_dict(cfg: Dict[str, Any]) -> PartitionSpec:
           "SP": 2
         }
 
-    Phase H: `attention_mode` and `layout` are no longer accepted here —
-    they live on FrameworkSpec. Files that still carry them will raise
-    ValueError so that stale configs are caught explicitly rather than
-    silently dropping the field.
+    Phase H: `attention_mode` and `tp_ep_layout` (formerly `layout`) are no
+    longer accepted here — they live on FrameworkSpec. Files that still
+    carry them will raise ValueError so that stale configs are caught
+    explicitly rather than silently dropping the field.
     """
     schema = cfg.get("schema", "llm_perf.partition")
     if not schema.startswith("llm_perf.partition"):
         raise ValueError(f"Unsupported partition schema: {schema}")
 
-    for stale in ("attention_mode", "layout"):
+    _stale_map = {
+        "attention_mode": "FrameworkSpec.attention_mode",
+        "layout": "FrameworkSpec.tp_ep_layout",
+        "tp_ep_layout": "FrameworkSpec.tp_ep_layout",
+    }
+    for stale, target in _stale_map.items():
         if stale in cfg:
             raise ValueError(
                 f"partition config field {stale!r} is no longer supported "
-                f"on PartitionSpec (Phase H). Move it to the framework "
-                f"config: FrameworkSpec.{stale}."
+                f"on PartitionSpec (Phase H). Move it to {target}."
             )
 
     validate_positive_int_fields(

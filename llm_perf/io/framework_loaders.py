@@ -28,9 +28,9 @@ TP_ALGORITHM_VALUES = ("ring", "tree", "tree_pipelined", "inc", "auto")
 EP_ALGORITHM_VALUES = ("ring", "inc", "auto")
 TORUS_ALGORITHM_VALUES = ("ring", "swing", "auto")
 
-# Whitelists for sharding mode + layout (Phase G).
+# Whitelists for attention dispatch + TP/EP physical overlay.
 ATTENTION_MODE_VALUES = ("tp", "dp")
-LAYOUT_VALUES = ("orthogonal", "co_located")
+TP_EP_LAYOUT_VALUES = ("orthogonal", "co_located")
 
 
 def framework_spec_from_json_dict(cfg: Dict[str, Any]) -> FrameworkSpec:
@@ -105,7 +105,12 @@ def framework_spec_from_json_dict(cfg: Dict[str, Any]) -> FrameworkSpec:
     torus_alg = _algo("torus_algorithm", _defaults.torus_algorithm, TORUS_ALGORITHM_VALUES)
 
     attention_mode = _algo("attention_mode", _defaults.attention_mode, ATTENTION_MODE_VALUES)
-    layout = _algo("layout", _defaults.layout, LAYOUT_VALUES)
+    if "layout" in cfg and "tp_ep_layout" not in cfg:
+        raise ValueError(
+            "framework configuration: 'layout' was renamed to 'tp_ep_layout' "
+            "to make the TP/EP-overlay scope explicit. Update your JSON."
+        )
+    tp_ep_layout = _algo("tp_ep_layout", _defaults.tp_ep_layout, TP_EP_LAYOUT_VALUES)
 
     overlap = float(cfg.get("comm_overlap_factor", _defaults.comm_overlap_factor))
     if not (0.0 <= overlap <= 1.0):
@@ -138,7 +143,7 @@ def framework_spec_from_json_dict(cfg: Dict[str, Any]) -> FrameworkSpec:
         n_EP_collectives=int(cfg.get("n_EP_collectives", _defaults.n_EP_collectives)),
         n_SP_collectives=int(cfg.get("n_SP_collectives", _defaults.n_SP_collectives)),
         attention_mode=attention_mode,
-        layout=layout,
+        tp_ep_layout=tp_ep_layout,
         comm_overlap_factor=overlap,
     )
 

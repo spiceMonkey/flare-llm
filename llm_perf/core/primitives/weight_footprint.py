@@ -3,8 +3,8 @@
 Splits the weight footprint along the dense/MoE axis so callers can compose
 exactly what they need. Dense and MoE layers share the same attention
 projections (Q,K,V,O) but differ in the FFN: dense always TP-shards the FFN;
-MoE shards experts by D_exp (= TP*EP under orthogonal layout, EP under
-co-located).
+MoE shards experts by D_exp (= TP*EP under orthogonal tp_ep_layout, EP
+under co-located).
 
 All three functions return bytes on one device (D-factor and PP aware). The
 abstract divisors D_attn / D_exp / D_emb are resolved from the
@@ -81,7 +81,7 @@ def dense_weight_bytes(
     where `attn_per_device` is the per-device per-layer attention parameter
     count from `_per_layer_attn_params_per_device` (handles GQA / MHA's
     P/D_attn and MLA's TP-attn-aware shardable / replicated split).
-    Dense FFN always uses /TP regardless of layout.
+    Dense FFN always uses /TP regardless of tp_ep_layout.
     """
     L = model.L
     if model.moe is not None:

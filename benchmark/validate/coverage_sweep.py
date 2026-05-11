@@ -195,7 +195,7 @@ def get_knobs(hw: str, fw: str) -> dict:
 
 
 def infer_partition(m) -> tuple[int, int, int, int, str, str]:
-    """Pick (PP, TP, EP, SP, attention_mode, layout) from a measured row."""
+    """Pick (PP, TP, EP, SP, attention_mode, tp_ep_layout) from a measured row."""
     PP, SP = 1, 1
     TP, EP = m.decode_tp, max(1, m.decode_ep)
     dec = m.num_decode_gpu
@@ -258,7 +258,7 @@ def main() -> int:
                 continue  # no spec (multi-box H100/H200 or AMD — Phase 3/4)
 
             knobs = get_knobs(m.hardware, m.framework)
-            PP, TP, EP, SP, attn_mode, layout = infer_partition(m)
+            PP, TP, EP, SP, attn_mode, tp_ep_layout = infer_partition(m)
 
             # Pre-flight: skip rows where the model can't structurally fit on
             # the labeled (PP*TP*EP*SP) GPUs. The InferenceX dataset has rows
@@ -276,7 +276,7 @@ def main() -> int:
                 fw_spec = FrameworkSpec(
                     name="precheck",
                     attention_mode=attn_mode,
-                    layout=layout,
+                    tp_ep_layout=tp_ep_layout,
                     moe_a2a_pattern=knobs["pattern"],
                     kernel_launch_us=knobs["kernel_launch"],
                     c_serving_per_seq_us=knobs["c_serving"],
@@ -297,7 +297,7 @@ def main() -> int:
                 pred = predict_at(
                     model=framework_model, system_id=sys_id,
                     PP=PP, TP=TP, EP=EP, SP=SP,
-                    attention_mode=attn_mode, layout=layout,
+                    attention_mode=attn_mode, tp_ep_layout=tp_ep_layout,
                     num_devices=m.num_decode_gpu, S_decode=m.isl + m.osl // 2, B=m.B,
                     flops_eta=1.0, bw_eta=knobs["bw_eta"],
                     c_serving_us=knobs["c_serving"],
@@ -320,7 +320,7 @@ def main() -> int:
                 # unique partition shape gets one plot with all measured
                 # points for that shape overlaid on the framework sweep.
                 pkey = (inf_model, m.hardware, m.framework,
-                        m.num_decode_gpu, TP, EP, attn_mode, layout)
+                        m.num_decode_gpu, TP, EP, attn_mode, tp_ep_layout)
                 measured_by_plot[pkey].append(m)
                 if pkey not in plot_meta:
                     plot_meta[pkey] = dict(
@@ -330,7 +330,7 @@ def main() -> int:
                         sys_id=sys_id,
                         S_decode=m.isl + m.osl // 2,
                         PP=PP, TP=TP, EP=EP, SP=SP,
-                        attn_mode=attn_mode, layout=layout,
+                        attn_mode=attn_mode, tp_ep_layout=tp_ep_layout,
                         num_devices=m.num_decode_gpu,
                     )
 
@@ -338,14 +338,14 @@ def main() -> int:
     if args.plot and measured_by_plot:
         plotted = 0
         for pkey, measured_pts in sorted(measured_by_plot.items()):
-            inf_model, hw, fw, dec, TP, EP, attn_mode, layout = pkey
+            inf_model, hw, fw, dec, TP, EP, attn_mode, tp_ep_layout = pkey
             meta = plot_meta[pkey]
             B_max = max(2 * max(m.B for m in measured_pts), 256)
             try:
                 framework = run_framework(
                     model=meta["framework_model"], system_id=meta["sys_id"],
                     PP=meta["PP"], TP=TP, EP=EP, SP=meta["SP"],
-                    attention_mode=attn_mode, layout=layout,
+                    attention_mode=attn_mode, tp_ep_layout=tp_ep_layout,
                     num_devices=dec, S_decode=meta["S_decode"],
                     B_sweep=log_spaced_B(B_max),
                     flops_eta=1.0, bw_eta=meta["knobs"]["bw_eta"],
@@ -359,12 +359,12 @@ def main() -> int:
                     print(f"  PLOT-SKIP {inf_model} {hw}/{fw} TP={TP} EP={EP} dec={dec}: {e}", file=sys.stderr)
                 continue
 
-            slug = f"{inf_model.replace('/', '_').replace(' ', '_')}__{hw}_{fw}__TP{TP}_EP{EP}_dec{dec}_{attn_mode}_{layout}"
+            slug = f"{inf_model.replace('/', '_').replace(' ', '_')}__{hw}_{fw}__TP{TP}_EP{EP}_dec{dec}_{attn_mode}_{tp_ep_layout}"
             out = args.out_dir / f"sweep__{slug}.png"
             topo = topology_tag(meta["sys_id"])
             plot_tpot_vs_B(
                 framework=framework, measured=measured_pts,
-                title=f"{inf_model} / {hw} / {fw} — TP={TP} EP={EP} dec={dec} ({attn_mode}, {layout})",
+                title=f"{inf_model} / {hw} / {fw} — TP={TP} EP={EP} dec={dec} ({attn_mode}, {tp_ep_layout})",
                 subtitle=(f"PP={meta['PP']} TP={TP} EP={EP} SP={meta['SP']} | ISL={meta['S_decode']*2//3} OSL={meta['S_decode']*2//3} | "
                           f"sys={meta['sys_id']} | {topo} | "
                           f"bw_eta={meta['knobs']['bw_eta']:.2f} c_serving={meta['knobs']['c_serving']:.0f}us "

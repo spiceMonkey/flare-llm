@@ -30,7 +30,7 @@ def calibrate(
     system_id: str,
     bytes_per_param: float | None,
     PP: int, TP: int, EP: int, SP: int,
-    attention_mode: str, layout: str,
+    attention_mode: str, tp_ep_layout: str,
     num_devices: int,
     measured_loader,  # callable returning list of MeasuredPoint
     S_decode_fn,      # callable (m: MeasuredPoint) -> S_decode for that row
@@ -53,7 +53,7 @@ def calibrate(
                 p = PartitionSpec(PP=PP, TP=TP, EP=EP, SP=SP)
                 t = TuningSpec(S_decode=S_decode_fn(row), B_decode=row.B)
                 fw = FrameworkSpec(name="calibrate", c_serving_per_seq_us=cs,
-                                   attention_mode=attention_mode, layout=layout)
+                                   attention_mode=attention_mode, tp_ep_layout=tp_ep_layout)
                 r = InferenceCalculator(m, s, p, t, fw).run()
                 errs.append((r.latency.TPOT * 1000 - row.tpot_ms) / row.tpot_ms * 100)
             mae = float(np.mean(np.abs(errs)))
@@ -66,7 +66,7 @@ def main():
     s_decode = lambda m: m.isl + m.osl // 2
 
     # Each entry: (label, model_id, system_id, bytes/param,
-    #              PP/TP/EP/SP, attn_mode, layout, num_devices, measured filter)
+    #              PP/TP/EP/SP, attn_mode, tp_ep_layout, num_devices, measured filter)
     cuts = [
         ("dsr1_gb200_dynamo_trt — colocated TP=EP=8",
          "deepseek_r1_0528", "gb200.72gpu", 0.5, (1, 8, 8, 1), "dp", "co_located", 8,
@@ -114,11 +114,11 @@ def main():
 
     print(f"{'driver / cut':<60} {'best (bw, c_serv)':>18} {'MAE':>7}")
     print("-" * 90)
-    for label, model_id, sys_id, bpp, (PP, TP, EP, SP), attn, layout, nd, ld in cuts:
+    for label, model_id, sys_id, bpp, (PP, TP, EP, SP), attn, tp_ep_layout, nd, ld in cuts:
         result = calibrate(
             model_id=model_id, system_id=sys_id, bytes_per_param=bpp,
             PP=PP, TP=TP, EP=EP, SP=SP,
-            attention_mode=attn, layout=layout, num_devices=nd,
+            attention_mode=attn, tp_ep_layout=tp_ep_layout, num_devices=nd,
             measured_loader=ld, S_decode_fn=s_decode,
         )
         if result is None:
