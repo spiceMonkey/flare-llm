@@ -76,7 +76,7 @@ def load_model_from_db(model_id: str):
 # `load_partition_spec` file-path loader stays in io.partition_loaders
 # for ad-hoc one-off JSONs. Recommended attention_mode + tp_ep_layout per
 # stack now live on FrameworkSpec (see database/framework/).
-# Tuners (S_decode, flash_attn_gain, overlap, algorithms, etc.)
+# Tuners (S_decode, B_decode, S_input, B_prefill, chunk_size, placement, n_tok_draft, p_accept)
 # ─────────────────────────────────────────────
 
 def list_tuner_ids() -> List[str]:
