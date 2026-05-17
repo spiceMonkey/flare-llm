@@ -1,83 +1,74 @@
-%% Decode modeling flow — 5-spec composition.
-%% 5 typed dataclass inputs → cross-spec validation + (optional) collective
-%% algorithm optimizer → per-device sharding factors → 4 parallel cost
-%% branches → 2-stage overlap-aware assembly → user-observed TPOT/TTPS.
+%%{init: {'theme':'base', 'themeVariables': {'fontFamily':'monospace', 'fontSize':'24px'}}}%%
 flowchart TD
-    %% ── 5-spec inputs ─────────────────────────────────────────────
-    Model["<b>LlmModelSpec</b><br/>L · H · n_q · n_kv ·<br/>I_dense · vocab · S_max ·<br/>bytes/param · MoE?"]:::spec
-    System["<b>SystemSpec</b><br/>num_devices · DeviceSpec<br/>(HBM tiers, FLOPS, η_TC, η_β) ·<br/>fabrics + collective_fabrics<br/>(per-tier <b><font color='#0D47A1'>inc</font></b> capability)"]:::spec
-    Partition["<b>PartitionSpec</b><br/><b><font color='#0D47A1'>PP × TP × EP × SP</font></b><br/>(DP inferred =<br/>num_devices ÷ product)"]:::spec
-    Tuner["<b>TuningSpec</b><br/>S_decode · B_decode ·<br/>S_input · B_prefill ·<br/>memory placement ·<br/>flash gains"]:::spec
-    Framework["<b>FrameworkSpec</b><br/>attention_mode · tp_ep_layout ·<br/>tp/ep_algorithm × phase ·<br/><b><font color='#0D47A1'>inc_enabled</font></b> · kernel_launch_us ·<br/>ρ_SW · ρ_comm · MoE A2A"]:::spec
 
-    %% ── Cross-spec validation + (optional) optimizer ──────────────
-    Compose{{"<b>compose_check</b>(partition, framework)<br/><i>tp_ep_layout=co_located ⇒<br/>attention_mode=dp ∧ TP=EP</i>"}}:::check
-    Partition --> Compose
-    Framework --> Compose
+    %% ── Inputs: four design pillars + workload point ──
+    subgraph PILLARS ["Design pillars"]
+      direction LR
+      Model["<div style='min-width:130px'><b>Model</b><br/>L · H · attention variant<br/>MoE structure</div>"]
+      HW["<div style='min-width:130px'><b>Hardware</b><br/>FLOPS · HBM · fabric<br/>INC capability</div>"]
+      Part["<div style='min-width:130px'><b>Partition</b><br/>PP · TP · EP · SP</div>"]
+      Stack["<div style='min-width:130px'><b>Serving stack</b><br/>algorithms · layout · overlaps<br/>host-side overheads</div>"]
+    end
 
-    Opt[/"<i>(optional, when framework has 'auto' fields)</i><br/><b>optimize_collective_algorithms</b><br/>per-cell argmin: ring vs tree vs INC<br/>→ returns FrameworkSpec with auto resolved"/]:::opt
-    Compose --> Opt
-    Model -.-> Opt
-    System -.-> Opt
-    Tuner -.-> Opt
+    WL["<div style='min-width:110px'><b>Workload point</b><br/>B · S</div>"]
 
-    %% ── Per-device sharding factors ───────────────────────────────
-    Sharding["<b>Per-device sharding factors</b> · core/primitives/sharding_factors.py<br/>D_attn(partition, framework) · D_kv(partition, framework) ·<br/>D_exp(partition, framework, layer_kind) · N_replica = PP · g · SP"]:::derive
-    Opt --> Sharding
-    Model --> Sharding
-    System --> Sharding
+    %% ── Validation + sharding ──
+    Compose{"<div style='min-width:180px'><b>Cross-input validation + per-device sharding</b></div>"}
+    Model --> Compose
+    HW --> Compose
+    Part --> Compose
+    Stack --> Compose
 
-    %% ── 4 parallel cost branches ──────────────────────────────────
-    Sharding --> Compute
-    Sharding --> Memory
-    Sharding --> Traffic
-    Sharding --> Comm
-    Sharding --> SW
+    %% ── 4 cost branches ──
+    Compose --> Memory
+    Compose --> Compute
+    Compose --> Comm
+    Compose --> Stk
+    WL -.-> Memory
+    WL -.-> Compute
+    WL -.-> Comm
+    WL -.-> Stk
 
-    Compute["<b>compute_flops</b> · decode_model.py<br/>F_token, F_layer per device<br/>→ <b>t_compute</b> = F_step ÷ R_GPU<br/>(η_TC-derated for tile floor)"]:::branch
-    Memory["<b>compute_memory</b> · memory_model.py<br/>M_θ · M_KV split across tiers via<br/>MemoryPlacementSpec → <b>t_mem(B)</b><br/>= Σ_i (T_θ,i + B·T_KV,i) ÷ BW_eff,i"]:::branch
-    Traffic["<b>compute_traffic</b> · decode_model.py<br/>T_θ · T_KV · T_token_eff<br/>(per-tier; feeds memory roofline)"]:::branch
-    Comm["<b>compute_comm</b> · decode_model.py<br/>t_PP · t_TP · t_EP · t_SP<br/>via cost_collective dispatch<br/>(SW α-β or INC short-circuit)"]:::branch
-    SW["<b>kernel-launch dispatch</b> · framework.kernel_launch_us<br/><b>t_SW</b> = τ_launch · K(partition)<br/>K = (L/PP)(k_c + k_coll(n_TP+n_SP))<br/>+ (L_moe/PP)·k_coll·n_EP + k_pp_hop"]:::branch
+    Memory["<div style='min-width:190px'><b>Memory</b><br/>t_mem = Σ (T_θ + B·T_KV) / BW_eff</div>"]
+    Compute["<div style='min-width:190px'><b>Compute</b><br/>t_compute = B · F_token / R_peak</div>"]
+    Comm["<div style='min-width:190px'><b>Collective comm</b><br/>t_comm = Σ_axes n_X · t_X</div>"]
+    Stk["<div style='min-width:190px'><b>Stack overheads</b><br/>t_stage,sw · t_serving · t_LM,hw · γ_pp</div>"]
 
-    Tuner --> Compute
-    Tuner --> Memory
-    Tuner --> Traffic
-    Tuner --> Comm
-    Framework --> Comm
-    Framework --> SW
-
-    Traffic -.-> Memory
-
-    %% ── Assembly funnel: HW overlap → SW overlap → bubble+LM ──────
-    Compute --> Local{{"<b>t_local = max(t_compute_eff, t_mem)</b><br/><i>roofline at the bottleneck</i>"}}:::assemble
+    %% ── 3-stage assembly funnel ──
     Memory --> Local
+    Compute --> Local
+    Local{{"<div style='min-width:290px'><b>Roofline:</b> t_local = max(t_compute, t_mem)</div>"}}
 
-    Local --> StageHW{{"<b>t_stage_hw = t_local +<br/>max(0, t_comm − ρ_comm · t_local)</b><br/><i>HW comm/compute overlap</i>"}}:::assemble
+    Local --> StageHW
     Comm --> StageHW
+    StageHW{{"<div style='min-width:380px'><b>Compute–comm overlap (ρ):</b><br/>t_stage,hw = t_local + max(0, t_comm − ρ · t_local)</div>"}}
 
-    StageHW --> Stage{{"<b>t_stage = t_stage_hw +<br/>max(0, t_SW − ρ_SW · t_stage_hw)</b><br/><i>SW dispatch overlap</i>"}}:::assemble
-    SW --> Stage
+    StageHW --> Step
+    Stk --> Step
+    Step{{"<div style='min-width:500px'><b>HW–SW overlap (ρ_SW) + pipeline bubble (γ_pp):</b><br/>t_step,user = γ_pp · [t_stage,hw + max(0, t_stage,sw − ρ_SW · t_stage,hw)] + t_LM,hw + t_serving</div>"}}
 
-    Bubble["<b>γ_pp = max(1, PP/B)</b><br/><i>pipeline bubble factor</i>"]:::derive
-    LM["<b>t_LM_hw(B)</b><br/><i>LM head one-shot<br/>on stage PP−1</i>"]:::derive
+    %% ── Outputs + bounds side-by-side ──
+    Step --> Out
+    Step -.-> Bounds
 
-    Stage --> Final{{"<b>t_step_user(B) = γ_pp · t_stage + t_LM_hw + t_serving</b>"}}:::final
-    Bubble --> Final
-    LM --> Final
+    Out["<div style='min-width:200px'><b>Outputs</b><br/>TPOT = t_step,user<br/>TTPS = DP · B / t_step,user</div>"]
+    Bounds["<div style='min-width:200px'><b>Closed-form bounds</b><br/>B* · BW_link* · m_INC<br/>+ sensitivity table</div>"]
 
-    %% ── Outputs ───────────────────────────────────────────────────
-    Final --> TPOT["<b>TPOT = t_step_user</b>"]:::out
-    Final --> Inter["<b>Interactivity = 1 / TPOT</b><br/>(per-user tok/s)"]:::out
-    Final --> TTPS["<b>TTPS = DP · B / t_step_user</b><br/>(cluster throughput)"]:::out
-    Final --> Bstar["<b>B* = T_θ·R ÷ (F_token·BW_eff,0 − T_KV·R)</b><br/>(memory→compute crossover)"]:::out
+    %% ── Styling ──
+    classDef pillar fill:#E3F2FD,stroke:#1565C0,stroke-width:2px,color:#0D47A1
+    classDef workload fill:#FFF3E0,stroke:#EF6C00,stroke-width:2px,color:#E65100
+    classDef gate fill:#F3E5F5,stroke:#7B1FA2,stroke-width:2.5px,color:#4A148C
+    classDef branch fill:#FFFDE7,stroke:#F9A825,stroke-width:2px,color:#5D4037
+    classDef assemble fill:#FCE4EC,stroke:#C2185B,stroke-width:2.5px,color:#880E4F
+    classDef out fill:#E1F5FE,stroke:#01579B,stroke-width:2.5px,color:#01579B
+    classDef sidebar fill:#F1F8E9,stroke:#558B2F,stroke-width:2px,stroke-dasharray: 5 3,color:#33691E
 
-    %% ── Styling ──────────────────────────────────────────────────
-    classDef spec      fill:#E3F2FD,stroke:#1565C0,stroke-width:1.5px,color:#0D47A1
-    classDef check     fill:#FFF3E0,stroke:#EF6C00,stroke-width:1.5px,color:#E65100
-    classDef opt       fill:#F3E5F5,stroke:#7B1FA2,stroke-width:1.5px,stroke-dasharray: 5 3,color:#4A148C
-    classDef derive    fill:#E8F5E9,stroke:#2E7D32,stroke-width:1.5px,color:#1B5E20
-    classDef branch    fill:#FFFDE7,stroke:#F9A825,stroke-width:1.5px,color:#5D4037
-    classDef assemble  fill:#FCE4EC,stroke:#C2185B,stroke-width:2px,color:#880E4F
-    classDef final     fill:#FFEBEE,stroke:#C62828,stroke-width:2.5px,color:#B71C1C
-    classDef out       fill:#E1F5FE,stroke:#01579B,stroke-width:2px,color:#01579B
+    class Model,HW,Part,Stack pillar
+    class WL workload
+    class Compose gate
+    class Memory,Compute,Comm,Stk branch
+    class Local,StageHW,Step assemble
+    class Out out
+    class Bounds sidebar
+
+    style PILLARS fill:none,stroke:#ccc
