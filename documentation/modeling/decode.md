@@ -290,8 +290,9 @@ This section uses the per-component effective sharding factors $D_{\text{attn}}$
 | orthogonal + TP-attn | $TP$ | $TP \cdot EP$ | $TP$ (head) | $TP$ |
 | orthogonal + DP-attn | $1$ | $TP \cdot EP$ | $TP$ (seq) | $TP$ |
 | co-located + DP-attn | $1$ | $EP$ | $\max(TP, EP)$ (seq) | $TP$ |
+| co-located + TP-attn | $TP$ | $EP$ | $TP$ (head) | $TP$ |
 
-Dense FFN always uses $D_{\text{exp}} = TP$ (no EP axis to overlap; co-location does not apply). KV memory and traffic carry an additional $/SP$ factor on top of $D_{\text{kv}}$ when sequence parallelism is enabled. Formulas below use these symbols directly without further repetition of the table.
+Dense FFN always uses $D_{\text{exp}} = TP$ (no EP axis to overlap; co-location does not apply). KV memory and traffic carry an additional $/SP$ factor on top of $D_{\text{kv}}$ when sequence parallelism is enabled. Under co-location the structural constraint $TP = EP$ holds, so $\max(TP, EP)$ and $TP$ collapse to the same value in the third and fourth rows. Formulas below use these symbols directly without further repetition of the table.
 
 ### Per-device Parameter Memory
 
@@ -541,8 +542,9 @@ This section uses the per-component effective sharding factors $D_{\text{attn}}$
 | orthogonal + TP-attn | $TP$ | $TP \cdot EP$ | $TP$ (head) | $TP$ |
 | orthogonal + DP-attn | $1$ | $TP \cdot EP$ | $TP$ (seq) | $TP$ |
 | co-located + DP-attn | $1$ | $EP$ | $\max(TP, EP)$ (seq) | $TP$ |
+| co-located + TP-attn | $TP$ | $EP$ | $TP$ (head) | $TP$ |
 
-Dense FFN always uses $D_{\text{exp}} = TP$. KV traffic carries an additional $/SP$ factor on top of $D_{\text{kv}}$ when sequence parallelism is enabled.
+Dense FFN always uses $D_{\text{exp}} = TP$. KV traffic carries an additional $/SP$ factor on top of $D_{\text{kv}}$ when sequence parallelism is enabled. Under co-location $TP = EP$ structurally, so $\max(TP, EP)$ and $TP$ collapse to the same value in the last two rows.
 
 ---
 
@@ -948,8 +950,9 @@ This subsection uses the per-component effective sharding factors from `notation
 | orthogonal + TP-attn | $TP$ | $TP \cdot EP$ | $TP$ | $TP$ |
 | orthogonal + DP-attn | $1$ | $TP \cdot EP$ | $TP$ | $TP$ |
 | co-located + DP-attn | $1$ | $EP$ | $\max(TP, EP)$ | $TP$ |
+| co-located + TP-attn | $TP$ | $EP$ | $TP$ | $TP$ |
 
-Dense FFN always uses $D_{\text{exp}} = TP$. The KV-attention compute term carries an additional $/SP$ factor on top of $D_{\text{kv}}$ when sequence parallelism is enabled.
+Dense FFN always uses $D_{\text{exp}} = TP$. The KV-attention compute term carries an additional $/SP$ factor on top of $D_{\text{kv}}$ when sequence parallelism is enabled. Under co-location $TP = EP$ structurally.
 
 To find **per-device FLOPs**, we apply sharding from each parallelism dimension and then multiply by the number of layers on the PP stage.
 
@@ -1536,8 +1539,9 @@ This subsection uses the per-component effective sharding factors $D_{\text{attn
 | orthogonal + TP-attn | $TP$ | $TP \cdot EP$ | $TP$ | $TP$ | $PP \cdot TP \cdot EP \cdot SP$ |
 | orthogonal + DP-attn | $1$ | $TP \cdot EP$ | $TP$ | $TP$ | $PP \cdot TP \cdot EP \cdot SP$ |
 | co-located + DP-attn | $1$ | $EP$ | $\max(TP, EP)$ | $TP$ | $PP \cdot \max(TP, EP) \cdot SP$ |
+| co-located + TP-attn | $TP$ | $EP$ | $TP$ | $TP$ | $PP \cdot \max(TP, EP) \cdot SP$ |
 
-Dense FFN always uses $D_{\text{exp}} = TP$.
+Dense FFN always uses $D_{\text{exp}} = TP$. Under co-location $TP = EP$ structurally.
 
 We define the total per-device static footprint as
 
@@ -1776,6 +1780,7 @@ In short: co-location is the right choice when the workload is MoE-dominated, at
 | MLA-class attention, single fabric tier, $G_{TP} \le 8$ | orthogonal + DP-attn |
 | MLA-class attention, large $G_{TP}$ on multi-tier fabric | orthogonal + DP-attn |
 | MLA-class attention, MoE-dominant, $TP = EP$ targets a single NVLink island | co-located + DP-attn |
+| MoE-dominant, head-structured attention (MHA / GQA with $n_{kv} \ge TP$), $TP = EP$ overlaid on the same NVLink island | co-located + TP-attn (DSr1 / NVL72 panel-(b) pattern) |
 | Multi-tier fabric where orthogonal would put EP A2A on slower tier | co-located + DP-attn (when memory permits) |
 
 ---
