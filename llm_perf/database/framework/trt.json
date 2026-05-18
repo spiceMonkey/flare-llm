@@ -1,7 +1,8 @@
 {
   "schema": "llm_perf.framework",
   "name": "trt",
-  "c_serving_per_seq_us": 50.0,
+  "c_serving_per_seq_us": 75.0,
+  "serving_overlap_factor": 1.0,
   "kernel_launch_us": 1.5,
   "kernels_per_layer_compute": 10,
   "kernels_per_collective_call": 2,
@@ -10,7 +11,7 @@
   "moe_a2a_pattern": "gather",
   "mla_mode": "absorbed",
   "inc_enabled": true,
-  "_comment_c_serving": "50 \u00b5s/seq \u2014 raw TRT-LLM (no Dynamo orchestrator). The C++ runtime is fast per-kernel but exposes more individual kernel launches per step than Dynamo, and the per-seq host loop runs on the CPU between forward passes without orchestrator absorption. Sits at the bottom of decode.md \u00a77.2's 50-100 \u00b5s raw-C++ range; aliased to trt-llm and trtllm in the InferenceX dataset.",
+  "_comment_c_serving": "75 \u00b5s/seq with serving_overlap_factor=1.0 \u2014 raw TRT-LLM (no Dynamo orchestrator). Midpoint of decode.md \u00a77.2's 50-100 \u00b5s raw-C++ range. The C++ runtime is fast per-kernel but exposes more individual kernel launches per step than Dynamo, and the per-seq host loop runs on the CPU between forward passes without orchestrator absorption. \u03c1_serving=1.0 because raw TRT-LLM still uses CUDA Graphs (CPU does run ahead during graph execution), but the larger gross host cost means the overlap gate hides less of it at typical operating points compared to dynamo_trt. Aliased to trt-llm and trtllm in the InferenceX dataset.",
   "_comment_kernel_launch": "1.5 \u00b5s \u2014 typical CUDA-graph replay launch budget for raw TRT-LLM.",
   "_comment_moe_a2a_pattern": "gather \u2014 raw TRT-LLM doesn't expose DeepEP-style scatter; defaults to gather-then-dispatch.",
   "tp_algorithm_decode": "auto",

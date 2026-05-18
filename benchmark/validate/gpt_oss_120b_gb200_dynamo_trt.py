@@ -38,7 +38,20 @@ TP, EP, NUM = 4, 1, 4
 # overhead term or precision-aware kernel-launch budget; documented as a
 # §5 Limitation.
 DEFAULT_BW_ETA = 0.7
-DEFAULT_C_SERVING_US = 22.0
+# 5 µs/seq — Dynamo+TRT stack default (matches dynamo_trt.json and the
+# DSr1 Dynamo+TRT validator). At panel-(a) max B=128, c_serving·B = 0.64 ms
+# vs t_GPU_step ~5-10 ms → fully hidden by the overlap gate (ρ_serving=1),
+# so the value does not affect MAE. Previous value 22 µs was a tuning hack
+# under the old additive (no-overlap) model; with the overlap gate the
+# stack-wide 5 µs default is the consistent choice.
+DEFAULT_C_SERVING_US = 5.0
+# 4.0 µs — Dynamo-orchestrator calibrated effective per-kernel cost (same
+# as the DSr1 Dynamo+TRT validator). Sits between CUDA-Graph optimum
+# (1.5 µs) and TaxBreak's eager-mode floor (4.5-4.7 µs); the spread
+# absorbs the per-step scheduler-tick path and MoE kernel-count
+# under-count. Lifts panel-(a) small-B prediction (B=1..4) from
+# ~0.8 ms to ~1.8 ms, matching measured ~1.9 ms.
+DEFAULT_KERNEL_LAUNCH_US = 4.0
 
 
 def main() -> int:
@@ -66,6 +79,7 @@ def main() -> int:
         B_sweep=log_spaced_B(512),
         flops_eta=args.flops_eta, bw_eta=args.bw_eta,
         c_serving_us=args.c_serving_us,
+        kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US,
     )
     rows = []
     for m in measured:
@@ -76,6 +90,7 @@ def main() -> int:
             num_devices=NUM, S_decode=ISL + OSL // 2, B=m.B,
             flops_eta=args.flops_eta, bw_eta=args.bw_eta,
             c_serving_us=args.c_serving_us,
+            kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US,
         )
         rows.append((f"TP={TP} EP={EP}", m.B, m.tpot_ms, pred))
 

@@ -54,7 +54,25 @@ ISL, OSL = 1024, 1024
 # over-predicted (likely a shared-MoE / DeepEP hot-path the framework
 # doesn't yet model precisely); not addressable via the per-stack knobs.
 DEFAULT_BW_ETA = 1.0
-DEFAULT_C_SERVING_US = 0.0
+# 5 µs/seq — stack-realistic floor below the panel break-even at the
+# measured operating points. At B=8192 (largest panel-(d) measured)
+# c_serving·B = 41 ms ≈ t_GPU_step ~30-40 ms, so the overlap gate may
+# contribute a few ms but doesn't dominate. Setting >0 makes the
+# t_serving curve visible in the cost-component plot. Production
+# Dynamo+SGLang under CUDA-Graph replay amortizes host work better
+# than the docstring's 25-50 µs Python-heavy range would predict,
+# hence the calibrated low value here (the JSON sglang.json keeps
+# the 40 µs Python-heavy default for general-purpose users).
+DEFAULT_C_SERVING_US = 5.0
+# 12 µs — matches dynamo_sglang.json's canonical anchor. The Dynamo
+# orchestrator absorbs SGLang's per-sequence host work (c_serving, ρ_serving)
+# but does NOT collapse SGLang's per-kernel Python wrapping — many SGLang-
+# side kernels (custom scatter-direct A2A, MLA-specific kernels) fall
+# outside the Dynamo CUDA Graph and retain Python interpreter overhead.
+# Empirically validated on this DSr1 / GB300 cut: at the lower dynamo_trt
+# anchor (4 µs) the predicted small-B floor under-shoots measured ~13 ms
+# by ~3×; the 12 µs value (the pure-SGLang Python-paths anchor) lifts
+# the predicted floor to ~13 ms matching observation.
 DEFAULT_KERNEL_LAUNCH_US = 12.0
 DEFAULT_MOE_A2A_PATTERN = "scatter"
 

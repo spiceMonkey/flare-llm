@@ -123,9 +123,16 @@ def framework_spec_from_json_dict(cfg: Dict[str, Any]) -> FrameworkSpec:
             f"framework configuration: 'sw_overlap_factor' must be in [0, 1], got {sw_overlap}"
         )
 
+    serving_overlap = float(cfg.get("serving_overlap_factor", _defaults.serving_overlap_factor))
+    if not (0.0 <= serving_overlap <= 1.0):
+        raise ValueError(
+            f"framework configuration: 'serving_overlap_factor' must be in [0, 1], got {serving_overlap}"
+        )
+
     return FrameworkSpec(
         name=str(cfg.get("name", "unnamed_framework")),
         c_serving_per_seq_us=float(cfg.get("c_serving_per_seq_us", _defaults.c_serving_per_seq_us)),
+        serving_overlap_factor=serving_overlap,
         kernel_launch_us=float(cfg.get("kernel_launch_us", _defaults.kernel_launch_us)),
         kernels_per_layer_compute=int(cfg.get("kernels_per_layer_compute", _defaults.kernels_per_layer_compute)),
         kernels_per_collective_call=int(cfg.get("kernels_per_collective_call", _defaults.kernels_per_collective_call)),
