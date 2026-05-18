@@ -41,22 +41,54 @@ from .mla_flops import mla_proj_flops_per_layer_per_device
 from .sharding_factors import D_attn, D_exp
 
 
-def linear_flops_per_token(
+def attn_proj_flops_per_token(
     model: LlmModelSpec,
     partition: PartitionSpec,
     framework: FrameworkSpec,
 ) -> float:
-    """Per-device, per-token linear FLOPs summed across all layers.
+    """Per-device per-token attention-projection FLOPs (Q/K/V/O), all layers.
 
-    `framework` selects MLA mode (`mla_mode`) and the attention dispatch
-    pattern (`attention_mode`, `tp_ep_layout`) consumed by the sharding-
-    factor helpers. `attention_mode` / `tp_ep_layout` are ignored for
-    GQA / MHA models; `mla_mode` is ignored for non-MLA models.
+    Returns the per-token cost *as seen by one rank*: under TP-attn the
+    head-sharded share (per-layer divided by D_attn = TP), under DP-attn
+    the full per-token projection cost (D_attn = 1, weights replicated).
+    Per-step composition in `decode_model.compute_flops` applies the
+    correct per-rank batch divisor — TP-attn ranks see all B tokens (so
+    F_step = B · F_attn_proj_per_token), DP-attn ranks see only B/G_TP
+    tokens for the attention block (so F_step = (B/G_TP) · F_attn_proj_per_token).
     """
     L = model.L
     H = model.H
     PP = partition.PP
     d_attn = D_attn(partition, framework)
+
+    if model.mla is not None:
+        F_attn_proj = mla_proj_flops_per_layer_per_device(
+            model, partition, framework, framework.mla_mode
+        )
+    else:
+        H_kv = model.H_kv()
+        F_attn_proj = (4 * H**2 + 4 * H * H_kv) / d_attn
+
+    return (L / PP) * F_attn_proj
+
+
+def ffn_flops_per_token(
+    model: LlmModelSpec,
+    partition: PartitionSpec,
+    framework: FrameworkSpec,
+) -> float:
+    """Per-device per-token FFN + MoE-router FLOPs, all layers.
+
+    Returns dense-FFN + MoE-routed-FFN + MoE-router-gate compute, summed
+    across L layers and divided by per-component sharding factors
+    (D_exp_dense = TP, D_exp_moe per the §3.2 layout). Independent of
+    `attention_mode` — FFN per-token cost scales the same way under
+    TP-attn and DP-attn at the per-step level (each rank processes
+    all B tokens through its expert / FFN shard).
+    """
+    L = model.L
+    H = model.H
+    PP = partition.PP
     d_exp_dense = D_exp(partition, framework, layer_kind="dense")
 
     if model.moe is not None:
@@ -70,29 +102,38 @@ def linear_flops_per_token(
         L_moe = 0
         L_dense = L
         N_exp = 0
-        d_exp_moe = d_exp_dense  # unused but defined
+        d_exp_moe = d_exp_dense  # unused
         k = 0
         I_moe = 0
 
     I_dense = model.I_dense
 
-    # Per-layer per-device attention projection FLOPs — branch on variant.
-    if model.mla is not None:
-        F_attn_proj = mla_proj_flops_per_layer_per_device(
-            model, partition, framework, framework.mla_mode
-        )
-    else:
-        H_kv = model.H_kv()
-        F_attn_proj = (4 * H**2 + 4 * H * H_kv) / d_attn
+    F_layer_dense_ffn = (6 * H * I_dense) / d_exp_dense
+    F_layer_moe_ffn = (6 * H * k * I_moe) / d_exp_moe + 2 * H * N_exp
 
-    # Dense contribution per layer: attention projection + FFN
-    F_layer_dense = F_attn_proj + (6 * H * I_dense) / d_exp_dense
+    return (L_dense / PP) * F_layer_dense_ffn + (L_moe / PP) * F_layer_moe_ffn
 
-    # MoE contribution per layer: attention projection + routed FFN + router gate
-    F_layer_moe = (
-        F_attn_proj
-        + (6 * H * k * I_moe) / d_exp_moe
-        + 2 * H * N_exp
+
+def linear_flops_per_token(
+    model: LlmModelSpec,
+    partition: PartitionSpec,
+    framework: FrameworkSpec,
+) -> float:
+    """Per-device, per-token linear FLOPs summed across all layers.
+
+    Diagnostic surface: sum of attention-projection + FFN per-token costs
+    as seen by one rank. For per-step cost under DP-attention use
+    `decode_model.compute_flops` which applies the correct per-rank batch
+    divisor (B / G_TP) to the attention portion (the per-token formula
+    here treats DP-attn as "full per-token cost replicated on all ranks"
+    via D_attn = 1; the per-step composition fixes the batch sharding).
+
+    `framework` selects MLA mode (`mla_mode`) and the attention dispatch
+    pattern (`attention_mode`, `tp_ep_layout`) consumed by the sharding-
+    factor helpers. `attention_mode` / `tp_ep_layout` are ignored for
+    GQA / MHA models; `mla_mode` is ignored for non-MLA models.
+    """
+    return (
+        attn_proj_flops_per_token(model, partition, framework)
+        + ffn_flops_per_token(model, partition, framework)
     )
-
-    return (L_dense / PP) * F_layer_dense + (L_moe / PP) * F_layer_moe

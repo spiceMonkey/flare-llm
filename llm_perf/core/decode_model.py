@@ -27,6 +27,8 @@ from ..specs.tuner_spec import TuningSpec
 from ..utils import GB_TO_BYTES, TB_TO_FLOPS
 from .memory_placement import resolve_placement, t_mem_from_placement
 from .primitives import (
+    attn_proj_flops_per_token,
+    ffn_flops_per_token,
     dense_weight_bytes,
     moe_weight_bytes,
     moe_weight_traffic_bytes,
@@ -236,8 +238,13 @@ class LatencyResults:
     N_tok_per_step: float = 1.0
     t_step_user_verify: float = 0.0
     TPOT_spec: float = 0.0
-    # Per-sequence serving runtime overhead (decode.md §7.2). Linear in B,
-    # additive (no overlap). Zero when tuner.t_serving_per_seq_us == 0.
+    # Per-sequence serving runtime overhead (decode.md §7.2). GROSS per-step
+    # host cost: c_serving_per_seq_us * B * 1e-6. Parallel to t_SW which also
+    # stores the gross dispatch budget — both are diagnostic surfaces. The
+    # actual contribution to t_step_user is the OVERLAP-GATED form
+    # max(0, t_serving - serving_overlap_factor * t_GPU_step), applied
+    # internally; readers comparing the t_serving curve against t_step,user
+    # in plots see the overlap gate's hidden portion as the gap.
     t_serving: float = 0.0
 
 
@@ -259,24 +266,48 @@ def compute_flops(
     S = tuner.S_decode
     B = tuner.B_decode
 
-    # Linear FLOPs per token (proj + FFN + MoE router)
-    F_linear_per_token = linear_flops_per_token(model, partition, framework)
-    # Decode attention (score + value, S-scaling). GQA / MHA: 4·S·H/(D_kv·SP)
-    # per token per layer. MLA: variant-specific score / value per layer per
-    # device from `mla_score_value_flops_per_layer_per_device` (mode-dependent),
-    # divided by SP for sequence-shard.
+    # Per-token FLOPs decomposed by which per-rank batch divisor applies.
+    # - Attention projection (Q/K/V/O) and attention score/value: under
+    #   DP-attention, each rank processes only B/G_TP tokens through the
+    #   attention block (batch is sequence-sharded across the TP group),
+    #   so per-step attention compute scales with B/G_TP, not B. Under
+    #   TP-attention, each rank sees all B tokens but does 1/D_attn of
+    #   the per-token work (head-sharded), so per-step = B × per-token.
+    # - FFN (dense FFN + MoE FFN + MoE router): unaffected by the
+    #   attention mode — each rank processes all B tokens through its
+    #   D_exp-sharded FFN / expert set, so per-step = B × per-token.
+    F_attn_proj_per_token = attn_proj_flops_per_token(model, partition, framework)
+    F_ffn_per_token = ffn_flops_per_token(model, partition, framework)
     if model.mla is not None:
         from .primitives.mla_flops import mla_score_value_flops_per_layer_per_device
         F_sv_per_layer = mla_score_value_flops_per_layer_per_device(
             model, partition, framework, S, framework.mla_mode
         )
-        F_attn_per_token = (L / PP) * F_sv_per_layer / SP
+        F_attn_sv_per_token = (L / PP) * F_sv_per_layer / SP
     else:
-        F_attn_per_token = (L / PP) * (4 * S * H) / (D_kv(partition, framework) * SP)
+        F_attn_sv_per_token = (L / PP) * (4 * S * H) / (D_kv(partition, framework) * SP)
 
-    F_token_device = F_linear_per_token + F_attn_per_token
+    F_attn_per_token = F_attn_proj_per_token + F_attn_sv_per_token
+    F_token_device = F_attn_per_token + F_ffn_per_token
     F_layer_per_device = F_token_device / (L / PP) if L > 0 else 0.0
-    F_step_device = B * F_token_device
+
+    # Per-rank batch divisor for the attention block.
+    # Note: the score/value piece (F_attn_sv) already contains /D_kv, which
+    # under DP-attn happens to equal G_TP — so multiplying by full B still
+    # gives the correct per-rank score/value cost. The over-counting bug
+    # was specifically in the projection (D_attn = 1 under DP-attn means
+    # the per-token projection is full-cost; multiplying by B then over-
+    # counts by G_TP). We apply the B/G_TP divisor to the *projection*
+    # contribution only; the score/value piece is left at × B.
+    if framework.attention_mode == "dp" and partition.TP > 1:
+        B_attn_proj = B / partition.TP
+    else:
+        B_attn_proj = B
+    F_step_device = (
+        B_attn_proj * F_attn_proj_per_token
+        + B * F_attn_sv_per_token
+        + B * F_ffn_per_token
+    )
 
     return FlopsResults(
         F_token_device=F_token_device,
@@ -525,15 +556,20 @@ def compute_latency(
     The per-stage roofline gives the cost of one pipeline stage processing
     the current batch. For a user observing inter-token latency we apply a
     pipeline-bubble correction when B < PP:
-        t_step_user = max(t_stage_GPU, t_SW) · max(1, PP / B) + t_LM + t_serving.
+        t_GPU_step = max(t_stage_GPU, t_SW) · max(1, PP / B) + t_LM
+        t_step_user = t_GPU_step + max(0, t_serving_gross
+                                          - ρ_serving · t_GPU_step)
 
     `t_stage_GPU` is the GPU-side compute + comm time (with optional Tensor
     Core efficiency derate at small microbatch). `t_SW` is the per-round
     CPU dispatch budget (kernel_launch_overhead.md §5). The two are
     composed via `sw_overlap_factor` ρ_SW: ρ_SW=1 means SW is fully hidden
     by GPU work (just `max`), ρ_SW=0 means strict serialization.
-    `t_serving` is the per-sequence serving runtime overhead (decode.md §7.2),
-    linear in B and additive (not overlapped with GPU work).
+    `t_serving` is the per-sequence serving runtime overhead (decode.md §7.2).
+    Gross host work is `t_serving_gross = c_serving_per_seq_us · B · 1e-6`;
+    composition via `serving_overlap_factor` ρ_serving uses the same physics
+    as ρ_SW — under CUDA-Graph replay (ρ_serving = 1, default) the CPU runs
+    ahead and host work hides behind GPU compute until it exceeds `t_GPU_step`.
     """
     B = tuner.B_decode
     PP = partition.PP
@@ -625,11 +661,27 @@ def compute_latency(
 
     # Per-sequence serving runtime overhead (decode.md §7.2): host-side work
     # that scales linearly with active-sequence count B (block-table gather,
-    # sampling, scheduler). Additive — not overlapped with GPU work.
-    t_serving = framework.c_serving_per_seq_us * max(1, B) * 1e-6
+    # sampling, scheduler). **Composed with GPU work via serving_overlap_factor
+    # ρ_serving** — under CUDA-Graph replay the CPU runs ahead and host work
+    # hides behind GPU compute until it exceeds the per-step GPU time. Only the
+    # *excess* over the per-step GPU window contributes to t_step_user.
+    #   ρ_serving = 1 → max(0, t_serving_gross - t_GPU_step)  (full overlap;
+    #                   host work hides while CPU has GPU compute to amortize against)
+    #   ρ_serving = 0 → t_serving_gross  (eager-mode; host work always blocks)
+    t_serving_gross = framework.c_serving_per_seq_us * max(1, B) * 1e-6
+    rho_serving = framework.serving_overlap_factor
+    t_GPU_step = t_stage_with_SW * pp_bubble_factor + t_LM
+    t_serving_excess = max(0.0, t_serving_gross - rho_serving * t_GPU_step)
 
-    t_step_user = t_stage_with_SW * pp_bubble_factor + t_LM + t_serving
+    t_step_user = t_GPU_step + t_serving_excess
     TPOT = t_step_user
+    # Diagnostic surface (parallel to t_SW): expose the GROSS per-step host
+    # cost in LatencyResults so plots and breakdown tables show the per-
+    # sequence work as it scales with B, even when the overlap gate clips
+    # its contribution to t_step_user to zero. The gated contribution lives
+    # in t_step_user; readers see the gap between the t_serving curve and
+    # t_step,user as the amount the overlap gate has hidden.
+    t_serving = t_serving_gross
 
     TPS_single = B / t_step_user if t_step_user > 0 else 0.0
 
@@ -684,8 +736,11 @@ def compute_latency(
         # often stays memory-bound through small B even under speculation.
         t_lm_compute_verify = t_lm_compute * n_tok_verify
         t_LM_verify = max(t_lm_compute_verify, t_lm_mem)
-        # t_serving is per-step CPU work, fires once per verify step too.
-        t_step_user_verify = t_stage_with_SW_verify * pp_bubble_factor + t_LM_verify + t_serving
+        # t_serving fires once per verify step too; apply the same overlap
+        # gate against the verify-step GPU window.
+        t_GPU_step_verify = t_stage_with_SW_verify * pp_bubble_factor + t_LM_verify
+        t_serving_verify = max(0.0, t_serving_gross - rho_serving * t_GPU_step_verify)
+        t_step_user_verify = t_GPU_step_verify + t_serving_verify
         TPOT_spec = t_step_user_verify / N_tok_per_step
     else:
         t_step_user_verify = t_step_user

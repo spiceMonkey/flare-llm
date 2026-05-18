@@ -42,17 +42,35 @@ class FrameworkSpec:
     # Per-sequence per-step host work (decode.md §7.2):
     # PagedAttention block-table gather, continuous-batching scheduler,
     # per-sequence sampling glue, token-append + KV bookkeeping. Linear
-    # in B, on the critical path (no overlap), outside the PP bubble.
+    # in B. **Composed with GPU work via `serving_overlap_factor`** —
+    # under CUDA-Graph replay the CPU runs ahead and host work hides
+    # behind GPU compute until it exceeds the per-step GPU time.
     #
-    #   t_serving = c_serving_per_seq_us * B * 1e-6     [seconds]
+    # Gross per-step host work:
+    #   t_serving_gross = c_serving_per_seq_us * B * 1e-6     [seconds]
     #
-    # Stack-dependent ranges (decode.md §7.2):
+    # Net contribution to t_step_user (after overlap with per-step GPU
+    # time t_GPU_step = γ_pp · t_stage,with_SW + t_LM):
+    #   t_serving = max(0, t_serving_gross
+    #                     - serving_overlap_factor * t_GPU_step)
+    #
+    # Stack-dependent ranges for c_serving_per_seq_us (decode.md §7.2):
     # - C++/CUDA-graph + orchestrator (Dynamo+TRT): 5-22 µs/seq
     # - Mixed orchestrator + Python (Dynamo+SGLang): 25-50 µs/seq
     # - Raw C++ runtime (raw TRT-LLM): 50-100 µs/seq
     # - Aggressively fused C++: ~10 µs/seq lower bound
     # - Python-heavy (vLLM, SGLang eager): 30-60 µs/seq
     c_serving_per_seq_us: float = 0.0
+
+    # Fraction of t_serving_gross hidden behind GPU compute. Same physics
+    # as sw_overlap_factor (below) but applied to host-side per-sequence
+    # work rather than per-kernel dispatch. 1.0 (default) = full CUDA-
+    # Graph-replay overlap — CPU runs ahead, host work hides until it
+    # exceeds the per-step GPU time. 0.0 = eager-mode serialization,
+    # host work always blocks. Caveat: only modulates the *hideable*
+    # portion; t_serving_gross remains a hard floor when it exceeds
+    # t_GPU_step regardless of this knob.
+    serving_overlap_factor: float = 1.0
 
     # Per-kernel dispatch budget (decode.md §7.1).
     #   t_stage_sw = tau_launch * (k_compute + k_collective + k_pp_hop)

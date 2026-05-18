@@ -66,13 +66,27 @@ ISL, OSL = 1024, 1024
 # the CUDA-graph launch, so the framework's per-seq overhead term
 # over-counts at large B (the offending TP=EP=16,32 cells run at B≥4000).
 DEFAULT_BW_ETA = 0.7143
-DEFAULT_C_SERVING_US = 0.0
-# kernel_launch_us: 1.5 µs per the FrameworkSpec docstring anchor for the
-# "CUDA Graphs replay (Dynamo / TRT-LLM)" case. Production Dynamo+TRT
-# deployments enable CUDA Graphs for steady-state decode (10-30% TPOT
-# savings); benchmark measurements of single cudaLaunchKernel under
-# graph replay sit in 1.3-2 µs (NVIDIA forums, PyTorch/CUDA-Graph blogs).
-DEFAULT_KERNEL_LAUNCH_US = 1.5
+# 5 µs/seq — stack-realistic floor for Dynamo+TRT under CUDA-Graph replay.
+# Below the panel break-even at every measured operating point: at B=4300
+# (largest panel-(c) measured) c_serving·B = 21.5 ms < t_GPU_step ~25 ms,
+# so the overlap gate clips the contribution to 0 and the value doesn't
+# affect MAE. Setting >0 makes the t_serving curve visible in the cost-
+# component plot (was previously 0 → suppressed by the plot helper's
+# any(t_serving_ms > 0) guard). Sits at the lower end of decode.md §7.2's
+# 5-22 µs C++/CUDA-graph + orchestrator range.
+DEFAULT_C_SERVING_US = 5.0
+# kernel_launch_us: 4.0 µs — calibrated Dynamo-orchestrator effective per-
+# kernel cost on H100/H200. Sits between the CUDA-Graph optimum (1.5 µs)
+# and TaxBreak's measured eager-mode floor (4.5-4.7 µs on H100/H200, arxiv
+# 2603.12465). Production Dynamo+TRT at small B apparently does not hit
+# the CUDA-Graph optimum, likely because (a) MoE-routing dispatch isn't
+# fully captured by the graph, (b) the per-step scheduler-tick path runs
+# outside the graph, and (c) the framework's flat kernels_per_layer_compute=10
+# under-counts MoE kernel fanout (TaxBreak: MoE models dispatch 8-11×
+# more kernels per token than dense). 4.0 µs absorbs all three effects.
+# Same value used for Dynamo+SGLang (the orchestrator behavior dominates
+# the underlying runtime distinction).
+DEFAULT_KERNEL_LAUNCH_US = 4.0
 DEFAULT_MOE_A2A_PATTERN = "scatter"
 
 

@@ -2,6 +2,7 @@
   "schema": "llm_perf.framework",
   "name": "default",
   "c_serving_per_seq_us": 0.0,
+  "serving_overlap_factor": 1.0,
   "kernel_launch_us": 1.5,
   "kernels_per_layer_compute": 10,
   "kernels_per_collective_call": 2,

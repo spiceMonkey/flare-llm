@@ -498,7 +498,7 @@ def plot_tpot_vs_B(
     ax.plot(bs, [p.t_LM_ms      for p in fx], "--", c="darkorange",  lw=1.0*l_scale, alpha=0.7,  label="t_LM (one-shot)")
     ax.plot(bs, [p.t_SW_ms      for p in fx], "-.", c="goldenrod",   lw=1.6*l_scale, alpha=0.95, label="t_SW (kernel dispatch)")
     if any(p.t_serving_ms > 0 for p in fx):
-        ax.plot(bs, [p.t_serving_ms for p in fx], "--", c="teal",    lw=1.3*l_scale, alpha=0.85, label="t_serving (per-seq)")
+        ax.plot(bs, [p.t_serving_ms for p in fx], "--", c="mediumvioletred", lw=1.3*l_scale, alpha=0.85, label="t_serving (per-seq)")
     ax.plot(bs, [p.TPOT_ms      for p in fx], "-",  c="black",       lw=2.5*l_scale,             label="TPOT (composed)")
 
     if measured:

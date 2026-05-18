@@ -69,7 +69,11 @@ from .weight_quantities import (
     embedding_bytes,
 )
 from .kv_quantities import kv_bytes_per_seq
-from .linear_flops import linear_flops_per_token
+from .linear_flops import (
+    attn_proj_flops_per_token,
+    ffn_flops_per_token,
+    linear_flops_per_token,
+)
 from .mla_flops import (
     mla_proj_flops_per_layer_per_device,
     mla_score_value_flops_per_layer_per_device,
@@ -143,6 +147,8 @@ __all__ = [
     "moe_weight_traffic_bytes",
     "embedding_bytes",
     "kv_bytes_per_seq",
+    "attn_proj_flops_per_token",
+    "ffn_flops_per_token",
     "linear_flops_per_token",
     "mla_proj_flops_per_layer_per_device",
     "mla_score_value_flops_per_layer_per_device",
