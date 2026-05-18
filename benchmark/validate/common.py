@@ -55,7 +55,7 @@ class MeasuredPoint:
     """One InferenceX measurement row (subset of fields used by drivers)."""
 
     B: int                  # `conc` — steady-state in-flight requests (≈ per-step batch)
-    tpot_ms: float          # `median_tpot` × 1000 — primary y-axis quantity
+    tpot_ms: float          # `mean_tpot` × 1000 — primary y-axis quantity
     isl: int
     osl: int
     decode_tp: int
@@ -130,11 +130,11 @@ def load_measured(
                     continue
                 if precision is not None and row.get("precision") != precision:
                     continue
-                if not row.get("median_tpot"):
+                if not row.get("mean_tpot"):
                     continue  # drop incomplete runs
                 out.append(MeasuredPoint(
                     B=int(row["conc"]),
-                    tpot_ms=float(row["median_tpot"]) * 1000.0,
+                    tpot_ms=float(row["mean_tpot"]) * 1000.0,
                     isl=int(row["isl"]),
                     osl=int(row["osl"]),
                     decode_tp=int(row["decode_tp"]),
@@ -475,46 +475,59 @@ def plot_tpot_vs_B(
     the existing sandbox style). Measured points overlay as markers labeled
     with their concurrency.
     """
+    import os
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+
+    # When LLM_PERF_PAPER_STYLE=1 is set (by the paper figure pipeline),
+    # bump fonts/lines so panels read well when tiled into the §5 composite.
+    _paper = os.environ.get("LLM_PERF_PAPER_STYLE") == "1"
+    f_scale = 2.4 if _paper else 1.0
+    l_scale = 2.0 if _paper else 1.0
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig, ax = plt.subplots(1, 1, figsize=(13, 7))
 
     fx = [p for p in framework if p.fits_in_HBM] or list(framework)
     bs = [p.B for p in fx]
-    ax.plot(bs, [p.t_compute_ms for p in fx], "-",  c="crimson",     lw=1.3, alpha=0.85, label="t_compute")
-    ax.plot(bs, [p.t_mem_ms     for p in fx], "-",  c="steelblue",   lw=1.3, alpha=0.85, label="t_mem")
-    ax.plot(bs, [p.t_local_ms   for p in fx], ":",  c="dimgray",     lw=1.0, alpha=0.7,  label="t_local = max(t_compute, t_mem)")
-    ax.plot(bs, [p.t_comm_ms    for p in fx], "--", c="forestgreen", lw=1.3, alpha=0.85, label="t_comm")
-    ax.plot(bs, [p.t_LM_ms      for p in fx], "--", c="darkorange",  lw=1.0, alpha=0.7,  label="t_LM (one-shot)")
-    ax.plot(bs, [p.t_SW_ms      for p in fx], ":",  c="purple",      lw=1.0, alpha=0.6,  label="t_SW (kernel dispatch)")
+    ax.plot(bs, [p.t_compute_ms for p in fx], "-",  c="crimson",     lw=1.3*l_scale, alpha=0.85, label="t_compute")
+    ax.plot(bs, [p.t_mem_ms     for p in fx], "-",  c="steelblue",   lw=1.3*l_scale, alpha=0.85, label="t_mem")
+    ax.plot(bs, [p.t_local_ms   for p in fx], "-.", c="darkviolet",  lw=1.6*l_scale, alpha=0.95, label="t_local = max(t_compute, t_mem)")
+    ax.plot(bs, [p.t_comm_ms    for p in fx], "--", c="forestgreen", lw=1.3*l_scale, alpha=0.85, label="t_comm")
+    ax.plot(bs, [p.t_LM_ms      for p in fx], "--", c="darkorange",  lw=1.0*l_scale, alpha=0.7,  label="t_LM (one-shot)")
+    ax.plot(bs, [p.t_SW_ms      for p in fx], "-.", c="goldenrod",   lw=1.6*l_scale, alpha=0.95, label="t_SW (kernel dispatch)")
     if any(p.t_serving_ms > 0 for p in fx):
-        ax.plot(bs, [p.t_serving_ms for p in fx], "--", c="teal",    lw=1.3, alpha=0.85, label="t_serving (per-seq)")
-    ax.plot(bs, [p.TPOT_ms      for p in fx], "-",  c="black",       lw=2.5,             label="TPOT (composed)")
+        ax.plot(bs, [p.t_serving_ms for p in fx], "--", c="teal",    lw=1.3*l_scale, alpha=0.85, label="t_serving (per-seq)")
+    ax.plot(bs, [p.TPOT_ms      for p in fx], "-",  c="black",       lw=2.5*l_scale,             label="TPOT (composed)")
 
     if measured:
         ax.scatter([m.B for m in measured], [m.tpot_ms for m in measured],
-                   c="navy", marker="D", s=70, edgecolors="black", linewidths=0.5,
+                   c="navy", marker="D", s=70*(l_scale**2), edgecolors="black", linewidths=0.5*l_scale,
                    zorder=10, label=f"InferenceX measured (n={len(measured)})")
         for m in measured:
             ax.annotate(f"c={m.B}", (m.B, m.tpot_ms),
                         textcoords="offset points", xytext=(6, 4),
-                        fontsize=6, color="navy", alpha=0.7)
+                        fontsize=6*f_scale, color="navy", alpha=0.7)
 
-    ax.set_xlabel("Concurrency (B)", fontsize=12)
-    ax.set_ylabel("Time per decode step (ms)", fontsize=12)
+    ax.set_xlabel("Concurrency (B)", fontsize=12*f_scale)
+    ax.set_ylabel("Time per decode step (ms)", fontsize=12*f_scale)
+    ax.tick_params(axis="both", labelsize=10*f_scale)
     ax.set_xscale("log")
     ax.set_yscale("log")
     ax.grid(True, alpha=0.3, which="both")
-    ax.legend(fontsize=9, loc="center left", bbox_to_anchor=(1.02, 0.5),
-              frameon=True, framealpha=0.95)
-    ax.set_title("TPOT and component breakdown vs Concurrency", fontsize=11)
 
-    fig.suptitle(f"{title}\n{subtitle}", fontsize=11)
-    fig.tight_layout(rect=[0, 0, 0.82, 0.94])
-    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    if _paper:
+        # Strip suptitle / axis title / legend — the composite owns those.
+        fig.tight_layout()
+        fig.savefig(out_path, dpi=150)
+    else:
+        ax.legend(fontsize=9, loc="center left", bbox_to_anchor=(1.02, 0.5),
+                  frameon=True, framealpha=0.95)
+        ax.set_title("TPOT and component breakdown vs Concurrency", fontsize=11)
+        fig.suptitle(f"{title}\n{subtitle}", fontsize=11)
+        fig.tight_layout(rect=[0, 0, 0.82, 0.94])
+        fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
 
 
