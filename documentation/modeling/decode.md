@@ -67,7 +67,7 @@ LLM inference, Transformer, parallelism, tensor parallelism, expert parallelism,
 
 This section defines parameter sizes and memory footprint for a given set of model parameters. The memory footprint include those from model weights, per-token activation/working memories, and KV cache. We avoid model-wide parameter aggregation here and instead focus on **per-layer** quantities, because pipeline-parallel stages own disjoint sets of layers. All parameter definitions assume stored precision of $b$ bytes per element (e.g., bf16 = 2 bytes).
 
-**Layout and mode parameterization.** Per-device formulas in §1.4 and below (and analogously in §2.1 / §2.3 / §3.5 / §5.3 / §5.5) are written in terms of the per-component effective sharding factors $D_{\text{attn}}$, $D_{\text{exp}}$, $D_{\text{kv}}$, $D_{\text{emb}}$ and the collective group sizes $G_{TP}$, $G_{EP}$ from `notation.md §1` rather than raw $TP$ / $EP$ divisors. This lets a single expression cover all three production-relevant `(layout, attention_mode)` configurations — orthogonal + TP-attention, orthogonal + DP-attention (DSv3 / SGLang on disjoint TP and EP groups), and co-located + DP-attention (DSv3 / SGLang on a single NVLink island, $\max(TP, EP)$ GPUs per replica) — without conditional branching. Each downstream section opens with a summary table mapping the abstract factors used in that section to each of the three configurations; the `notation.md §1` lookup table is the canonical source.
+**Layout and mode parameterization.** Per-device formulas in §1.4 and below (and analogously in §2.1 / §2.3 / §3.5 / §5.3 / §5.5) are written in terms of the per-component effective sharding factors $D_{\text{attn}}$, $D_{\text{exp}}$, $D_{\text{kv}}$, $D_{\text{emb}}$ and the collective group sizes $G_{TP}$, $G_{EP}$ from `notation.md §1` rather than raw $TP$ / $EP$ divisors. This lets a single expression cover all four production-relevant `(layout, attention_mode)` configurations — orthogonal + TP-attention, orthogonal + DP-attention (DSv3 / SGLang on disjoint TP and EP groups), co-located + DP-attention (DSv3 / SGLang on a single NVLink island, $\max(TP, EP)$ GPUs per replica), and co-located + TP-attention (DSr1 / NVL72 panel-(b) shape: TP=EP overlaid on the same GPU set with attention head-sharded across that group) — without conditional branching. Each downstream section opens with a summary table mapping the abstract factors used in that section to each of the four configurations; the `notation.md §1` lookup table is the canonical source.
 
 ---
 
@@ -283,7 +283,7 @@ generated token, which is negligible relative to the full cache.
 
 So far we've completed the all the memory footprint estimation for a model layer. When we introduce different parallelism schemes, some of these memories would be sharded by one or more of these parallelism dimensions, resulting in a somewhat complicated memory aggregateion per device. We now describe how these parameters are distributed across devices under PP/EP/TP/SP, and then derive simple modeling approximations.
 
-This section uses the per-component effective sharding factors $D_{\text{attn}}$, $D_{\text{exp}}$, $D_{\text{kv}}$, $D_{\text{emb}}$ from `notation.md §1` rather than raw $TP$ / $EP$ divisors, so a single expression covers all three production-relevant configurations. Resolving the abstract factors:
+This section uses the per-component effective sharding factors $D_{\text{attn}}$, $D_{\text{exp}}$, $D_{\text{kv}}$, $D_{\text{emb}}$ from `notation.md §1` rather than raw $TP$ / $EP$ divisors, so a single expression covers all four production-relevant configurations. Resolving the abstract factors:
 
 | configuration | $D_{\text{attn}}$ | $D_{\text{exp}}$ (MoE) | $D_{\text{kv}}$ | $D_{\text{emb}}$ |
 |---|---|---|---|---|
@@ -1342,7 +1342,7 @@ On single-tier systems (e.g., NVL72), every axis collapses to tier 0 and the leg
 
 MoE layers require exchanging token activations across the expert-parallel (EP) dimension via all-to-all routing [DEEPSPEED-MOE]. EP communication follows a **bidirectional dispatch-and-combine pattern**: token activations are routed from the source rank to the rank holding the selected expert (top-$k$), and the expert's output is then sent back to the source rank to be added to the residual stream. We model these as **two distinct A2A collectives per MoE layer** ($n_{EP} = 2$ in §5.5), each costing one single-direction A2A — this aligns the cost-model bookkeeping with the kernel-launch counter (§7.1), since dispatch and combine are also two separate NCCL API calls.
 
-Let $k$ denote the number of active experts per token. Each direction carries a $kHb$ byte per-rank per-token payload; for a decode step of $B$ sequences the per-step payload is $B \cdot kHb$. The collective group size is $G_{EP}$ from `notation.md §1` (equal to $EP$ across all three configurations). The shipped A2A primitive is pairwise direct-send (NCCL on star; bisection-bound pairwise on torus). Bruck / log-hop A2A does **not** ship and does not appear in the cost — see `collectives/01_collective_algorithms.md §7` for the primitive derivations. On a star topology, the per-direction A2A cost is:
+Let $k$ denote the number of active experts per token. Each direction carries a $kHb$ byte per-rank per-token payload; for a decode step of $B$ sequences the per-step payload is $B \cdot kHb$. The collective group size is $G_{EP}$ from `notation.md §1` (equal to $EP$ across all four configurations). The shipped A2A primitive is pairwise direct-send (NCCL on star; bisection-bound pairwise on torus). Bruck / log-hop A2A does **not** ship and does not appear in the cost — see `collectives/01_collective_algorithms.md §7` for the primitive derivations. On a star topology, the per-direction A2A cost is:
 
 $$
 t_{EP}(B) \;=\; (G_{EP} - 1)\,\alpha_{EP} \;+\; \frac{G_{EP} - 1}{G_{EP}} \cdot \frac{B \cdot k H \, b}{BW_{\text{EP}}}
@@ -1368,7 +1368,7 @@ The cost-model formulas in this section are written for the **gather-then-dispat
 
 ## 5.3 Tensor Parallel (TP) Communication
 
-TP groups compute each layer in parallel across $G_{TP}$ devices (group size from `notation.md §1`; $G_{TP} = TP$ across all three configurations) using column- and row-parallel linear layers [MEGATRON]. Each layer fires two TP collectives: one in the **attention** block (after the output projection) and one in the **MLP / MoE expert** block (after the down projection). The collective in the attention block depends on the attention parallelism mode:
+TP groups compute each layer in parallel across $G_{TP}$ devices (group size from `notation.md §1`; $G_{TP} = TP$ across all four configurations) using column- and row-parallel linear layers [MEGATRON]. Each layer fires two TP collectives: one in the **attention** block (after the output projection) and one in the **MLP / MoE expert** block (after the down projection). The collective in the attention block depends on the attention parallelism mode:
 
 - **TP-attention (default):** all-reduce (AR) — sums partial outputs across the $G_{TP}$ ranks that each hold a shard of the heads.
 - **DP-attention:** all-gather (AG) — each rank already holds the full attention output for its assigned sequence subset; the AG gathers all sequences' hidden states so the downstream TP-sharded FFN can run [DSV3, SGLANG-DPATTN].
@@ -1738,7 +1738,7 @@ Because the LM head lives on stage $PP{-}1$ only (not divided by $PP$, $EP$, or 
 
 ## 6.3 When Each Layout / Attention-Mode Pays
 
-§6.1 and §6.2 cover *what* each $(layout, attention\_mode)$ configuration costs in HBM and per-step latency. This subsection covers *which* configuration to pick for a given deployment — when each of the three production-relevant configurations from `notation.md §1` actually pays off relative to the orthogonal + TP-attention default.
+§6.1 and §6.2 cover *what* each $(layout, attention\_mode)$ configuration costs in HBM and per-step latency. This subsection covers *which* configuration to pick for a given deployment — when each of the four production-relevant configurations from `notation.md §1` actually pays off relative to the orthogonal + TP-attention default.
 
 ### Orthogonal + TP-attention (the default)
 
@@ -1764,7 +1764,7 @@ TP and EP overlap on the same physical GPUs of a replica, dropping $N_{\text{rep
 
 1. **Per-device HBM can absorb the larger expert footprint.** Either the expert weights are small enough (low $N_{\text{exp}}$ or compact $I_{\text{moe}}$) or aggressive quantization (FP4 / INT4) keeps $1/EP$ of the experts under HBM. DSv3 satisfies this via FP4 + a sparsity factor of $k = 8$ active experts out of $N_{\text{exp}} = 256$. [DSV3]
 2. **All collectives benefit from staying inside one fast fabric tier.** Orthogonal $TP = 8, EP = 8$ on 64 GPUs spans multiple NVLink islands — the EP all-to-all crosses a slower tier on every layer, paying the slow tier's $\alpha$ on every collective. Co-located $TP = EP = 8$ on 8 GPUs keeps both collectives on NVLink. The latency win is concentrated in the small-$M$ decode regime where $\alpha$ dominates.
-3. **Co-location-only DP-attn replication cost is acceptable.** Co-location forces DP-attn (no separate TP group exists for head-sharding to land on). This brings the same attention-weight replication cost as orthogonal + DP-attn — fine for MLA / aggressive GQA models, costly for full MHA.
+3. **Attention mode choice under co-location.** Co-location supports both attention modes on the overlaid GPU set: TP-attn head-shards across the same group that holds the experts (no replication cost; per-layer TP all-reduce fires on the same ranks as the MoE A2A), and DP-attn replicates attention and batch-shards (replication cost equal to orthogonal + DP-attn — fine for MLA / aggressive GQA models, costly for full MHA). Pick TP-attn under co-location when the attention block is head-structured enough to benefit from sharding ($n_q$ divides $TP$, GQA $n_{kv} \geq TP$, or full MHA); pick DP-attn when MLA flatness or aggressive-GQA $n_{kv}$ saturation makes attention replication free anyway.
 
 In short: co-location is the right choice when the workload is MoE-dominated, attention is small (MLA-class), and keeping the world inside one NVLink island unlocks meaningful $\alpha$-cost savings on every collective.
 
