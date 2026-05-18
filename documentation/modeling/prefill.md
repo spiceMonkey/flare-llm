@@ -216,11 +216,11 @@ Parallelism distributes prefill FLOPs across devices following the same canonica
 | configuration | $D_{\text{attn}}$ | $D_{\text{exp}}$ (MoE) | $D_{\text{kv}}$ | $D_{\text{emb}}$ |
 |---|---|---|---|---|
 | orthogonal + TP-attn | $TP$ | $TP \cdot EP$ | $TP$ (head) | $TP$ |
+| co-located + TP-attn | $TP$ | $EP$ | $TP$ (head) | $TP$ |
 | orthogonal + DP-attn | $1$ | $TP \cdot EP$ | $TP$ (seq) | $TP$ |
 | co-located + DP-attn | $1$ | $EP$ | $\max(TP, EP)$ (seq) | $TP$ |
-| co-located + TP-attn | $TP$ | $EP$ | $TP$ (head) | $TP$ |
 
-Dense FFN always uses $D_{\text{exp}} = TP$. The KV-attention compute term carries an additional $/SP$ factor on top of $D_{\text{kv}}$ when sequence parallelism is enabled. Under co-location $TP = EP$ structurally, so $\max(TP, EP)$ and $TP$ collapse to the same value in the last two rows. Prefill per-device FLOPs are **invariant** under the TP-attn ↔ DP-attn swap (the per-rank work is the same whether split by head or by sequence — both reduce to a $1/D_{\text{attn}}$ or $1/D_{\text{kv}}$ share); attention weight footprint and the per-layer attention TP collective primitive (AR vs AG) change as derived in `decode.md §1.4` / `§5.3`. Formulas below use the abstract factors directly without further repetition of the table.
+Dense FFN always uses $D_{\text{exp}} = TP$. The KV-attention compute term carries an additional $/SP$ factor on top of $D_{\text{kv}}$ when sequence parallelism is enabled. Under co-location $TP = EP$ structurally, so $\max(TP, EP)$ and $TP$ collapse to the same value in the co-located rows. Prefill per-device FLOPs are **invariant** under the TP-attn ↔ DP-attn swap (the per-rank work is the same whether split by head or by sequence — both reduce to a $1/D_{\text{attn}}$ or $1/D_{\text{kv}}$ share); attention weight footprint and the per-layer attention TP collective primitive (AR vs AG) change as derived in `decode.md §1.4` / `§5.3`. Formulas below use the abstract factors directly without further repetition of the table.
 
 ### PP sharding
 

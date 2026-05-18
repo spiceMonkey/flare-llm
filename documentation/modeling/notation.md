@@ -70,13 +70,13 @@ The mapping from `(layout, attention_mode)` to factor values (MoE FFN row for $D
 | layout | attention_mode | $D_{\text{attn}}$ | $D_{\text{exp}}$ (MoE) | $D_{\text{kv}}$ | $D_{\text{emb}}$ | $G_{TP}$ | $G_{EP}$ | $N_{\text{replica}}$ |
 |---|---|---|---|---|---|---|---|---|
 | orthogonal | TP-attn *(default)* | $TP$ | $TP \cdot EP$ | $TP$ (head) | $TP$ | $TP$ (AR) | $EP$ | $PP \cdot TP \cdot EP \cdot SP$ |
+| co-located | TP-attn *(production)* | $TP$ | $EP$ | $TP$ (head) | $TP$ | $TP$ (AR) | $EP$ | $PP \cdot \max(TP, EP) \cdot SP$ |
 | orthogonal | DP-attn | $1$ | $TP \cdot EP$ | $TP$ (seq) | $TP$ | $TP$ (AG) | $EP$ | $PP \cdot TP \cdot EP \cdot SP$ |
 | co-located | DP-attn *(production)* | $1$ | $EP$ | $\max(TP, EP)$ (seq) | $TP$ | $TP$ (AG) | $EP$ | $PP \cdot \max(TP, EP) \cdot SP$ |
-| co-located | TP-attn *(production)* | $TP$ | $EP$ | $TP$ (head) | $TP$ | $TP$ (AR) | $EP$ | $PP \cdot \max(TP, EP) \cdot SP$ |
 
-KV cache footprint is **invariant** under the orthogonal TP-attn ↔ DP-attn swap ($D_{\text{kv}} = TP$ either way) — head-sharded by $TP$ vs sequence-sharded by $TP$ ranks gives the same per-device byte count; only the meaning of the divisor changes (`(head)` vs `(seq)` annotation). Co-located deployments require $TP = EP$ (since both groups overlay on the same physical GPU set), so under co-location the $\max(TP, EP)$ and $TP$ in the table collapse to the same value.
+KV cache footprint is **invariant** under the orthogonal TP-attn ↔ DP-attn swap ($D_{\text{kv}} = TP$ either way) — head-sharded by $TP$ vs sequence-sharded by $TP$ ranks gives the same per-device byte count; only the meaning of the divisor changes (`(head)` vs `(seq)` annotation). Co-located deployments require $TP = EP$ (since both groups overlay on the same physical GPU set), so under co-location the $\max(TP, EP)$ and $TP$ entries collapse to the same value.
 
-The fourth row (co-located + TP-attn) corresponds to the production pattern where the same `max(TP, EP)` GPUs that hold one expert each also head-shard the attention block across themselves — observed in DSr1 / NVL72 deployments at TP=EP=8 on 8 GPUs (the `attention TP-sharded across the rack` configuration). The per-layer TP all-reduce fires across the same group as the MoE all-to-all; the divisors above are well-defined and match the production deployment.
+The second row (co-located + TP-attn) corresponds to the production pattern where the same `max(TP, EP)` GPUs that hold one expert each also head-shard the attention block across themselves — observed in DSr1 / NVL72 deployments at TP=EP=8 on 8 GPUs (the `attention TP-sharded across the rack` configuration). The per-layer TP all-reduce fires across the same group as the MoE all-to-all; the divisors above are well-defined and match the production deployment.
 
 **Enabling conditions for co-location.** Per-device HBM must hold $1/EP$ (rather than $1/(TP \cdot EP)$) of the expert weights, OR the attention block is compact enough (Multi-head Latent Attention (MLA) or aggressive grouped-query attention (GQA)) that DP-attn replication costs little. DSv3 satisfies both via MLA + FP4 quantization [DSV3].
 

@@ -288,11 +288,11 @@ This section uses the per-component effective sharding factors $D_{\text{attn}}$
 | configuration | $D_{\text{attn}}$ | $D_{\text{exp}}$ (MoE) | $D_{\text{kv}}$ | $D_{\text{emb}}$ |
 |---|---|---|---|---|
 | orthogonal + TP-attn | $TP$ | $TP \cdot EP$ | $TP$ (head) | $TP$ |
+| co-located + TP-attn | $TP$ | $EP$ | $TP$ (head) | $TP$ |
 | orthogonal + DP-attn | $1$ | $TP \cdot EP$ | $TP$ (seq) | $TP$ |
 | co-located + DP-attn | $1$ | $EP$ | $\max(TP, EP)$ (seq) | $TP$ |
-| co-located + TP-attn | $TP$ | $EP$ | $TP$ (head) | $TP$ |
 
-Dense FFN always uses $D_{\text{exp}} = TP$ (no EP axis to overlap; co-location does not apply). KV memory and traffic carry an additional $/SP$ factor on top of $D_{\text{kv}}$ when sequence parallelism is enabled. Under co-location the structural constraint $TP = EP$ holds, so $\max(TP, EP)$ and $TP$ collapse to the same value in the third and fourth rows. Formulas below use these symbols directly without further repetition of the table.
+Dense FFN always uses $D_{\text{exp}} = TP$ (no EP axis to overlap; co-location does not apply). KV memory and traffic carry an additional $/SP$ factor on top of $D_{\text{kv}}$ when sequence parallelism is enabled. Under co-location the structural constraint $TP = EP$ holds, so $\max(TP, EP)$ and $TP$ collapse to the same value in the co-located rows. Formulas below use these symbols directly without further repetition of the table.
 
 ### Per-device Parameter Memory
 
@@ -540,11 +540,11 @@ This section uses the per-component effective sharding factors $D_{\text{attn}}$
 | configuration | $D_{\text{attn}}$ | $D_{\text{exp}}$ (MoE) | $D_{\text{kv}}$ | $D_{\text{emb}}$ |
 |---|---|---|---|---|
 | orthogonal + TP-attn | $TP$ | $TP \cdot EP$ | $TP$ (head) | $TP$ |
+| co-located + TP-attn | $TP$ | $EP$ | $TP$ (head) | $TP$ |
 | orthogonal + DP-attn | $1$ | $TP \cdot EP$ | $TP$ (seq) | $TP$ |
 | co-located + DP-attn | $1$ | $EP$ | $\max(TP, EP)$ (seq) | $TP$ |
-| co-located + TP-attn | $TP$ | $EP$ | $TP$ (head) | $TP$ |
 
-Dense FFN always uses $D_{\text{exp}} = TP$. KV traffic carries an additional $/SP$ factor on top of $D_{\text{kv}}$ when sequence parallelism is enabled. Under co-location $TP = EP$ structurally, so $\max(TP, EP)$ and $TP$ collapse to the same value in the last two rows.
+Dense FFN always uses $D_{\text{exp}} = TP$. KV traffic carries an additional $/SP$ factor on top of $D_{\text{kv}}$ when sequence parallelism is enabled. Under co-location $TP = EP$ structurally, so $\max(TP, EP)$ and $TP$ collapse to the same value in the co-located rows.
 
 ---
 
@@ -948,9 +948,9 @@ This subsection uses the per-component effective sharding factors from `notation
 | configuration | $D_{\text{attn}}$ | $D_{\text{exp}}$ (MoE) | $D_{\text{kv}}$ | $D_{\text{emb}}$ |
 |---|---|---|---|---|
 | orthogonal + TP-attn | $TP$ | $TP \cdot EP$ | $TP$ | $TP$ |
+| co-located + TP-attn | $TP$ | $EP$ | $TP$ | $TP$ |
 | orthogonal + DP-attn | $1$ | $TP \cdot EP$ | $TP$ | $TP$ |
 | co-located + DP-attn | $1$ | $EP$ | $\max(TP, EP)$ | $TP$ |
-| co-located + TP-attn | $TP$ | $EP$ | $TP$ | $TP$ |
 
 Dense FFN always uses $D_{\text{exp}} = TP$. The KV-attention compute term carries an additional $/SP$ factor on top of $D_{\text{kv}}$ when sequence parallelism is enabled. Under co-location $TP = EP$ structurally.
 
@@ -1537,9 +1537,9 @@ This subsection uses the per-component effective sharding factors $D_{\text{attn
 | configuration | $D_{\text{attn}}$ | $D_{\text{exp}}$ (MoE) | $D_{\text{kv}}$ | $D_{\text{emb}}$ | $N_{\text{replica}}$ |
 |---|---|---|---|---|---|
 | orthogonal + TP-attn | $TP$ | $TP \cdot EP$ | $TP$ | $TP$ | $PP \cdot TP \cdot EP \cdot SP$ |
+| co-located + TP-attn | $TP$ | $EP$ | $TP$ | $TP$ | $PP \cdot \max(TP, EP) \cdot SP$ |
 | orthogonal + DP-attn | $1$ | $TP \cdot EP$ | $TP$ | $TP$ | $PP \cdot TP \cdot EP \cdot SP$ |
 | co-located + DP-attn | $1$ | $EP$ | $\max(TP, EP)$ | $TP$ | $PP \cdot \max(TP, EP) \cdot SP$ |
-| co-located + TP-attn | $TP$ | $EP$ | $TP$ | $TP$ | $PP \cdot \max(TP, EP) \cdot SP$ |
 
 Dense FFN always uses $D_{\text{exp}} = TP$. Under co-location $TP = EP$ structurally.
 
