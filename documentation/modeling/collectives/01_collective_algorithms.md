@@ -180,13 +180,13 @@ R2: [V0  V1  V2  V3]
 R3: [V0  V1  V2  V3]   ← complete — BC done
 ```
 
-Total: $N - 1 + P - 1 = 6$ steps (fill $N-1$, then drain $P-1$ after the last chunk enters at $R_0$). Each step ships $M/P$ bytes over its active link at cost $\alpha + M/(P\,\mathrm{BW})$:
+Total: $N - 1 + P - 1 = 6$ steps (fill $N-1$, then drain $P-1$ after the last chunk enters at $R_0$). Each step ships $M/P$ bytes over its active link at cost $\alpha + M/(P\\,\mathrm{BW})$:
 
-$$t_{\mathrm{ring\,BC}} = (N + P - 2)\left(\alpha + \frac{M}{P\,\mathrm{BW}}\right)$$
+$$t_{\mathrm{ring\\,BC}} = (N + P - 2)\left(\alpha + \frac{M}{P\\,\mathrm{BW}}\right)$$
 
 At optimal $P^* = \sqrt{(N{-}2)M/(\alpha \mathrm{BW})}$, in the large-$M$ limit, the cost approaches the **asymptotic form**:
 
-$$t_{\mathrm{ring\,BC}} \approx (N - 1)\,\alpha + \frac{M}{\mathrm{BW}}$$
+$$t_{\mathrm{ring\\,BC}} \approx (N - 1)\\,\alpha + \frac{M}{\mathrm{BW}}$$
 
 The "$\approx$" hides an $O(\sqrt{M})$ correction of order $2\sqrt{(N{-}2)\alpha M/\mathrm{BW}}$ between the two floors — $(N{-}1)\alpha$ is the minimum the latency term can hit ($P \to 1$), $M/\mathrm{BW}$ is the minimum the BW term can hit ($P \to \infty$), and neither limit is physical; $P^*$ lives between them. The correction is $O(\sqrt{M})$ while the dominant $M/\mathrm{BW}$ term is $O(M)$, so it vanishes *relative to* the asymptotic floor as $M \to \infty$ but is nonzero at any finite $M$. See [Appendix C](#appendix-c-asymptotic-form-of-linear-schedules-via-pipelining) for the full derivation.
 
@@ -208,7 +208,7 @@ The binomial tree BC **doubles the set of ranks holding $V$** at every step. At 
     R3              (depth 2)
 ```
 
-$R_0$'s two children are the roots of $B_1$ (on $\{R_1, R_3\}$) and $B_0$ (on $\{R_2\}$) — the recursive construction of $B_k$ hangs a $B_{k-1}, B_{k-2}, \ldots, B_0$ off the root in descending size. Level-counts $(1, 2, 1)$ are row $2$ of Pascal's triangle — $\binom{2}{0}, \binom{2}{1}, \binom{2}{2}$ — which is what "binomial" refers to: the number of nodes at depth $d$ in $B_k$ is $\binom{k}{d}$. Depth is $\lceil \log_2 N \rceil = 2$, setting $n_\alpha$.
+$R_0$'s two children are the roots of $B_1$ (on $\\{R_1, R_3\\}$) and $B_0$ (on $\\{R_2\\}$) — the recursive construction of $B_k$ hangs a $B_{k-1}, B_{k-2}, \ldots, B_0$ off the root in descending size. Level-counts $(1, 2, 1)$ are row $2$ of Pascal's triangle — $\binom{2}{0}, \binom{2}{1}, \binom{2}{2}$ — which is what "binomial" refers to: the number of nodes at depth $d$ in $B_k$ is $\binom{k}{d}$. Depth is $\lceil \log_2 N \rceil = 2$, setting $n_\alpha$.
 
 **Initial state.**
 
@@ -221,7 +221,7 @@ R3: [ —             ]
 holding-set: {R0}
 ```
 
-**After step 1** — $R_0 \to R_1$. The holding set doubles from $\{R_0\}$ to $\{R_0, R_1\}$.
+**After step 1** — $R_0 \to R_1$. The holding set doubles from $\\{R_0\\}$ to $\\{R_0, R_1\\}$.
 
 ```
 Step 1: R0 sends V to R1
@@ -249,13 +249,13 @@ holding-set: {R0, R1, R2, R3} — BC complete
 
 BC completes in $\lceil \log_2 4 \rceil = 2$ sequential steps; at general $N$ in $\lceil \log_2 N \rceil$ steps. Each step moves the full $M$-byte payload over one link per active pair, so the per-step cost is $\alpha + M/\mathrm{BW}$ and the sequential steps sum:
 
-$$t_{\mathrm{bin\,BC}} = \lceil \log_2 N \rceil \cdot \alpha + \lceil \log_2 N \rceil \cdot \frac{M}{\mathrm{BW}}$$
+$$t_{\mathrm{bin\\,BC}} = \lceil \log_2 N \rceil \cdot \alpha + \lceil \log_2 N \rceil \cdot \frac{M}{\mathrm{BW}}$$
 
 $n_\alpha = \lceil \log_2 N \rceil$ (latency-optimal — a lower bound for BC over a binary-combinable fabric), $n_\beta = \lceil \log_2 N \rceil$ (bandwidth-suboptimal — same $\log N$ coefficient weakness as simple recursive-doubling AR in [App. B.1](#b1-simple-recursive-doubling-ar)).
 
 **Asymptotic form (bandwidth-bound regime; pipelined implementation).** Chunk $V$ into $P$ sub-segments of size $M/P$ and stream them through the tree — each internal node forwards chunk $s$ to its children while receiving chunk $s+1$ from its parent — turning every tree edge into a conveyor. Substituting $L = \lceil \log_2 N \rceil$ (tree depth) into the Appendix C master formula and optimizing at $P^* = \sqrt{(\lceil \log_2 N \rceil - 1)M/(\alpha \mathrm{BW})}$ in the large-$M$ limit gives the **asymptotic floor**:
 
-$$t_{\mathrm{bin\,BC}} \approx \lceil \log_2 N \rceil \cdot \alpha + \frac{M}{\mathrm{BW}}$$
+$$t_{\mathrm{bin\\,BC}} \approx \lceil \log_2 N \rceil \cdot \alpha + \frac{M}{\mathrm{BW}}$$
 
 The "$\approx$" hides an $O(\sqrt{M})$ interference correction $2\sqrt{(\lceil \log_2 N \rceil - 1)\alpha M/\mathrm{BW}}$ between the two floors — the $\alpha$-count picks up a $(P^*{-}1)\alpha$ surcharge, and the BW term carries a fill/drain residue of the same magnitude — both vanishing *relative to $M/\mathrm{BW}$* as $M \to \infty$ but nonzero at any finite $M$. This is the form NCCL's tree-path `ncclBroadcast` runs for bulk $M$ — simultaneously latency- and bandwidth-optimal for BC on unbounded-port fabrics. Full derivation of the $(L+P-1)$ slot count, $P^*$, the correction, and the port-budget caveat that licenses the collapse on real fabrics are all in [Appendix C](#appendix-c-asymptotic-form-of-linear-schedules-via-pipelining); the binomial tree satisfies the port budget (busiest rank holds ≤ 3 concurrent tree-edge partners) so the collapse applies.
 
@@ -265,9 +265,9 @@ Three software implementations (binomial tree $P=1$, binomial tree $P^*$, ring $
 
 **Hardware multicast primitive.** Switched fabrics expose a switch-multicast primitive (InfiniBand Quantum Scalable Hierarchical Aggregation and Reduction Protocol (SHARP), NVSwitch Gen3+ / NVLink SHARP (NVLS), many PCIe switches[^pcie-mcast]) that replicates a single $M$-byte payload across all destination ports in one switch-local operation. The source rank pushes $V$ upstream to the switch (1 hop); the switch crossbar then drives $V$ out all $N-1$ destination ports concurrently in one multicast fan-out (1 more hop). Two switch-crossing hops total, **independent of $N$**:
 
-$$t_{\mathrm{INC,\,BC}} \;\approx\; 2\,\alpha_\mathrm{switch} + \frac{M}{\mathrm{BW}}$$
+$$t_{\mathrm{INC,\\,BC}} \\;\approx\\; 2\\,\alpha_\mathrm{switch} + \frac{M}{\mathrm{BW}}$$
 
-$\alpha_\mathrm{switch}$ is the switch cut-through latency — $\sim 100$–$200$ ns for NVSwitch Gen3/4, $\sim 250$ ns for Broadcom Tomahawk Ultra — typically well below the $\alpha \approx 0.5$–$1\,\mu$s that software BC accumulates across $\lceil \log_2 N \rceil$ or $N-1$ endpoint-driven hops.
+$\alpha_\mathrm{switch}$ is the switch cut-through latency — $\sim 100$–$200$ ns for NVSwitch Gen3/4, $\sim 250$ ns for Broadcom Tomahawk Ultra — typically well below the $\alpha \approx 0.5$–$1\\,\mu$s that software BC accumulates across $\lceil \log_2 N \rceil$ or $N-1$ endpoint-driven hops.
 
 **All four options side by side.** The two software algorithms each have a finite-$P$ and an asymptotic form; which form wins is governed by the $M$-regime, since the choice of $P$ (non-pipelined $P = 1$ vs asymptotic $P = P^*$) is dictated by whether the α term or the BW term dominates. Switch multicast is an orthogonal hardware-dependent alternative and applies across regimes where the fabric exposes it:
 
@@ -374,13 +374,13 @@ Step 6: R1 → R0 (V33+V23+V13)
 R0: [S0  S1  S2  S3]   ← Reduce complete at root
 ```
 
-Total: $N - 1 + P - 1 = 6$ steps (fill $N-1$ for the head chunk to traverse the chain, then drain $P-1$ after the last chunk enters at $R_{N-1}$). Each step ships $M/P$ bytes over its active link at cost $\alpha + M/(P\,\mathrm{BW})$:
+Total: $N - 1 + P - 1 = 6$ steps (fill $N-1$ for the head chunk to traverse the chain, then drain $P-1$ after the last chunk enters at $R_{N-1}$). Each step ships $M/P$ bytes over its active link at cost $\alpha + M/(P\\,\mathrm{BW})$:
 
-$$t_{\mathrm{ring\,reduce}} = (N + P - 2)\left(\alpha + \frac{M}{P\,\mathrm{BW}}\right)$$
+$$t_{\mathrm{ring\\,reduce}} = (N + P - 2)\left(\alpha + \frac{M}{P\\,\mathrm{BW}}\right)$$
 
 At optimal $P^* = \sqrt{(N{-}2)M/(\alpha \mathrm{BW})}$, in the large-$M$ limit, the cost approaches the **asymptotic form**:
 
-$$t_{\mathrm{ring\,reduce}} \approx (N - 1)\,\alpha + \frac{M}{\mathrm{BW}}$$
+$$t_{\mathrm{ring\\,reduce}} \approx (N - 1)\\,\alpha + \frac{M}{\mathrm{BW}}$$
 
 The "$\approx$" hides an $O(\sqrt{M})$ correction of order $2\sqrt{(N{-}2)\alpha M/\mathrm{BW}}$ between the two floors — same structure as ring BC in §3.1, same [Appendix C](#appendix-c-asymptotic-form-of-linear-schedules-via-pipelining) derivation, modified only by the extra on-chip add at each hop. The add is a reduce-op FLOP local to each rank's accelerator; under the standard α-β accounting it is assumed non-bottlenecking (modern accelerators run reduce-ops at a throughput well above network BW) and contributes to neither $\alpha$ nor the BW term.
 
@@ -388,7 +388,7 @@ $n_\alpha = N - 1$, $n_\beta = 1$ — bandwidth-optimal (matches the asymptotic 
 
 ### 4.2 Binomial tree Reduce
 
-At step $k$, every rank whose $k$-th bit is 1 sends its current vector to its paired "bit-0" partner, which **adds the received vector into its local copy**. The active-contributor set halves each step: $\{R_0, R_1, R_2, R_3\} \to \{R_0, R_2\} \to \{R_0\}$ at $N = 4$. After $\lceil \log_2 N \rceil$ steps only rank 0 remains, holding the full $\sum_i V_i$. We trace $N = 4$ with the same initial state as §5.1 (each $R_i$ holds $V_i = [v_{i,0}, v_{i,1}, v_{i,2}, v_{i,3}]$).
+At step $k$, every rank whose $k$-th bit is 1 sends its current vector to its paired "bit-0" partner, which **adds the received vector into its local copy**. The active-contributor set halves each step: $\\{R_0, R_1, R_2, R_3\\} \to \\{R_0, R_2\\} \to \\{R_0\\}$ at $N = 4$. After $\lceil \log_2 N \rceil$ steps only rank 0 remains, holding the full $\sum_i V_i$. We trace $N = 4$ with the same initial state as §5.1 (each $R_i$ holds $V_i = [v_{i,0}, v_{i,1}, v_{i,2}, v_{i,3}]$).
 
 **Tree structure for $N = 4$.** The same binomial tree $B_2$ as §3.2, with every edge's arrow reversed — data flows leaves → root with summation at every internal node:
 
@@ -428,7 +428,7 @@ R3: stale                                              ← sent up
 active-set: {R0, R2}
 ```
 
-**After step 2** — $R_2 \to R_0$. The active set halves to $\{R_0\}$; $R_0$ now holds the full 4-way sum.
+**After step 2** — $R_2 \to R_0$. The active set halves to $\\{R_0\\}$; $R_0$ now holds the full 4-way sum.
 
 ```
 Step 2: R2 → R0 (R0 sums in)
@@ -444,13 +444,13 @@ active-set: {R0} — Reduce complete
 
 Reduce is done in $\lceil \log_2 4 \rceil = 2$ sequential steps; at general $N$ in $\lceil \log_2 N \rceil$ steps. Each step moves the full $M$-byte vector on the active link:
 
-$$t_{\mathrm{bin\,reduce}} = \lceil \log_2 N \rceil \cdot \alpha + \lceil \log_2 N \rceil \cdot \frac{M}{\mathrm{BW}}$$
+$$t_{\mathrm{bin\\,reduce}} = \lceil \log_2 N \rceil \cdot \alpha + \lceil \log_2 N \rceil \cdot \frac{M}{\mathrm{BW}}$$
 
 Same $(n_\alpha, n_\beta)$ as binomial tree BC (§3.2), and for the same reason: the tree depth sets both the sequential step count and the per-step full-$M$ transfer. Read side-by-side with the BC matrix in §3.2, the relationship is literal: flip the arrow direction on every edge and replace "send $V$ and overwrite" with "send current vector and sum in" — BC and Reduce are the same tree schedule read in opposite time directions.
 
 **Asymptotic form (bandwidth-bound regime; pipelined implementation).** Chunks of size $M/P$ flow **up** the tree with internal nodes reducing on the fly: once a parent has received chunk $s$ from both of its children, it forwards the summed chunk upward while reducing chunk $s+1$ in parallel. Substituting $L = \lceil \log_2 N \rceil$ (tree depth) into the Appendix C master formula and optimizing at $P^* = \sqrt{(\lceil \log_2 N \rceil - 1)M/(\alpha \mathrm{BW})}$ in the large-$M$ limit, the BW coefficient drops from $\lceil \log_2 N \rceil$ to 1 up to an $O(\sqrt{M})$ correction $2\sqrt{(\lceil \log_2 N \rceil - 1)\alpha M/\mathrm{BW}}$:
 
-$$t_{\mathrm{bin\,reduce}} \approx \lceil \log_2 N \rceil \cdot \alpha + \frac{M}{\mathrm{BW}}$$
+$$t_{\mathrm{bin\\,reduce}} \approx \lceil \log_2 N \rceil \cdot \alpha + \frac{M}{\mathrm{BW}}$$
 
 This is what NCCL's tree-path `ncclReduce` runs for bulk $M$ — simultaneously latency- and bandwidth-optimal for Reduce on port-adequate fabrics, mirroring pipelined BC. The generic derivation and the port-budget caveat are in [Appendix C](#appendix-c-asymptotic-form-of-linear-schedules-via-pipelining); the binomial tree satisfies the port budget so the collapse applies. Ring Reduce (§4.1) reaches the same $M/\mathrm{BW}$ floor but with $N-1$ latency hops instead of $\lceil \log_2 N \rceil$, so at the standalone-Reduce level there is no ring-vs-tree crossover — tree dominates.
 
@@ -460,9 +460,9 @@ Three software implementations (binomial tree $P=1$, binomial tree $P^*$, ring $
 
 **Hardware in-network Reduce primitive.** Switched fabrics expose a switch-hosted ALU (InfiniBand Quantum SHARP, NVSwitch Gen3+ / NVLS) that sums $N$ incoming $M$-byte flits into one $M$-byte output in one switch-local operation. Each rank pushes $V_i$ upstream to the switch (1 hop); the switch crossbar reduces the $N$ payloads on-chip and forwards the single reduced result to the root rank (1 more hop). Two switch-crossing hops total, **independent of $N$**:
 
-$$t_{\mathrm{INC,\,Reduce}} \;\approx\; 2\,\alpha_\mathrm{switch} + \frac{M}{\mathrm{BW}}$$
+$$t_{\mathrm{INC,\\,Reduce}} \\;\approx\\; 2\\,\alpha_\mathrm{switch} + \frac{M}{\mathrm{BW}}$$
 
-Only the switch-ALU half of the INC primitive is used here, symmetric to BC in §3.3 which used only the multicast half — no multicast is needed because the output goes to a single destination. $\alpha_\mathrm{switch}$ is the switch cut-through plus ALU latency — $\sim 100$–$200$ ns for NVSwitch Gen3/4 with NVLS and comparable on IB Quantum-2 with SHARPv2 — typically well below the $\alpha \approx 0.5$–$1\,\mu$s that software Reduce accumulates across $\lceil \log_2 N \rceil$ or $N-1$ endpoint-driven hops. PCIe switches appear in §3.3's BC list but are absent here because they have no ALU (see footnote at §3.3); Ethernet in-network reduction (RoCE-based aggregation on newer AI-focused switches) is an evolving direction, omitted until its ALU-inclusive latency is well-characterized.
+Only the switch-ALU half of the INC primitive is used here, symmetric to BC in §3.3 which used only the multicast half — no multicast is needed because the output goes to a single destination. $\alpha_\mathrm{switch}$ is the switch cut-through plus ALU latency — $\sim 100$–$200$ ns for NVSwitch Gen3/4 with NVLS and comparable on IB Quantum-2 with SHARPv2 — typically well below the $\alpha \approx 0.5$–$1\\,\mu$s that software Reduce accumulates across $\lceil \log_2 N \rceil$ or $N-1$ endpoint-driven hops. PCIe switches appear in §3.3's BC list but are absent here because they have no ALU (see footnote at §3.3); Ethernet in-network reduction (RoCE-based aggregation on newer AI-focused switches) is an evolving direction, omitted until its ALU-inclusive latency is well-characterized.
 
 **All four options side by side.** The two software algorithms each have a finite-$P$ and an asymptotic form; which form wins is governed by the $M$-regime, since the choice of $P$ (non-pipelined $P = 1$ vs asymptotic $P = P^*$) is dictated by whether the α term or the BW term dominates. Switch-ALU Reduce is an orthogonal hardware-dependent alternative and applies across regimes where the fabric exposes it:
 
@@ -501,7 +501,7 @@ Each rank $R_i$ holds a vector $V_i = [v_{i,0}, v_{i,1}, v_{i,2}, v_{i,3}]$. Tar
 
 **Phase 1: reduce-scatter (3 steps).**
 
-At step $t \in \{1, 2, \ldots, N-1\}$, rank $i$ **sends** chunk $(i - t + 1) \bmod N$ to its right neighbor and **receives** chunk $(i - t) \bmod N$ from its left neighbor, adding the incoming value into its local copy at that slot. That slot — $(i - t) \bmod N$ — is the rank's **accumulator chunk** for step $t$. Sanity-check at $t=1$: $R_i$ sends its own-index chunk $i$ rightward and accumulates into slot $(i-1) \bmod N$.
+At step $t \in \\{1, 2, \ldots, N-1\\}$, rank $i$ **sends** chunk $(i - t + 1) \bmod N$ to its right neighbor and **receives** chunk $(i - t) \bmod N$ from its left neighbor, adding the incoming value into its local copy at that slot. That slot — $(i - t) \bmod N$ — is the rank's **accumulator chunk** for step $t$. Sanity-check at $t=1$: $R_i$ sends its own-index chunk $i$ rightward and accumulates into slot $(i-1) \bmod N$.
 
 The accumulator slot index shifts by $-1 \bmod N$ every step. After $N-1$ steps, each rank's accumulator sits at slot $(i - (N-1)) \bmod N = (i+1) \bmod N$ and holds the fully reduced $N$-way sum for that slot.
 
@@ -560,17 +560,17 @@ where S_k = v_{0,k} + v_{1,k} + v_{2,k} + v_{3,k}.
 
 This is exactly the RS end-state: each rank holds **one** fully-reduced chunk (on a different slot), and the other three slots still contain junk partial sums. Those will be overwritten in the next phase.
 
-**Cost accounting.** Each of the 3 steps costs $\alpha + M/(4\,\mathrm{BW})$ (one handshake plus one $M/N$-sized chunk over the link). The 3 steps run **sequentially** (step $t+1$ forwards the chunk that step $t$ just accumulated), so the costs add: the whole RS phase takes
+**Cost accounting.** Each of the 3 steps costs $\alpha + M/(4\\,\mathrm{BW})$ (one handshake plus one $M/N$-sized chunk over the link). The 3 steps run **sequentially** (step $t+1$ forwards the chunk that step $t$ just accumulated), so the costs add: the whole RS phase takes
 
-$$t_{\mathrm{RS}} = 3\alpha + 3 \cdot \frac{M}{4\,\mathrm{BW}} \qquad \text{(totals across all 3 steps, not per step).}$$
+$$t_{\mathrm{RS}} = 3\alpha + 3 \cdot \frac{M}{4\\,\mathrm{BW}} \qquad \text{(totals across all 3 steps, not per step).}$$
 
-Generalizing to $N$ ranks: $(N-1)\alpha + (N-1)\,M/(N\,\mathrm{BW})$.
+Generalizing to $N$ ranks: $(N-1)\alpha + (N-1)\\,M/(N\\,\mathrm{BW})$.
 
 **Phase 2: all-gather (3 steps).**
 
 After RS, each rank owns exactly one fully-reduced chunk — $R_i$ owns slot $(i+1) \bmod N$ — and needs the other three. The plan: same ring, same direction (send right, receive from left), **no reduction** — each rank forwards what it just received, overwriting the junk in the receiver's corresponding slot.
 
-At step $t \in \{1, 2, \ldots, N-1\}$, rank $i$ **sends** chunk $(i - t + 2) \bmod N$ to its right neighbor and **overwrites** its local slot $(i - t + 1) \bmod N$ with the chunk received from its left neighbor. Sanity-check at $t=1$: $R_i$ forwards its freshly-reduced slot $(i+1) \bmod N$ rightward and overwrites its own-index slot $i$ with an incoming fully-reduced chunk.
+At step $t \in \\{1, 2, \ldots, N-1\\}$, rank $i$ **sends** chunk $(i - t + 2) \bmod N$ to its right neighbor and **overwrites** its local slot $(i - t + 1) \bmod N$ with the chunk received from its left neighbor. Sanity-check at $t=1$: $R_i$ forwards its freshly-reduced slot $(i+1) \bmod N$ rightward and overwrites its own-index slot $i$ with an incoming fully-reduced chunk.
 
 These are exactly the RS formulas **shifted by $+1$ in slot index**. Same ring, same direction, same $-1 \bmod N$ slot-index shift per step — just a $+1$ offset in where the action starts. The reason for the offset: RS leaves $R_i$ owning slot $(i+1) \bmod N$ (not slot $i$), so AG begins by forwarding that $+1$-offset slot.
 
@@ -624,25 +624,25 @@ R3: [S0    S1   S2    S3  ]
 
 Every rank now holds the complete reduced vector $[S_0, S_1, S_2, S_3]$. AR is done.
 
-**Cost accounting (AG).** Same structure as RS — 3 sequential steps, each $\alpha + M/(4\,\mathrm{BW})$. Total for the AG phase:
+**Cost accounting (AG).** Same structure as RS — 3 sequential steps, each $\alpha + M/(4\\,\mathrm{BW})$. Total for the AG phase:
 
-$$t_{\mathrm{AG}} = 3\alpha + 3 \cdot \frac{M}{4\,\mathrm{BW}} \qquad \text{(totals across all 3 steps).}$$
+$$t_{\mathrm{AG}} = 3\alpha + 3 \cdot \frac{M}{4\\,\mathrm{BW}} \qquad \text{(totals across all 3 steps).}$$
 
-Generalizing to $N$ ranks: $(N-1)\alpha + (N-1)\,M/(N\,\mathrm{BW})$.
+Generalizing to $N$ ranks: $(N-1)\alpha + (N-1)\\,M/(N\\,\mathrm{BW})$.
 
 **Total cost.** Combining RS + AG for $N$ ranks:
 
-$$t_{\mathrm{ring\,AR}} = 2(N-1)\,\alpha + 2 \cdot \frac{N-1}{N} \cdot \frac{M}{\mathrm{BW}}$$
+$$t_{\mathrm{ring\\,AR}} = 2(N-1)\\,\alpha + 2 \cdot \frac{N-1}{N} \cdot \frac{M}{\mathrm{BW}}$$
 
 For $N=4$: $6\alpha + 1.5 \cdot M/\mathrm{BW}$. In the $N \to \infty$ limit the BW coefficient $2(N{-}1)/N$ approaches the **asymptotic form** $2 M/\mathrm{BW}$ — every byte must leave its originating rank once and arrive at each of the other $N{-}1$ ranks once, giving a floor of $2 M/\mathrm{BW}$ that ring hits nearly perfectly.
 
 **Asymptotic form (bandwidth-bound regime; intrinsically pipelined implementation).** Unlike ring BC (§3.1) and ring Reduce (§4.1) — which trace a single message through $N{-}1$ sequential hops and reach their asymptote only at optimal pipeline depth $P^{*} = \sqrt{(N{-}2)M/(\alpha\mathrm{BW})}$ — ring AR's closed form above **is already the pipelined asymptote** with $P = N$. The Patarasuk-Yuan construction bakes the pipelining into the derivation via the $M/N$ chunked payload; the $2(N{-}1)$-step schedule is not the $P = 1$ baseline that gets pipelined later, it is the pipelined schedule. Three structural reasons no further collapse is possible:
 
 - **No fill or drain.** Every rank starts with its own full vector, so at step 1 every rank is already concurrently sending one chunk on its right-neighbor link and receiving a different chunk from its left — steady state from step 1 to step $2(N{-}1)$. Unlike ring BC / Reduce whose pipeline fills over $N{-}1$ inactive steps while the first message traverses the chain, ring AR runs $N$ parallel chunk-pipelines in lockstep (each originating rank drives its own $N$-hop journey), so there is no fill phase to amortize.
-- **$P > N$ cannot improve the BW floor.** The bottleneck neighbor-link already carries $2(N{-}1) \cdot M/N$ total bytes across the collective — matching the per-rank BW lower bound for AR (each of $M$ bytes must leave its origin rank once and arrive at each of the other $N{-}1$ ranks once). Finer segmentation shrinks per-step payload but not total bytes per link; the BW coefficient $2(N{-}1)/N \to 2\,M/\mathrm{BW}$ is a true lower bound, not an asymptote approached in a limit.
+- **$P > N$ cannot improve the BW floor.** The bottleneck neighbor-link already carries $2(N{-}1) \cdot M/N$ total bytes across the collective — matching the per-rank BW lower bound for AR (each of $M$ bytes must leave its origin rank once and arrive at each of the other $N{-}1$ ranks once). Finer segmentation shrinks per-step payload but not total bytes per link; the BW coefficient $2(N{-}1)/N \to 2\\,M/\mathrm{BW}$ is a true lower bound, not an asymptote approached in a limit.
 - **No $O(\sqrt{M})$ correction.** The [Appendix C](#appendix-c-asymptotic-form-of-linear-schedules-via-pipelining) master formula's $2\sqrt{(L{-}1)\alpha M/\mathrm{BW}}$ correction originates in the $L{-}1$ idle steps while a single-source pipeline fills. Ring AR has no single source and no fill, so that correction is absent — the closed form is exact under the conflict-free ring assumption, not an $\approx$-approximation:
 
-$$t_{\mathrm{ring\,AR}} \;=\; 2(N{-}1)\,\alpha + 2 \cdot \frac{N-1}{N} \cdot \frac{M}{\mathrm{BW}}$$
+$$t_{\mathrm{ring\\,AR}} \\;=\\; 2(N{-}1)\\,\alpha + 2 \cdot \frac{N-1}{N} \cdot \frac{M}{\mathrm{BW}}$$
 
 This property — bandwidth-optimal without needing the pipelining trick — is the structural reason ring stays competitive at large $M$ despite its $O(N) \cdot \alpha$ latency, and the reason ring re-takes the crown from DBT at bulk $M$ in NCCL's tuner. Revisited in §5.3 where ring's exact asymptote sits beside DBT's pipelined $M/\mathrm{BW}$ floor (whose real-world coefficient $c_{\mathrm{real}} \geq 1$ inflates above that floor under implementation overhead) and the INC primitive's $M/\mathrm{BW}$ floor.
 
@@ -723,7 +723,7 @@ All 4 ranks now hold $S$. Single-tree AR done in $2 \lceil \log_2 N \rceil = 4$ 
 
 **Cost of single binary tree.** Each step moves the full $M$-byte vector on the active link: $\alpha + M/\mathrm{BW}$. 4 sequential steps → total $4\alpha + 4M/\mathrm{BW}$. Generalizing:
 
-$$t_{\mathrm{single\,tree\,AR}} = 2\lceil \log_2 N \rceil \, \alpha + 2\lceil \log_2 N \rceil \cdot \frac{M}{\mathrm{BW}}$$
+$$t_{\mathrm{single\\,tree\\,AR}} = 2\lceil \log_2 N \rceil \\, \alpha + 2\lceil \log_2 N \rceil \cdot \frac{M}{\mathrm{BW}}$$
 
 Latency hits the log-depth lower bound for a binary-combinable reduction, but the BW coefficient is $\log_2 N$ — a factor of $\log_2 N / 2$ above the ring-optimal $2(N{-}1)/N \to 2$ floor. The inefficiency: at steps 1 and 4, only one link is active; at steps 2 and 3, multiple links are active but each one is driving only one direction. Half the full-duplex link capacity is idle across the algorithm.
 
@@ -746,7 +746,7 @@ Role check:
 | $R_2$ | leaf | internal |
 | $R_3$ | leaf | root (internal) |
 
-Each rank is interior in *exactly one* tree. Now run AR on $T_1$ and $T_2$ **concurrently**, each on a different half of the message: chunks $\{0, 1\}$ (left half, $M/2$ bytes) flow through $T_1$ — reduced at $R_0$, broadcast from $R_0$. Chunks $\{2, 3\}$ (right half, $M/2$ bytes) flow through $T_2$ — reduced at $R_3$, broadcast from $R_3$. Because the two trees have complementary roles, a rank's $T_1$ traffic travels on one direction of the full-duplex link while its $T_2$ traffic travels on the other — both halves make progress every step.
+Each rank is interior in *exactly one* tree. Now run AR on $T_1$ and $T_2$ **concurrently**, each on a different half of the message: chunks $\\{0, 1\\}$ (left half, $M/2$ bytes) flow through $T_1$ — reduced at $R_0$, broadcast from $R_0$. Chunks $\\{2, 3\\}$ (right half, $M/2$ bytes) flow through $T_2$ — reduced at $R_3$, broadcast from $R_3$. Because the two trees have complementary roles, a rank's $T_1$ traffic travels on one direction of the full-duplex link while its $T_2$ traffic travels on the other — both halves make progress every step.
 
 Initial state (`|` separates the left half carried by $T_1$ from the right half carried by $T_2$):
 
@@ -802,46 +802,46 @@ All 4 ranks now hold $[S_0, S_1, S_2, S_3]$ in $2\lceil \log_2 N \rceil = 4$ seq
 
 **Cost.** $2\lceil \log_2 N \rceil$ sequential steps, each costing $\alpha + (M/2)/\mathrm{BW}$ (handshake + half-message on the active link):
 
-$$t_{\mathrm{double\,tree\,AR}} = 2\lceil \log_2 N \rceil \, \alpha + \lceil \log_2 N \rceil \cdot \frac{M}{\mathrm{BW}}$$
+$$t_{\mathrm{double\\,tree\\,AR}} = 2\lceil \log_2 N \rceil \\, \alpha + \lceil \log_2 N \rceil \cdot \frac{M}{\mathrm{BW}}$$
 
-For $N=4$: $4\alpha + 2\,M/\mathrm{BW}$ — $2\times$ better than single-tree's $4\,M/\mathrm{BW}$, and at this size coincidentally matching ring's $2\,M/\mathrm{BW}$. The bandwidth term improves on single-tree's $2\log_2 N \cdot M/\mathrm{BW}$ by a factor of $2$, thanks to the half-message-per-link property the second tree enables.
+For $N=4$: $4\alpha + 2\\,M/\mathrm{BW}$ — $2\times$ better than single-tree's $4\\,M/\mathrm{BW}$, and at this size coincidentally matching ring's $2\\,M/\mathrm{BW}$. The bandwidth term improves on single-tree's $2\log_2 N \cdot M/\mathrm{BW}$ by a factor of $2$, thanks to the half-message-per-link property the second tree enables.
 
 **Asymptotic form (bandwidth-bound regime; pipelined implementation).** The closed form above is the non-pipelined schedule with $P = 1$ — each tree carries one full $M/2$-byte segment per step. Cut each tree's half-message into $P$ equal segments and stream them through the $L = 2\lceil \log_2 N \rceil$-step schedule: segments at different tree depths use disjoint physical edges (a segment-$s$ forward on a depth-$k$ edge and a segment-$(s{+}1)$ forward on a depth-$(k{-}1)$ edge don't conflict), and the two trees occupy opposite directions of each full-duplex link (so $T_1$ and $T_2$ segments don't conflict either). Per-rank concurrency peaks at $\sim 3$ partners — the busiest role is a tree's root at the final reduce step, concurrently receiving from its up-to-2 children while participating in the sibling tree's broadcast as a leaf — well within the port budget of any modern fabric tier (3+ NVLink channels on-node, 3+ NICs off-node). Substituting $L = 2\lceil \log_2 N \rceil$ and per-segment payload $M/(2P)$ into the [Appendix C](#appendix-c-asymptotic-form-of-linear-schedules-via-pipelining) master formula and optimizing:
 
-$$t_{\mathrm{DBT,\,pipe}}(P^{*}) \;\approx\; 2\lceil \log_2 N \rceil \cdot \alpha + \frac{M}{\mathrm{BW}}$$
+$$t_{\mathrm{DBT,\\,pipe}}(P^{*}) \\;\approx\\; 2\lceil \log_2 N \rceil \cdot \alpha + \frac{M}{\mathrm{BW}}$$
 
-The "$\approx$" hides an $O(\sqrt{M})$ correction of order $2\sqrt{(2\lceil \log_2 N \rceil - 1)\,\alpha M/\mathrm{BW}}$ — same [Appendix C](#appendix-c-asymptotic-form-of-linear-schedules-via-pipelining) master-formula structure as ring BC (§3.1) and ring Reduce (§4.1), now with $L = 2\lceil \log_2 N \rceil$; the correction vanishes relative to the $M/\mathrm{BW}$ floor as $M \to \infty$. **The pure-model $\lceil \log_2 N \rceil$ factor in the BW term is gone** — replaced by the App-C floor of 1 — while the latency term stays at $2\lceil \log_2 N \rceil \alpha$. That is the "log-depth latency AND near-ring bandwidth" combination that makes DBT the shipping choice for small-to-medium $M$ on NCCL. This $M/\mathrm{BW}$ floor is a *lower bound* only: implementation reality (finite pipeline depth $P \ll P^*$, per-step kernel launch overhead, imperfect edge-by-edge overlap) pushes the real-world DBT BW coefficient to some $c_{\mathrm{real}} \geq 1$ above this floor — §5.3's practice caveat explains how that inflation determines where NCCL's tuner flips from DBT to ring at bulk $M$.
+The "$\approx$" hides an $O(\sqrt{M})$ correction of order $2\sqrt{(2\lceil \log_2 N \rceil - 1)\\,\alpha M/\mathrm{BW}}$ — same [Appendix C](#appendix-c-asymptotic-form-of-linear-schedules-via-pipelining) master-formula structure as ring BC (§3.1) and ring Reduce (§4.1), now with $L = 2\lceil \log_2 N \rceil$; the correction vanishes relative to the $M/\mathrm{BW}$ floor as $M \to \infty$. **The pure-model $\lceil \log_2 N \rceil$ factor in the BW term is gone** — replaced by the App-C floor of 1 — while the latency term stays at $2\lceil \log_2 N \rceil \alpha$. That is the "log-depth latency AND near-ring bandwidth" combination that makes DBT the shipping choice for small-to-medium $M$ on NCCL. This $M/\mathrm{BW}$ floor is a *lower bound* only: implementation reality (finite pipeline depth $P \ll P^*$, per-step kernel launch overhead, imperfect edge-by-edge overlap) pushes the real-world DBT BW coefficient to some $c_{\mathrm{real}} \geq 1$ above this floor — §5.3's practice caveat explains how that inflation determines where NCCL's tuner flips from DBT to ring at bulk $M$.
 
 ### 5.3 Comparison and practical adoption
 
 Three software forms plus a hardware in-network path sit on the table: ring (§5.1, intrinsically pipelined with $P = N$), DBT non-pipelined ($P = 1$, §5.2), DBT asymptotic ($P^*$, §5.2), and switch-ALU AR (INC). Before presenting the combined view, the hardware option needs a brief introduction — the three software forms were fully specified in §§5.1–5.2, but INC AR has not yet appeared in this chapter. Two MPI-era variants — simple recursive doubling and Rabenseifner — are omitted from the table because NCCL / RCCL do not ship them; their derivations and the port-budget / partner-cycling argument that rules them out live in [Appendix B.3](#b3-why-neither-ar-variant-is-shipped).
 
-**Hardware in-network AR primitive.** Switched fabrics expose a switch-hosted ALU (InfiniBand Quantum SHARP / SHARPv2, NVSwitch Gen3+ / NVLS) that fuses AR's two halves into a single on-chip operation: the switch crossbar reduces the $N$ incoming $M$-byte flits into one output, then multicasts that output back down to all $N$ ranks. Each endpoint link carries $M$ bytes up (one flit into the switch) and $M$ bytes down (the multicast copy) on opposite directions of the full-duplex link. Because the up and down halves use opposite directions they overlap — unlike software AR, whose two halves are serialized within the step schedule — so the BW term drops from software AR's $2\,M/\mathrm{BW}$ floor to $M/\mathrm{BW}$. Two switch-crossing hops total, **independent of $N$**:
+**Hardware in-network AR primitive.** Switched fabrics expose a switch-hosted ALU (InfiniBand Quantum SHARP / SHARPv2, NVSwitch Gen3+ / NVLS) that fuses AR's two halves into a single on-chip operation: the switch crossbar reduces the $N$ incoming $M$-byte flits into one output, then multicasts that output back down to all $N$ ranks. Each endpoint link carries $M$ bytes up (one flit into the switch) and $M$ bytes down (the multicast copy) on opposite directions of the full-duplex link. Because the up and down halves use opposite directions they overlap — unlike software AR, whose two halves are serialized within the step schedule — so the BW term drops from software AR's $2\\,M/\mathrm{BW}$ floor to $M/\mathrm{BW}$. Two switch-crossing hops total, **independent of $N$**:
 
-$$t_{\mathrm{INC,\,AR}} \;\approx\; 2\,\alpha_\mathrm{switch} + \frac{M}{\mathrm{BW}}$$
+$$t_{\mathrm{INC,\\,AR}} \\;\approx\\; 2\\,\alpha_\mathrm{switch} + \frac{M}{\mathrm{BW}}$$
 
-Both halves of the INC primitive are used here — the switch-ALU half (compare §4.3 INC Reduce, which used only the ALU half) and the switch-multicast half (compare §3.3 INC BC, which used only the multicast half). $\alpha_\mathrm{switch}$ is the switch cut-through plus ALU latency — $\sim 100$–$200$ ns for NVSwitch Gen3/4 with NVLS and comparable on IB Quantum-2 with SHARPv2 — typically well below the $\alpha \approx 0.5$–$1\,\mu$s that software AR accumulates across $2\lceil \log_2 N \rceil$ or $2(N-1)$ endpoint-driven hops. PCIe switches are absent here for the same ALU-less reason they are absent from §4.3 (see footnote at §3.3). The BW-side lift — unique to AR among the primitives in this chapter — is derived in `04_in_network_collectives.md §1.4`.
+Both halves of the INC primitive are used here — the switch-ALU half (compare §4.3 INC Reduce, which used only the ALU half) and the switch-multicast half (compare §3.3 INC BC, which used only the multicast half). $\alpha_\mathrm{switch}$ is the switch cut-through plus ALU latency — $\sim 100$–$200$ ns for NVSwitch Gen3/4 with NVLS and comparable on IB Quantum-2 with SHARPv2 — typically well below the $\alpha \approx 0.5$–$1\\,\mu$s that software AR accumulates across $2\lceil \log_2 N \rceil$ or $2(N-1)$ endpoint-driven hops. PCIe switches are absent here for the same ALU-less reason they are absent from §4.3 (see footnote at §3.3). The BW-side lift — unique to AR among the primitives in this chapter — is derived in `04_in_network_collectives.md §1.4`.
 
 **All four options side by side.** The two DBT rows differ by the choice of $P$ (non-pipelined $P = 1$ vs asymptotic $P = P^*$), and which wins is dictated by the $M$-regime since that choice is governed by whether the α term or the BW term dominates. Switch-ALU AR is an orthogonal hardware-dependent alternative and applies across regimes where the fabric exposes it:
 
 | Algorithm | α term | BW term | Regime / adoption |
 |---|---|---|---|
-| Ring, intrinsically pipelined ($P = N$, §5.1) | $2(N{-}1)\,\alpha$ | $\dfrac{2(N{-}1)}{N} \cdot \dfrac{M}{\mathrm{BW}}$ | Large-$M$ AR in NCCL (ring re-takes the crown — see practice caveat) |
-| DBT, non-pipelined ($P = 1$, §5.2) | $2\lceil \log_2 N \rceil \, \alpha$ | $\lceil \log_2 N \rceil \cdot \dfrac{M}{\mathrm{BW}}$ | Small-$M$ AR (α-bound regime); NCCL DBT path before pipelining kicks in |
-| DBT, asymptotic ($P^*$, §5.2) | $2\lceil \log_2 N \rceil \, \alpha$ | $\dfrac{M}{\mathrm{BW}}$ | Small-to-medium $M$ AR in NCCL (default DBT path at bulk $M$) |
+| Ring, intrinsically pipelined ($P = N$, §5.1) | $2(N{-}1)\\,\alpha$ | $\dfrac{2(N{-}1)}{N} \cdot \dfrac{M}{\mathrm{BW}}$ | Large-$M$ AR in NCCL (ring re-takes the crown — see practice caveat) |
+| DBT, non-pipelined ($P = 1$, §5.2) | $2\lceil \log_2 N \rceil \\, \alpha$ | $\lceil \log_2 N \rceil \cdot \dfrac{M}{\mathrm{BW}}$ | Small-$M$ AR (α-bound regime); NCCL DBT path before pipelining kicks in |
+| DBT, asymptotic ($P^*$, §5.2) | $2\lceil \log_2 N \rceil \\, \alpha$ | $\dfrac{M}{\mathrm{BW}}$ | Small-to-medium $M$ AR in NCCL (default DBT path at bulk $M$) |
 | Switch-ALU AR (INC) | $2 \cdot \alpha_\mathrm{switch}$ | $M/\mathrm{BW}$ | All $M$ where fabric exposes it; IB SHARP/SHARPv2, NVSwitch NVLS |
 
 **Reading the rows as a progression.** At small $M$ the BW term is negligible no matter what multiplies it, so software picks the algorithm with the smallest $\alpha$ count — DBT's $2\lceil \log_2 N \rceil$ beats ring's $2(N{-}1)$, and NCCL runs DBT. At medium $M$ the BW term matters, and DBT pipelines to collapse its $\lceil \log_2 N \rceil \cdot M/\mathrm{BW}$ coefficient down to the $M/\mathrm{BW}$ α-β floor; α stays at log depth, so DBT remains favored. Under the pure α-β model, DBT strictly dominates ring at every $M > 0$ — both are at log-depth or linear-depth α and DBT's BW coefficient is half of ring's. At large $M$, however — unlike Reduce (§4.3) where tree strictly dominates ring — AR exhibits a genuine ring-vs-DBT crossover *in practice*: ring's $2(N{-}1)/N \to 2$ floor is attained intrinsically (no pipelining overhead to pay), while DBT's $M/\mathrm{BW}$ is only a *lower bound* and the real-world coefficient inflates above it (see practice caveat below), so ring re-takes the crown once $M$ is large enough that its $O(N) \cdot \alpha$ latency amortizes into the pipeline.
 
-INC sits alongside this progression as a hardware alternative rather than a fourth regime. Unlike BC (§3.3) and Reduce (§4.3) where INC's entire win is on the α side, **AR uniquely receives a BW-side lift**: the switch-fused reduce+multicast makes each byte cross each endpoint link once in each direction concurrently rather than sequentially as software schedules do, pushing the BW coefficient from ring's $2(N{-}1)/N \to 2\,M/\mathrm{BW}$ floor down to $M/\mathrm{BW}$. INC matches DBT's α-β asymptote on the BW side — but hits it as a true hardware floor without the practice inflation ($c_{\mathrm{real}} \geq 1$) that DBT pays in software. See `04_in_network_collectives.md §1.4` for the effective-BW derivation. The α-side win is the same $N$-independent $2\,\alpha_\mathrm{switch}$ — dramatic relative to software's $O(\log N)$ or $O(N)$ α hops.
+INC sits alongside this progression as a hardware alternative rather than a fourth regime. Unlike BC (§3.3) and Reduce (§4.3) where INC's entire win is on the α side, **AR uniquely receives a BW-side lift**: the switch-fused reduce+multicast makes each byte cross each endpoint link once in each direction concurrently rather than sequentially as software schedules do, pushing the BW coefficient from ring's $2(N{-}1)/N \to 2\\,M/\mathrm{BW}$ floor down to $M/\mathrm{BW}$. INC matches DBT's α-β asymptote on the BW side — but hits it as a true hardware floor without the practice inflation ($c_{\mathrm{real}} \geq 1$) that DBT pays in software. See `04_in_network_collectives.md §1.4` for the effective-BW derivation. The α-side win is the same $N$-independent $2\\,\alpha_\mathrm{switch}$ — dramatic relative to software's $O(\log N)$ or $O(N)$ α hops.
 
 **No α-β crossover exists between ring and DBT.** On the pure α-β model with DBT at its pipelined floor $M/\mathrm{BW}$, DBT strictly dominates ring at every $M > 0$: its latency term $2\lceil \log_2 N \rceil \alpha$ is strictly below ring's $2(N{-}1)\alpha$ for all $N \geq 4$, and its BW coefficient $1$ is half of ring's $2(N{-}1)/N \to 2$. The observed large-$M$ inversion where ring re-takes the crown is entirely an implementation-practice effect — see practice caveat below. Crossovers against the non-shipped rec-doub and Rabenseifner variants are in [Appendix B.3](#b3-why-neither-ar-variant-is-shipped).
 
 **Practice caveat — where ring re-takes the crown.** NCCL's tuner picks DBT for small-$M$ AR and ring for large-$M$ AR, and published benchmarks [DEMYST-NCCL] confirm this inversion. The $M/\mathrm{BW}$ floor from §5.2 is a *lower bound* only: tree-specific implementation overhead (finite pipeline depth $P \ll P^{*}$, per-step kernel complexity, CUDA launch and synchronization granularity, imperfect edge-by-edge overlap) pushes the real-world DBT BW coefficient to some $c_{\mathrm{real}} \geq 1$ above the floor, while ring's $2(N{-}1)/N \to 2$ is attained intrinsically with no pipelining overhead to pay. Crossover in $M$ from equating the two:
 
-$$M_*^{\,\mathrm{practice}} \;=\; \frac{2\,(N - 1 - \lceil \log_2 N \rceil)\,\alpha \cdot \mathrm{BW}}{c_{\mathrm{real}} - 2(N{-}1)/N}.$$
+$$M_*^{\\,\mathrm{practice}} \\;=\\; \frac{2\\,(N - 1 - \lceil \log_2 N \rceil)\\,\alpha \cdot \mathrm{BW}}{c_{\mathrm{real}} - 2(N{-}1)/N}.$$
 
-For $c_{\mathrm{real}} = 2$ (a representative setting where DBT's per-byte cost roughly doubles the floor) at scale-up fabric parameters ($\alpha = 0.5\,\mu$s, $\mathrm{BW} = 900\,\mathrm{GB/s}$ — NVLink-5 / NVSwitch class): $N = 72 \Rightarrow M_*^{\,\mathrm{practice}} \approx 2\,\mathrm{GB}$; $N = 512 \Rightarrow M_*^{\,\mathrm{practice}} \approx 116\,\mathrm{GB}$. For $c_{\mathrm{real}} \to 2(N{-}1)/N$ the crossover goes to infinity (DBT never loses); for $c_{\mathrm{real}} < 2(N{-}1)/N$ there is no real crossover and DBT dominates ring everywhere, matching the α-β result. The α-β-only reasoning remains the right intuition for small-to-medium $M$ where DBT's lower $\alpha$ dominates; ring wins when per-step BW overhead is small enough that its $O(N) \cdot \alpha$ latency amortizes into the pipeline.
+For $c_{\mathrm{real}} = 2$ (a representative setting where DBT's per-byte cost roughly doubles the floor) at scale-up fabric parameters ($\alpha = 0.5\\,\mu$s, $\mathrm{BW} = 900\\,\mathrm{GB/s}$ — NVLink-5 / NVSwitch class): $N = 72 \Rightarrow M_*^{\\,\mathrm{practice}} \approx 2\\,\mathrm{GB}$; $N = 512 \Rightarrow M_*^{\\,\mathrm{practice}} \approx 116\\,\mathrm{GB}$. For $c_{\mathrm{real}} \to 2(N{-}1)/N$ the crossover goes to infinity (DBT never loses); for $c_{\mathrm{real}} < 2(N{-}1)/N$ there is no real crossover and DBT dominates ring everywhere, matching the α-β result. The α-β-only reasoning remains the right intuition for small-to-medium $M$ where DBT's lower $\alpha$ dominates; ring wins when per-step BW overhead is small enough that its $O(N) \cdot \alpha$ latency amortizes into the pipeline.
 
 ---
 
@@ -861,7 +861,7 @@ Like AR, both primitives have ring-based and tree-flavored implementations. **Un
 
 AG forwards received chunks (overwrite on arrival). RS forwards an accumulating partial sum (add on arrival). As standalone collectives they each take $N-1$ steps:
 
-$$t_{\mathrm{ring\,RS}} = t_{\mathrm{ring\,AG}} = (N-1)\,\alpha + \frac{N-1}{N} \cdot \frac{M}{\mathrm{BW}}$$
+$$t_{\mathrm{ring\\,RS}} = t_{\mathrm{ring\\,AG}} = (N-1)\\,\alpha + \frac{N-1}{N} \cdot \frac{M}{\mathrm{BW}}$$
 
 where $M$ is the **per-rank final total volume** — for AG, the size each rank ends with; for RS, the size each rank starts with before the reduce. The bandwidth term is exactly half of ring AR's because you only do one of the two phases.
 
@@ -871,7 +871,7 @@ where $M$ is the **per-rank final total volume** — for AG, the size each rank 
 - **$P > N$ cannot improve the BW floor.** The bottleneck neighbor-link carries $(N{-}1) \cdot M/N$ total bytes over the collective — matching the per-rank BW lower bound (each byte crosses each endpoint link $(N{-}1)/N$ times on average). Finer segmentation shrinks per-step payload but not total bytes per link; the BW coefficient $(N{-}1)/N$ is a true lower bound, not an asymptote approached in a limit.
 - **No $O(\sqrt{M})$ correction.** The [Appendix C](#appendix-c-asymptotic-form-of-linear-schedules-via-pipelining) master formula's $\sqrt{M}$ correction originates in the $L{-}1$ idle steps while a single-source pipeline fills. Ring AG / RS has no single source and no fill, so that correction is absent — the closed form is exact under the conflict-free ring assumption, not an $\approx$-approximation:
 
-$$t_{\mathrm{ring\,RS}} \;=\; t_{\mathrm{ring\,AG}} \;=\; (N{-}1)\,\alpha + \frac{N-1}{N} \cdot \frac{M}{\mathrm{BW}}$$
+$$t_{\mathrm{ring\\,RS}} \\;=\\; t_{\mathrm{ring\\,AG}} \\;=\\; (N{-}1)\\,\alpha + \frac{N-1}{N} \cdot \frac{M}{\mathrm{BW}}$$
 
 Exactly half of ring AR's BW coefficient — consistent with AG / RS being one of AR's two phases. This is the structural reason ring is BW-optimal for AG / RS without needing pipelining gymnastics, and the reason the tree-flavored alternatives (App. B.4, App. A) can only *match* this floor, not beat it — discussed next.
 
@@ -886,7 +886,7 @@ Also relevant: unlike AR, **no hardware in-network primitive exists for AG / RS*
 
 MPI (MPICH, OpenMPI) does ship rec-doubling AG and rec-halving RS as algorithm options, typically dispatched by message-size threshold at runtime; NCCL's single-algorithm-per-primitive default prioritizes the pipelineable ring case on scale-up.
 
-**Scale-out exception: PAT at 1 rank per node.** PAT [NCCL-PAT] addresses the one regime where ring's $(N{-}1)\alpha$ term becomes prohibitive — one rank per node communicating over the NIC / inter-node path, so $N$ is the node count rather than the intra-node GPU count. On scale-up ($\alpha \approx 0.5\,\mu$s, $N \lesssim 72$) $(N{-}1)\alpha$ stays in the tens of μs; on scale-out with inter-node α in the μs range and $N$ reaching the hundreds, the same term blows up to hundreds of μs. PAT reverses the Bruck offset schedule (largest hops first) and ships a **bounded intermediate buffer** so it composes with the inter-node path's finite staging memory. Two constraints limit where PAT ships:
+**Scale-out exception: PAT at 1 rank per node.** PAT [NCCL-PAT] addresses the one regime where ring's $(N{-}1)\alpha$ term becomes prohibitive — one rank per node communicating over the NIC / inter-node path, so $N$ is the node count rather than the intra-node GPU count. On scale-up ($\alpha \approx 0.5\\,\mu$s, $N \lesssim 72$) $(N{-}1)\alpha$ stays in the tens of μs; on scale-out with inter-node α in the μs range and $N$ reaching the hundreds, the same term blows up to hundreds of μs. PAT reverses the Bruck offset schedule (largest hops first) and ships a **bounded intermediate buffer** so it composes with the inter-node path's finite staging memory. Two constraints limit where PAT ships:
 
 1. **Inter-node only, 1 rank per node.** The NCCL 2.23 implementation restricts PAT to one rank per node because only the inter-node phase is implemented; intra-node AG / RS still runs ring. This matches the scale-out design intent — PAT's log-depth structure pays off against the scale-out fabric's α cost, not against on-node NVLink latency.
 2. **Scale-up doesn't benefit.** On a scale-up NVLink / NVSwitch domain, ring's α cost is already small and its BW-optimal pipelining keeps it at the BW floor. Replacing ring with PAT would trade pipeline-friendliness for a log-depth α schedule that doesn't fit the scale-up port budget any better than rec-doubling does — the same partner-cycling objection from AR ([Appendix B.3](#b3-why-neither-ar-variant-is-shipped)) applies.
@@ -937,7 +937,7 @@ The ring relay runs A2A on the same wiring as ring AR's Phase 1 / 2 from §5.1 �
       └──────────────────┘
 ```
 
-Each rank $R_i$ starts with 4 chunks $\{v_{i,0}, v_{i,1}, v_{i,2}, v_{i,3}\}$ (same initial layout as the §7 intro); target is to deliver each $v_{i,j}$ to $R_j$.
+Each rank $R_i$ starts with 4 chunks $\\{v_{i,0}, v_{i,1}, v_{i,2}, v_{i,3}\\}$ (same initial layout as the §7 intro); target is to deliver each $v_{i,j}$ to $R_j$.
 
 **Per-rank schedule.** Shortest-arc routing assigns each of $R_i$'s three foreign chunks to one direction: $v_{i, i+1}$ goes 1 hop right, $v_{i, i+2}$ goes 2 hops right (antipode tie, broken rightward), $v_{i, i-1}$ goes 1 hop left. Each rank ships 2 chunks rightward (one direct, one via a single relay hop) and 1 leftward over the $N{-}1 = 3$ steps:
 
@@ -997,7 +997,7 @@ A2A complete. Each right edge carried 3 chunks of size $M/N$ each (one per step)
 
 **Cost accounting.** The bottleneck (right-edge) link carries $N{-}1$ chunks of size $M/N$ across the $N{-}1$ sequential steps; each step costs $\alpha + (M/N)/\mathrm{BW}$. Summing:
 
-$$t_{\mathrm{ring\,A2A}} \;=\; (N{-}1)\,\alpha \;+\; \frac{N-1}{N} \cdot \frac{M}{\mathrm{BW}}$$
+$$t_{\mathrm{ring\\,A2A}} \\;=\\; (N{-}1)\\,\alpha \\;+\\; \frac{N-1}{N} \cdot \frac{M}{\mathrm{BW}}$$
 
 **Asymptotic form (bandwidth-bound regime; intrinsically pipelined implementation).** Like ring AR (§5.1) and ring AG / RS (§6), ring A2A's closed form above **is already the pipelined asymptote** with $P = N$. The $M/N$ chunked payload bakes pipelining into the derivation; the $N{-}1$-step schedule is not a $P = 1$ baseline that gets pipelined later, it is the pipelined schedule. Three structural reasons no further collapse is possible:
 
@@ -1011,7 +1011,7 @@ The schedule lands naturally on **bisection-limited fabrics** — torus, hypercu
 
 Pairwise direct-send runs A2A as $N{-}1$ rounds of simultaneous send/receive between rank pairs — step $t$ uses partner offset $+t$, so each chunk crosses exactly one fabric hop (no intermediate relay). This requires a fabric where every rank pair has a direct path: fat-tree / Clos / NVSwitch.
 
-**Setup.** Four ranks $R_0, R_1, R_2, R_3$ on a full-bisection fabric. At step $t \in \{1, 2, 3\}$ every rank concurrently sends to partner $(i+t) \bmod N$ and receives from partner $(i-t) \bmod N$ over the full-duplex link. Step 1 uses offset $+1$, step 2 offset $+2$, step 3 offset $+3$:
+**Setup.** Four ranks $R_0, R_1, R_2, R_3$ on a full-bisection fabric. At step $t \in \\{1, 2, 3\\}$ every rank concurrently sends to partner $(i+t) \bmod N$ and receives from partner $(i-t) \bmod N$ over the full-duplex link. Step 1 uses offset $+1$, step 2 offset $+2$, step 3 offset $+3$:
 
 ```
 step 1 (offset +1)     step 2 (offset +2)     step 3 (offset +3)
@@ -1025,7 +1025,7 @@ step 1 (offset +1)     step 2 (offset +2)     step 3 (offset +3)
  concurrent send goes to a distinct switch port — no contention)
 ```
 
-Each rank $R_i$ starts with 4 chunks $\{v_{i,0}, v_{i,1}, v_{i,2}, v_{i,3}\}$ (same initial layout as the §7 intro); target is to deliver each $v_{i,j}$ to $R_j$.
+Each rank $R_i$ starts with 4 chunks $\\{v_{i,0}, v_{i,1}, v_{i,2}, v_{i,3}\\}$ (same initial layout as the §7 intro); target is to deliver each $v_{i,j}$ to $R_j$.
 
 **After step 1** (offset $+1$) — each rank ships its "right-neighbor" chunk and receives from its "left-neighbor".
 
@@ -1066,7 +1066,7 @@ Every rank now holds its column of the transpose — A2A complete in $N{-}1 = 3$
 
 **Cost accounting.** Each of the $N{-}1$ steps costs $\alpha + (M/N)/\mathrm{BW}$ (one handshake plus one $M/N$-sized chunk over the full-duplex link). The steps run sequentially (step $t+1$ cannot overlap step $t$'s send/receive on the same endpoint):
 
-$$t_{\mathrm{pairwise\,A2A}} \;=\; (N{-}1)\,\alpha \;+\; \frac{N-1}{N} \cdot \frac{M}{\mathrm{BW}}$$
+$$t_{\mathrm{pairwise\\,A2A}} \\;=\\; (N{-}1)\\,\alpha \\;+\\; \frac{N-1}{N} \cdot \frac{M}{\mathrm{BW}}$$
 
 Identical α-β form to the ring relay (§7.1) — both schedules hit the $(N{-}1)/N \cdot M/\mathrm{BW}$ BW lower bound. The practical distinction is routing: pairwise requires full bisection (no chunk traverses more than one fabric hop), ring does not.
 
@@ -1078,7 +1078,7 @@ Identical α-β form to the ring relay (§7.1) — both schedules hit the $(N{-}
 
 **NCCL implementation.** NCCL ships pairwise direct-send via its staggered P2P scheduler (`scheduleP2pTasksToPlan`), which offsets the per-rank partner order by rank index so step 1 routes $R_0 \to R_1, R_1 \to R_2, \ldots$ (adjacent offsets), step 2 routes offset $+2$, and so on — spreading concurrent sends across distinct switch-port pairs and avoiding per-step head-of-line blocking on any single port. The pairwise schedule is the NCCL default on scale-up NVSwitch fabrics and on switched scale-out fabrics (fat-tree / Clos); the ring relay surfaces only on bisection-limited topologies whose fabric physically lacks a direct path between every rank pair.
 
-Workloads that run A2A back-to-back (e.g., MoE dispatch followed by a reverse A2A combine) double the total, giving $2(N{-}1)\alpha + 2(N{-}1)M/(N\,\mathrm{BW})$ for the round trip under either schedule.
+Workloads that run A2A back-to-back (e.g., MoE dispatch followed by a reverse A2A combine) double the total, giving $2(N{-}1)\alpha + 2(N{-}1)M/(N\\,\mathrm{BW})$ for the round trip under either schedule.
 
 ### 7.3 Comparison and practical adoption
 
@@ -1086,8 +1086,8 @@ Two software forms sit on the table: ring relay (§7.1) and pairwise direct-send
 
 | Algorithm | α term | BW term | Regime / adoption |
 |---|---|---|---|
-| Ring relay (§7.1) | $(N{-}1)\,\alpha$ | $\dfrac{N-1}{N} \cdot \dfrac{M}{\mathrm{BW}}$ | Bisection-limited fabrics (torus, hypercube, NVLink-ring); $N$-hop relay lands naturally on fabrics without full bisection |
-| Pairwise direct-send (§7.2) | $(N{-}1)\,\alpha$ | $\dfrac{N-1}{N} \cdot \dfrac{M}{\mathrm{BW}}$ | Full-bisection fabrics (fat-tree / Clos / NVSwitch). **NCCL default** |
+| Ring relay (§7.1) | $(N{-}1)\\,\alpha$ | $\dfrac{N-1}{N} \cdot \dfrac{M}{\mathrm{BW}}$ | Bisection-limited fabrics (torus, hypercube, NVLink-ring); $N$-hop relay lands naturally on fabrics without full bisection |
+| Pairwise direct-send (§7.2) | $(N{-}1)\\,\alpha$ | $\dfrac{N-1}{N} \cdot \dfrac{M}{\mathrm{BW}}$ | Full-bisection fabrics (fat-tree / Clos / NVSwitch). **NCCL default** |
 
 **Reading the rows as a progression.** Ring relay and pairwise direct-send are α-β-equivalent — same $(N{-}1)\alpha$ latency, same BW-optimal $(N{-}1)/N$ coefficient — so there is no α-β crossover between them; the choice is dictated by the fabric's bisection, not the message size. Pairwise needs every rank pair to have a direct path (no intermediate relay), so it runs on switched / full-bisection fabrics; ring ships the same α-β cost on bisection-limited topologies by using both directions of the ring and forwarding through intermediate ranks. The topology dimension matters more here than in §5.3 or §6 for one reason specific to A2A:
 
@@ -1136,15 +1136,15 @@ Large-model distributed execution uses up to five orthogonal parallelism axes, e
 
 | Parallelism | Regime | Collective | Algorithm | α term | BW term |
 |---|---|---|---|---|---|
-| **DP** | training only | **AR** | Ring (§5.1) | $2(N{-}1)\,\alpha$ | $2 \cdot (N{-}1)/N \cdot M/\mathrm{BW}$ |
-| **DP** | training only | **AR** | DBT (§5.2) | $2\,\lceil \log_2 N \rceil \, \alpha$ | $\lceil \log_2 N \rceil \cdot M/\mathrm{BW}$ |
-| **DP** | training only | **AR** | hw INC — SHARP / NVLS (§5.3) | $2\,\alpha_\mathrm{switch}$ | $M/\mathrm{BW}$ |
-| **TP** | train + infer | **AR** | Ring (§5.1) | $2(N{-}1)\,\alpha$ | $2 \cdot (N{-}1)/N \cdot M/\mathrm{BW}$ |
-| **TP** | train + infer | **AR** | DBT (§5.2) | $2\,\lceil \log_2 N \rceil \, \alpha$ | $\lceil \log_2 N \rceil \cdot M/\mathrm{BW}$ |
-| **TP** | train + infer | **AR** | hw INC — SHARP / NVLS (§5.3) | $2\,\alpha_\mathrm{switch}$ | $M/\mathrm{BW}$ |
-| **SP** | train + infer | **AG** | Ring (§6) | $(N{-}1)\,\alpha$ | $(N{-}1)/N \cdot M/\mathrm{BW}$ |
-| **EP** | train + infer | **A2A** | Ring relay (§7.1, bisection-limited fabrics) | $(N{-}1)\,\alpha$ | $(N{-}1)/N \cdot M/\mathrm{BW}$ |
-| **EP** | train + infer | **A2A** | Pairwise direct-send (§7.2, full-bisection fabrics) | $(N{-}1)\,\alpha$ | $(N{-}1)/N \cdot M/\mathrm{BW}$ |
+| **DP** | training only | **AR** | Ring (§5.1) | $2(N{-}1)\\,\alpha$ | $2 \cdot (N{-}1)/N \cdot M/\mathrm{BW}$ |
+| **DP** | training only | **AR** | DBT (§5.2) | $2\\,\lceil \log_2 N \rceil \\, \alpha$ | $\lceil \log_2 N \rceil \cdot M/\mathrm{BW}$ |
+| **DP** | training only | **AR** | hw INC — SHARP / NVLS (§5.3) | $2\\,\alpha_\mathrm{switch}$ | $M/\mathrm{BW}$ |
+| **TP** | train + infer | **AR** | Ring (§5.1) | $2(N{-}1)\\,\alpha$ | $2 \cdot (N{-}1)/N \cdot M/\mathrm{BW}$ |
+| **TP** | train + infer | **AR** | DBT (§5.2) | $2\\,\lceil \log_2 N \rceil \\, \alpha$ | $\lceil \log_2 N \rceil \cdot M/\mathrm{BW}$ |
+| **TP** | train + infer | **AR** | hw INC — SHARP / NVLS (§5.3) | $2\\,\alpha_\mathrm{switch}$ | $M/\mathrm{BW}$ |
+| **SP** | train + infer | **AG** | Ring (§6) | $(N{-}1)\\,\alpha$ | $(N{-}1)/N \cdot M/\mathrm{BW}$ |
+| **EP** | train + infer | **A2A** | Ring relay (§7.1, bisection-limited fabrics) | $(N{-}1)\\,\alpha$ | $(N{-}1)/N \cdot M/\mathrm{BW}$ |
+| **EP** | train + infer | **A2A** | Pairwise direct-send (§7.2, full-bisection fabrics) | $(N{-}1)\\,\alpha$ | $(N{-}1)/N \cdot M/\mathrm{BW}$ |
 | **PP** | train + infer | **P2P** | Single send/recv (§8) | $\alpha$ | $M/\mathrm{BW}$ |
 
 DP is the only axis whose collective is **training-exclusive**: pure inference has no gradient to reduce, so no DP collective fires per decode step. TP / SP / EP / PP all contribute on every forward / decode step and therefore show up in inference latency as well as training iteration time. A single decoding step on a model sharded across TP/SP/EP/PP issues one AR per TP layer, one AG per SP layer, one A2A per MoE layer (dispatch + combine = two A2A), and one P2P per pipeline hop. Training adds a backward-pass AG / RS per layer plus a once-per-step DP gradient AR on the full gradient tensor (or once per gradient-accumulation window) — that DP AR runs the same ring / DBT / hw-INC path as TP but is typically the single largest collective in a training run because it ships every parameter's gradient.
@@ -1165,7 +1165,7 @@ PAT [NCCL-PAT] ships in NCCL starting with the 2.23 release and is the **first N
 
 **Why scale-out AG / RS needs a different algorithm.** At scale-out the communicator $N$ is the **node count**, not the intra-island GPU count. Large training and inference jobs run with $N$ in the hundreds to thousands of nodes. Two properties flip relative to the intra-NVLink regime §6's ring was designed for:
 
-- **$\alpha$ is much larger.** Scale-out NIC $\alpha$ is in the microseconds (InfiniBand EDR/HDR ≈ 1–2 μs, plus a kernel-launch and proxy-thread floor on NCCL's scale-out path of a few additional μs). Ring AG at $N = 512$ nodes is $(N{-}1)\alpha \approx 511 \times 2\,\mu$s $\approx 1$ ms of pure α — swamping most realistic per-rank $M/N$ payloads in bandwidth cost.
+- **$\alpha$ is much larger.** Scale-out NIC $\alpha$ is in the microseconds (InfiniBand EDR/HDR ≈ 1–2 μs, plus a kernel-launch and proxy-thread floor on NCCL's scale-out path of a few additional μs). Ring AG at $N = 512$ nodes is $(N{-}1)\alpha \approx 511 \times 2\\,\mu$s $\approx 1$ ms of pure α — swamping most realistic per-rank $M/N$ payloads in bandwidth cost.
 - **Port budget is 1–2.** Scale-out endpoints present 1–2 active NIC ports per rank (GPUDirect RDMA from one GPU typically drives one NIC, though 2–8 NICs per node exist). The partner-cycling schedule that kills rec-doubling on-node — needs $\lceil \log_2 N \rceil$ concurrent partners at steady state to pipeline, see [Appendix B.3](#b3-why-neither-ar-variant-is-shipped) — kills it even harder at scale-out.
 
 Ring's $(N{-}1)\alpha$ dominates the collective; partner-cycling schedules serialize on the 1–2 NIC budget; the algorithm PAT ships needs to combine log-depth latency with a bounded-port, bounded-buffer pipeline. This is the niche PAT was designed for.
@@ -1217,14 +1217,14 @@ The "one selected chunk" per round per pair is determined by the chunk-to-tree a
 
 **Cost.** $\lceil \log_2 N \rceil$ sequential rounds, each shipping $M/N$ bytes per link, yielding a per-round cost of $\alpha + (M/N)/\mathrm{BW}$. Total per-rank on-wire volume is $(N{-}1)\cdot M/N$ — the AG BW lower bound — accumulated across the $\lceil \log_2 N \rceil$ rounds. Crucially the bandwidth term is **not** $\lceil \log_2 N \rceil \cdot M/N \cdot \mathrm{BW}^{-1}$ (which would be log-depth × per-round payload summed naïvely) because on a full-duplex link each rank both sends and receives each round, and across the $\lceil \log_2 N \rceil$ rounds the total data each rank actually ships out is exactly $(N{-}1) \cdot M/N$ bytes — one per chunk it doesn't originate, forwarded once on its outbound direction:
 
-$$t_{\mathrm{PAT}} = \lceil \log_2 N \rceil \, \alpha + \frac{N-1}{N} \cdot \frac{M}{\mathrm{BW}}$$
+$$t_{\mathrm{PAT}} = \lceil \log_2 N \rceil \\, \alpha + \frac{N-1}{N} \cdot \frac{M}{\mathrm{BW}}$$
 
 RS is symmetric (reverse the schedule and replace forward-concat with sum-in). Compared to ring's $(N{-}1)\alpha + (N{-}1)/N \cdot M/\mathrm{BW}$: same BW coefficient, $O(\log N)$ α vs ring's $O(N)$ α — exactly the α reduction that makes sense of PAT's shipping niche.
 
 **Practical adoption.** The NCCL tuner dispatches PAT only when the scale-out operating conditions line up; everywhere else stays on ring. Two shipping constraints define the scope:
 
 1. **Inter-node only, 1 rank per node.** The NCCL 2.23 implementation restricts PAT to one rank per node because only the inter-node phase is implemented; intra-node AG / RS still runs ring. With $G > 1$ ranks per node, the intra-node ranks share a NIC (the scale-out port), and the tree-edge-per-round property degenerates — multiple tree-edges at the same round land on the same NIC and serialize, collapsing the log-depth advantage. The 2.23 release notes document this restriction directly; a future "multi-rank-per-node PAT" would need a hierarchical composition (intra-node ring / tree at the leaves, PAT between node leaders) that NCCL has not yet shipped.
-2. **Scale-up doesn't benefit.** On a scale-up NVLink / NVSwitch domain ($N \leq 72$, $\alpha \approx 0.5\,\mu$s), ring AG's $(N{-}1)\alpha$ is already in the tens of μs and ring's pipelining keeps BW at the floor. Replacing ring with PAT would trade pipeline-friendliness for a log-depth α schedule without any α budget to recover on the NVLink side, and it would inherit a port-budget obstruction similar to rec-doubling's (see [Appendix B.3](#b3-why-neither-ar-variant-is-shipped)) because tree-edge-per-round still requires more than the 2 NVLink ring directions at intermediate tree levels. NCCL 2.23 explicitly routes intra-node traffic through ring.
+2. **Scale-up doesn't benefit.** On a scale-up NVLink / NVSwitch domain ($N \leq 72$, $\alpha \approx 0.5\\,\mu$s), ring AG's $(N{-}1)\alpha$ is already in the tens of μs and ring's pipelining keeps BW at the floor. Replacing ring with PAT would trade pipeline-friendliness for a log-depth α schedule without any α budget to recover on the NVLink side, and it would inherit a port-budget obstruction similar to rec-doubling's (see [Appendix B.3](#b3-why-neither-ar-variant-is-shipped)) because tree-edge-per-round still requires more than the 2 NVLink ring directions at intermediate tree levels. NCCL 2.23 explicitly routes intra-node traffic through ring.
 
 The scope is therefore: **PAT is the inter-node scale-out AG / RS algorithm at 1 rank per node**; ring covers every other AG / RS configuration. Unlike the non-mainline variants in [Appendix B](#appendix-b-non-mainline-ar--ag--rs--a2a-variants) — which never escape the MPI-menu status — PAT is the single non-ring AG / RS algorithm NCCL has chosen to ship, and the scale-out α budget is what made the engineering investment worth it.
 
@@ -1236,7 +1236,7 @@ Four algorithms from the MPI literature and older HPC work appear prominently in
 
 ### B.1 Simple recursive-doubling AR
 
-Simple recursive-doubling AR is the one-phase butterfly / hypercube sweep: at step $k \in \{1, \ldots, \lceil \log_2 N \rceil\}$, every rank $i$ exchanges its **full current vector** with partner $i \oplus 2^{k-1}$ and sums the received vector into its local copy. After $\lceil \log_2 N \rceil$ steps, every rank holds the $N$-way sum. We walk through $N=4$; same initial state as §5.1 (each $R_i$ holds $V_i = [v_{i,0}, v_{i,1}, v_{i,2}, v_{i,3}]$).
+Simple recursive-doubling AR is the one-phase butterfly / hypercube sweep: at step $k \in \\{1, \ldots, \lceil \log_2 N \rceil\\}$, every rank $i$ exchanges its **full current vector** with partner $i \oplus 2^{k-1}$ and sums the received vector into its local copy. After $\lceil \log_2 N \rceil$ steps, every rank holds the $N$-way sum. We walk through $N=4$; same initial state as §5.1 (each $R_i$ holds $V_i = [v_{i,0}, v_{i,1}, v_{i,2}, v_{i,3}]$).
 
 **Step 1 (partner $i \oplus 1$, offset $2^0 = 1$).** Pairs: $(R_0, R_1)$ and $(R_2, R_3)$. Each pair exchanges full vectors and sums.
 
@@ -1266,7 +1266,7 @@ All four ranks hold the complete reduced vector after $\lceil \log_2 4 \rceil = 
 
 **Cost.** Each step moves the **full** $M$-byte vector across the active link (full-duplex, so both partners send concurrently over opposite directions; per-step cost is $\alpha + M/\mathrm{BW}$). With $\lceil \log_2 N \rceil$ sequential steps:
 
-$$t_{\mathrm{rec\,doubling\,AR}} = \lceil \log_2 N \rceil \, \alpha + \lceil \log_2 N \rceil \cdot \frac{M}{\mathrm{BW}}$$
+$$t_{\mathrm{rec\\,doubling\\,AR}} = \lceil \log_2 N \rceil \\, \alpha + \lceil \log_2 N \rceil \cdot \frac{M}{\mathrm{BW}}$$
 
 **Strengths.** Minimum latency term $\lceil \log_2 N \rceil \alpha$ — a lower bound for any reduction over a binary-combinable tree. Single-phase schedule (no separate RS / AG split), so the runtime is simpler than Rabenseifner's.
 
@@ -1278,9 +1278,9 @@ Rabenseifner's halving-doubling AR (RHD) [TRG05] recognizes the AR ≡ RS + AG i
 
 **Phase 1 — Reduce-scatter (recursive halving, $\lceil \log_2 N \rceil$ steps).**
 
-At step $k \in \{1, \ldots, \lceil \log_2 N \rceil\}$, rank $i$ pairs with partner $i \oplus 2^{k-1}$, sends the half of its chunks the partner will own at the end of this step, and receives (summing in) the complementary half. The per-step payload **halves** each round because the "chunks I still own" set halves.
+At step $k \in \\{1, \ldots, \lceil \log_2 N \rceil\\}$, rank $i$ pairs with partner $i \oplus 2^{k-1}$, sends the half of its chunks the partner will own at the end of this step, and receives (summing in) the complementary half. The per-step payload **halves** each round because the "chunks I still own" set halves.
 
-**Step 1 ($k=1$, partner $i \oplus 1$).** Split the 4-chunk vector into lower-half $\{0, 1\}$ and upper-half $\{2, 3\}$. Pairs: $(R_0, R_1)$ → $R_0$ keeps lower, $R_1$ keeps upper. $(R_2, R_3)$ → $R_2$ keeps lower, $R_3$ keeps upper. Each rank sends $M/2$ bytes.
+**Step 1 ($k=1$, partner $i \oplus 1$).** Split the 4-chunk vector into lower-half $\\{0, 1\\}$ and upper-half $\\{2, 3\\}$. Pairs: $(R_0, R_1)$ → $R_0$ keeps lower, $R_1$ keeps upper. $(R_2, R_3)$ → $R_2$ keeps lower, $R_3$ keeps upper. Each rank sends $M/2$ bytes.
 
 ```
 After RS step 1:
@@ -1291,7 +1291,7 @@ R2: [v20+v30   v21+v31    ?         ?      ]   (owns {0,1})
 R3: [   ?         ?     v22+v32  v23+v33  ]   (owns {2,3})
 ```
 
-**Step 2 ($k=2$, partner $i \oplus 2$).** Each pair subdivides its half again. $(R_0, R_2)$ both own $\{0, 1\}$; $R_0$ keeps chunk $0$, $R_2$ keeps chunk $1$. $(R_1, R_3)$ both own $\{2, 3\}$; $R_1$ keeps chunk $3$, $R_3$ keeps chunk $2$. Each rank sends $M/4$ bytes.
+**Step 2 ($k=2$, partner $i \oplus 2$).** Each pair subdivides its half again. $(R_0, R_2)$ both own $\\{0, 1\\}$; $R_0$ keeps chunk $0$, $R_2$ keeps chunk $1$. $(R_1, R_3)$ both own $\\{2, 3\\}$; $R_1$ keeps chunk $3$, $R_3$ keeps chunk $2$. Each rank sends $M/4$ bytes.
 
 ```
 After RS step 2 (full 4-way sums in each rank's one owned chunk):
@@ -1306,7 +1306,7 @@ This is the RS end-state. Each rank owns exactly one fully-reduced $M/N$ chunk.
 
 **Phase 2 — All-gather (recursive doubling, $\lceil \log_2 N \rceil$ steps).** The same partner schedule in **reverse order**: step 1 uses partner $i \oplus 2$ (last RS partner), step 2 uses partner $i \oplus 1$ (first RS partner). Each step **doubles** the chunks-owned set; payload grows from $M/N$ to $2M/N$, $\ldots$, to $M/2$ by the last step.
 
-**Step 1 ($k=1$ of AG, partner $i \oplus 2$).** $R_0$ sends its $S_0$ to $R_2$; $R_2$ sends its $S_1$ to $R_0$. Pair $(R_1, R_3)$ similarly exchanges $\{S_3, S_2\}$. Each rank sends $M/4$.
+**Step 1 ($k=1$ of AG, partner $i \oplus 2$).** $R_0$ sends its $S_0$ to $R_2$; $R_2$ sends its $S_1$ to $R_0$. Pair $(R_1, R_3)$ similarly exchanges $\\{S_3, S_2\\}$. Each rank sends $M/4$.
 
 ```
 After AG step 1:
@@ -1317,7 +1317,7 @@ R2: [S0   S1    ?    ?]
 R3: [ ?    ?   S2   S3]
 ```
 
-**Step 2 ($k=2$ of AG, partner $i \oplus 1$).** $R_0$ sends its $\{S_0, S_1\}$ half to $R_1$; $R_1$ sends its $\{S_2, S_3\}$ half to $R_0$. Symmetric for $(R_2, R_3)$. Each rank sends $M/2$.
+**Step 2 ($k=2$ of AG, partner $i \oplus 1$).** $R_0$ sends its $\\{S_0, S_1\\}$ half to $R_1$; $R_1$ sends its $\\{S_2, S_3\\}$ half to $R_0$. Symmetric for $(R_2, R_3)$. Each rank sends $M/2$.
 
 ```
 After AG step 2:
@@ -1339,11 +1339,11 @@ AR done in $2\lceil \log_2 4 \rceil = 4$ sequential steps.
 | AG | 1 | $M/4$ | $\alpha + (M/4)/\mathrm{BW}$ |
 | AG | 2 | $M/2$ | $\alpha + (M/2)/\mathrm{BW}$ |
 
-Total at $N=4$: $4\alpha + (M/2 + M/4 + M/4 + M/2)/\mathrm{BW} = 4\alpha + (3/2)\,M/\mathrm{BW}$. The bandwidth series is $M \cdot \sum_{k=1}^{\log_2 N} 2^{-k} = M \cdot (N-1)/N$ for one phase, doubled for the two-phase RS+AG. Generalizing:
+Total at $N=4$: $4\alpha + (M/2 + M/4 + M/4 + M/2)/\mathrm{BW} = 4\alpha + (3/2)\\,M/\mathrm{BW}$. The bandwidth series is $M \cdot \sum_{k=1}^{\log_2 N} 2^{-k} = M \cdot (N-1)/N$ for one phase, doubled for the two-phase RS+AG. Generalizing:
 
-$$t_{\mathrm{Rabenseifner\,AR}} = 2\lceil \log_2 N \rceil \, \alpha + 2 \cdot \frac{N-1}{N} \cdot \frac{M}{\mathrm{BW}}$$
+$$t_{\mathrm{Rabenseifner\\,AR}} = 2\lceil \log_2 N \rceil \\, \alpha + 2 \cdot \frac{N-1}{N} \cdot \frac{M}{\mathrm{BW}}$$
 
-At $N=4$ this evaluates to $4\alpha + 1.5\,M/\mathrm{BW}$, matching the trace above.
+At $N=4$ this evaluates to $4\alpha + 1.5\\,M/\mathrm{BW}$, matching the trace above.
 
 **Strengths.** Bandwidth-optimal (same $2(N-1)/N$ BW floor as ring) at $O(\log N)$ latency instead of ring's $O(N)$. Strictly dominates both ring (same BW, fewer α) and simple recursive doubling (same α order, better BW) on α-β arithmetic. This is the "best on paper" AR algorithm for power-of-2 $N$.
 
@@ -1355,8 +1355,8 @@ The per-subsection "Weakness" paragraphs of [B.1](#b1-simple-recursive-doubling-
 
 Simple recursive-doubling AR (B.1) and Rabenseifner halving-doubling AR (B.2) arrive at the §5.3 comparison with pure α-β costs that look competitive or better than DBT:
 
-- **Rec-doubling:** $\lceil \log_2 N \rceil \, \alpha + \lceil \log_2 N \rceil \cdot M/\mathrm{BW}$ — minimum possible latency term (half of DBT's) at the price of a $\log_2 N$ BW coefficient.
-- **Rabenseifner:** $2\lceil \log_2 N \rceil \, \alpha + 2(N{-}1)/N \cdot M/\mathrm{BW}$ — matches ring's BW-optimal floor at log-depth latency; strictly dominates ring on α-β arithmetic at every $(N, M)$.
+- **Rec-doubling:** $\lceil \log_2 N \rceil \\, \alpha + \lceil \log_2 N \rceil \cdot M/\mathrm{BW}$ — minimum possible latency term (half of DBT's) at the price of a $\log_2 N$ BW coefficient.
+- **Rabenseifner:** $2\lceil \log_2 N \rceil \\, \alpha + 2(N{-}1)/N \cdot M/\mathrm{BW}$ — matches ring's BW-optimal floor at log-depth latency; strictly dominates ring on α-β arithmetic at every $(N, M)$.
 
 Yet NCCL / RCCL ship neither. The reason is a structural mismatch between their partner schedules and the port budget of every realistic fabric tier — the same obstruction [Appendix C §C.4](#c4-port-budget-caveat) describes for linear schedules in general, specialized here to the partner-cycling family.
 
@@ -1366,15 +1366,15 @@ DBT escapes this trap because its schedule targets *at most ~3 concurrent partne
 
 **Numerical crossover: rec-doubling vs DBT.** Rec-doubling's non-pipelined cost vs DBT's pipelined α-β asymptote:
 
-$$\lceil \log_2 N \rceil \, \alpha + \lceil \log_2 N \rceil \cdot \frac{M}{\mathrm{BW}} \;\;\text{vs}\;\; 2\lceil \log_2 N \rceil \, \alpha + \frac{M}{\mathrm{BW}}$$
+$$\lceil \log_2 N \rceil \\, \alpha + \lceil \log_2 N \rceil \cdot \frac{M}{\mathrm{BW}} \\;\\;\text{vs}\\;\\; 2\lceil \log_2 N \rceil \\, \alpha + \frac{M}{\mathrm{BW}}$$
 
-Rec-doubling wins when $(\lceil \log_2 N \rceil - 1) \cdot M/\mathrm{BW} < \lceil \log_2 N \rceil \, \alpha$, i.e., at
+Rec-doubling wins when $(\lceil \log_2 N \rceil - 1) \cdot M/\mathrm{BW} < \lceil \log_2 N \rceil \\, \alpha$, i.e., at
 
-$$M_* \;=\; \frac{\lceil \log_2 N \rceil}{\lceil \log_2 N \rceil - 1} \cdot \alpha \cdot \mathrm{BW} \;\;\longrightarrow\;\; M_* \to \alpha \cdot \mathrm{BW} \;\text{as}\; N \to \infty.$$
+$$M_* \\;=\\; \frac{\lceil \log_2 N \rceil}{\lceil \log_2 N \rceil - 1} \cdot \alpha \cdot \mathrm{BW} \\;\\;\longrightarrow\\;\\; M_* \to \alpha \cdot \mathrm{BW} \\;\text{as}\\; N \to \infty.$$
 
-At $N = 512$, $\alpha = 0.5\,\mu$s, $\mathrm{BW} = 900\,\mathrm{GB/s}$: $M_* = 9/8 \cdot 0.5\,\mu\mathrm{s} \cdot 900\,\mathrm{GB/s} \approx 506\,\mathrm{KB}$. Rec-doubling's α edge only buys anything on sub-MB messages — a regime NCCL already serves via the LL / LL128 fast-path on ring, without adding a separate algorithm. Past the crossover the $\log_2 N$ BW coefficient means a $9\times$ BW penalty at $N = 512$ versus DBT's near-1. (Practice inflation $c_{\mathrm{real}} \geq 1$ of DBT's coefficient — see §5.3 practice caveat — only shifts $M_*$ slightly; the sub-MB conclusion is robust.)
+At $N = 512$, $\alpha = 0.5\\,\mu$s, $\mathrm{BW} = 900\\,\mathrm{GB/s}$: $M_* = 9/8 \cdot 0.5\\,\mu\mathrm{s} \cdot 900\\,\mathrm{GB/s} \approx 506\\,\mathrm{KB}$. Rec-doubling's α edge only buys anything on sub-MB messages — a regime NCCL already serves via the LL / LL128 fast-path on ring, without adding a separate algorithm. Past the crossover the $\log_2 N$ BW coefficient means a $9\times$ BW penalty at $N = 512$ versus DBT's near-1. (Practice inflation $c_{\mathrm{real}} \geq 1$ of DBT's coefficient — see §5.3 practice caveat — only shifts $M_*$ slightly; the sub-MB conclusion is robust.)
 
-**Numerical crossover: Rabenseifner vs DBT.** Same α term ($2\lceil \log_2 N \rceil \, \alpha$ on both sides), so the comparison is purely on the BW coefficient: Rabenseifner's $2(N{-}1)/N \to 2$ vs DBT pipelined's $1$. DBT wins at every $M > 0$ on α-β — the margin is a factor of $\sim 2$ at large $N$. Practice inflation $c_{\mathrm{real}} \geq 1$ of DBT's coefficient (see §5.3 practice caveat) closes this margin somewhat but, for $c_{\mathrm{real}} < 2(N{-}1)/N$, keeps DBT ahead. Rabenseifner's paper dominance over ring and over non-pipelined DBT never materializes for the shipping choice because the algorithm DBT is compared against is the *pipelined* DBT, which is what NCCL actually runs. Had Rabenseifner been able to pipeline, it would drop below $2(N{-}1)/N$ toward its own $M/\mathrm{BW}$ floor and the comparison would tighten further — but it cannot, for the port-budget reason above.
+**Numerical crossover: Rabenseifner vs DBT.** Same α term ($2\lceil \log_2 N \rceil \\, \alpha$ on both sides), so the comparison is purely on the BW coefficient: Rabenseifner's $2(N{-}1)/N \to 2$ vs DBT pipelined's $1$. DBT wins at every $M > 0$ on α-β — the margin is a factor of $\sim 2$ at large $N$. Practice inflation $c_{\mathrm{real}} \geq 1$ of DBT's coefficient (see §5.3 practice caveat) closes this margin somewhat but, for $c_{\mathrm{real}} < 2(N{-}1)/N$, keeps DBT ahead. Rabenseifner's paper dominance over ring and over non-pipelined DBT never materializes for the shipping choice because the algorithm DBT is compared against is the *pipelined* DBT, which is what NCCL actually runs. Had Rabenseifner been able to pipeline, it would drop below $2(N{-}1)/N$ toward its own $M/\mathrm{BW}$ floor and the comparison would tighten further — but it cannot, for the port-budget reason above.
 
 **Compared to ring.** Ring (§5.1) is intrinsically pipelined with $P = N$ and achieves its $2(N{-}1)/N \to 2$ BW floor for free, without any of the port-budget gymnastics. Rabenseifner matches ring's BW floor with a log-depth α (an improvement), but without pipelining it only reaches that floor, not below. Rec-doubling's $\log_2 N$ BW coefficient is worse than ring's $\sim 2$ at every $N \geq 8$, so rec-doubling is ring-dominated at large $M$ and DBT-dominated at small $M$ — no regime where it is the right choice.
 
@@ -1413,9 +1413,9 @@ R3: [c0   c1   c2   c3]
 
 AG done in $\lceil \log_2 4 \rceil = 2$ steps. RS is the mirror image: start from a full vector, run the same partner schedule in reverse order (step 1 partner $i \oplus 2$, step 2 partner $i \oplus 1$), and the payload **halves** each step so each rank ends owning one fully-reduced $M/N$ chunk.
 
-**Cost.** The per-step payload follows a geometric schedule. For AG with $\lceil \log_2 N \rceil$ steps, step $k$ ships $2^{k-1} \cdot M/N$ bytes per rank per direction; total per-rank ship = $M/N \cdot \sum_{k=1}^{\log_2 N} 2^{k-1} = (N-1) \cdot M/N$ bytes — matching ring's BW lower bound. RS is symmetric. Per-step cost $\alpha + 2^{k-1} M / (N \, \mathrm{BW})$; summing:
+**Cost.** The per-step payload follows a geometric schedule. For AG with $\lceil \log_2 N \rceil$ steps, step $k$ ships $2^{k-1} \cdot M/N$ bytes per rank per direction; total per-rank ship = $M/N \cdot \sum_{k=1}^{\log_2 N} 2^{k-1} = (N-1) \cdot M/N$ bytes — matching ring's BW lower bound. RS is symmetric. Per-step cost $\alpha + 2^{k-1} M / (N \\, \mathrm{BW})$; summing:
 
-$$t_{\mathrm{rec\,doub\,AG}} = t_{\mathrm{rec\,halv\,RS}} = \lceil \log_2 N \rceil \, \alpha + \frac{N-1}{N} \cdot \frac{M}{\mathrm{BW}}$$
+$$t_{\mathrm{rec\\,doub\\,AG}} = t_{\mathrm{rec\\,halv\\,RS}} = \lceil \log_2 N \rceil \\, \alpha + \frac{N-1}{N} \cdot \frac{M}{\mathrm{BW}}$$
 
 where $M$ is the per-rank final total volume (for AG) or initial total volume (for RS).
 
@@ -1442,7 +1442,7 @@ R2: [v20  v21  v22  v23]                      R2: [v22  v23  v20  v21]   (i=2: s
 R3: [v30  v31  v32  v33]                      R3: [v33  v30  v31  v32]   (i=3: shift left by 3)
 ```
 
-**Communication rounds ($\lceil \log_2 N \rceil = 2$ at $N=4$).** At round $k \in \{0, 1, \ldots, \lceil \log_2 N \rceil - 1\}$, rank $i$ sends to partner $(i + 2^k) \bmod N$ and receives from $(i - 2^k) \bmod N$. The chunks sent at round $k$ are the slots of the current buffer whose index has bit $k$ set ($N/2$ slots, total $M/2$ bytes per round); the chunks at the other $N/2$ slots stay put. The partner's corresponding slots overwrite the local ones on receive.
+**Communication rounds ($\lceil \log_2 N \rceil = 2$ at $N=4$).** At round $k \in \\{0, 1, \ldots, \lceil \log_2 N \rceil - 1\\}$, rank $i$ sends to partner $(i + 2^k) \bmod N$ and receives from $(i - 2^k) \bmod N$. The chunks sent at round $k$ are the slots of the current buffer whose index has bit $k$ set ($N/2$ slots, total $M/2$ bytes per round); the chunks at the other $N/2$ slots stay put. The partner's corresponding slots overwrite the local ones on receive.
 
 **Round 0 (partner $i+1 \bmod 4$, send slots with bit 0 set — i.e., slots 1 and 3, $M/2$ bytes).**
 
@@ -1489,7 +1489,7 @@ Matches the expected A2A end-state in §7.
 
 **Cost.** The pre- and post-rotations are **local memory copies** (not on-wire; they do consume memory bandwidth and an intermediate buffer of size $M$, but in the α-β model we count on-wire time only). The $\lceil \log_2 N \rceil$ rounds each ship $M/2$ bytes per rank per direction, giving
 
-$$t_{\mathrm{Bruck\,A2A}} = \lceil \log_2 N \rceil \, \alpha + \lceil \log_2 N \rceil \cdot \frac{M}{2\,\mathrm{BW}}$$
+$$t_{\mathrm{Bruck\\,A2A}} = \lceil \log_2 N \rceil \\, \alpha + \lceil \log_2 N \rceil \cdot \frac{M}{2\\,\mathrm{BW}}$$
 
 At $N = 4$: $2\alpha + M/\mathrm{BW}$, compared to pairwise's $3\alpha + (3/4)M/\mathrm{BW}$ at the same $N$. Bruck wins on α; pairwise wins on BW — the crossover is at $M^* \sim \alpha \cdot \mathrm{BW}$, computed in §7.3.
 
@@ -1503,14 +1503,14 @@ At $N = 4$: $2\alpha + M/\mathrm{BW}$, compared to pairwise's $3\alpha + (3/4)M/
 
 The collectives in §3 (binomial tree BC), §4 (binomial tree Reduce), and §5 (ring AR and double binary tree AR) all cite an "asymptotic form" $L\alpha + M/\mathrm{BW}$ that collapses the otherwise-$L$-scaled bandwidth term to the single-link floor. This appendix separates two things that the main text glues together:
 
-- **Pipelining** is the *implementation mechanism*: chunk the message into $P$ sub-segments and stream them through the $L$-step schedule like parts on an assembly line. The finite-$P$ cost is the master formula $t_\mathrm{pipe}(P) = (L + P - 1)(\alpha + M/(P\,\mathrm{BW}))$ — exact, not asymptotic.
+- **Pipelining** is the *implementation mechanism*: chunk the message into $P$ sub-segments and stream them through the $L$-step schedule like parts on an assembly line. The finite-$P$ cost is the master formula $t_\mathrm{pipe}(P) = (L + P - 1)(\alpha + M/(P\\,\mathrm{BW}))$ — exact, not asymptotic.
 - **The asymptotic form** is the *cost floor* the implementation reaches in the bandwidth-bound limit $M \to \infty$ at optimal segmentation $P^*$. The two terms $L\alpha$ and $M/\mathrm{BW}$ are separate floors — each the minimum its coefficient can attain — and the sum is approached up to an $O(\sqrt{M})$ correction that vanishes relative to $M/\mathrm{BW}$.
 
 C.1–C.4 derive the finite-$P$ master formula, its optimum $P^*$, the $\sqrt{M}$ correction between exact and asymptotic, and the port-budget caveat that licenses the collapse on real fabrics. C.5 lists how each primitive instantiates $L(N)$. Everything here applies identically to any schedule with a linear dependency chain — so future variants (larger $k$-ary trees, alternate butterfly orderings) inherit the same formulas.
 
 ### C.1 Why pipeline?
 
-Start with the non-pipelined schedule: $L$ sequential steps, each shipping the full $M$ bytes. Total cost $L\alpha + L\,M/\mathrm{BW}$. The ugly part is the second term — the bandwidth coefficient scales linearly with $L$. The inefficiency is easy to see: while step $k$ is busy pushing bytes, steps $1, \ldots, k{-}1$ sit idle (they finished their part of the transfer several slots ago, but there's nothing queued for them to do). If we could keep every step busy at once, the whole algorithm would finish in roughly the time of *one* step's work regardless of $L$. Pipelining is the trick that makes that happen.
+Start with the non-pipelined schedule: $L$ sequential steps, each shipping the full $M$ bytes. Total cost $L\alpha + L\\,M/\mathrm{BW}$. The ugly part is the second term — the bandwidth coefficient scales linearly with $L$. The inefficiency is easy to see: while step $k$ is busy pushing bytes, steps $1, \ldots, k{-}1$ sit idle (they finished their part of the transfer several slots ago, but there's nothing queued for them to do). If we could keep every step busy at once, the whole algorithm would finish in roughly the time of *one* step's work regardless of $L$. Pipelining is the trick that makes that happen.
 
 ### C.2 The conveyor idea and space-time diagram
 
@@ -1556,7 +1556,7 @@ $$t_{\mathrm{pipe}}(P) = (L + P - 1)\left(\alpha + \frac{M/P}{\mathrm{BW}}\right
 
 To see *where the $L$ factor goes*, expand the bandwidth piece. Using $(L{+}P{-}1)/P = 1 + (L{-}1)/P$:
 
-$$t_{\mathrm{pipe}}(P) \;=\; \underbrace{(L + P - 1)\,\alpha}_{\substack{\text{hop count}\\ L\alpha\,+\,(P-1)\alpha\\ \text{extra handshakes for fill/drain}}} \;+\; \underbrace{\frac{M}{\mathrm{BW}}}_{\substack{\text{steady-state BW}\\ \text{(saturates at 1}\cdot M/\mathrm{BW}\text{)}}} \;+\; \underbrace{\frac{(L - 1)\,M}{P\,\mathrm{BW}}}_{\substack{\text{fill+drain overhead}\\ \text{(shrinks like }1/P\text{)}}}$$
+$$t_{\mathrm{pipe}}(P) \\;=\\; \underbrace{(L + P - 1)\\,\alpha}_{\substack{\text{hop count}\\\\ L\alpha\\,+\\,(P-1)\alpha\\\\ \text{extra handshakes for fill/drain}}} \\;+\\; \underbrace{\frac{M}{\mathrm{BW}}}_{\substack{\text{steady-state BW}\\\\ \text{(saturates at 1}\cdot M/\mathrm{BW}\text{)}}} \\;+\\; \underbrace{\frac{(L - 1)\\,M}{P\\,\mathrm{BW}}}_{\substack{\text{fill+drain overhead}\\\\ \text{(shrinks like }1/P\text{)}}}$$
 
 Three things to notice:
 
@@ -1567,17 +1567,17 @@ Three things to notice:
 **Sanity check with numbers.** Set $L = 3$.
 
 - **Non-pipelined** ($P = 1$): cost $= 3\alpha + 3M/\mathrm{BW}$. BW coefficient 3.
-- **Pipelined with $P = 3$**: $5\alpha + M/\mathrm{BW} + (2/3)M/\mathrm{BW} = 5\alpha + 1.67\,M/\mathrm{BW}$. BW coefficient dropped from 3 to 1.67 at the cost of 2 extra handshakes.
-- **Pipelined with $P = 10$**: $12\alpha + M/\mathrm{BW} + 0.2\,M/\mathrm{BW} = 12\alpha + 1.2\,M/\mathrm{BW}$. Within 20 % of the asymptotic floor, at the cost of 9 extra handshakes.
+- **Pipelined with $P = 3$**: $5\alpha + M/\mathrm{BW} + (2/3)M/\mathrm{BW} = 5\alpha + 1.67\\,M/\mathrm{BW}$. BW coefficient dropped from 3 to 1.67 at the cost of 2 extra handshakes.
+- **Pipelined with $P = 10$**: $12\alpha + M/\mathrm{BW} + 0.2\\,M/\mathrm{BW} = 12\alpha + 1.2\\,M/\mathrm{BW}$. Within 20 % of the asymptotic floor, at the cost of 9 extra handshakes.
 - **$P \to \infty$**: cost $\to \infty \cdot \alpha + M/\mathrm{BW}$. Asymptotic BW is achieved, but latency has exploded — clearly past the optimum.
 
 **Optimal segmentation.** Minimize by differentiating with respect to $P$ (continuous approximation):
 
-$$\frac{dt_{\mathrm{pipe}}}{dP} \;=\; \alpha \;-\; \frac{(L - 1)\,M}{P^2\,\mathrm{BW}} \;=\; 0 \quad\Longrightarrow\quad P^{*} \;=\; \sqrt{\frac{(L - 1)\,M}{\alpha\,\mathrm{BW}}}$$
+$$\frac{dt_{\mathrm{pipe}}}{dP} \\;=\\; \alpha \\;-\\; \frac{(L - 1)\\,M}{P^2\\,\mathrm{BW}} \\;=\\; 0 \quad\Longrightarrow\quad P^{*} \\;=\\; \sqrt{\frac{(L - 1)\\,M}{\alpha\\,\mathrm{BW}}}$$
 
 Substituting back:
 
-$$t_{\mathrm{pipe}}(P^{*}) \;=\; L\,\alpha \;+\; \frac{M}{\mathrm{BW}} \;+\; 2\sqrt{\frac{(L - 1)\,\alpha\,M}{\mathrm{BW}}}$$
+$$t_{\mathrm{pipe}}(P^{*}) \\;=\\; L\\,\alpha \\;+\\; \frac{M}{\mathrm{BW}} \\;+\\; 2\sqrt{\frac{(L - 1)\\,\alpha\\,M}{\mathrm{BW}}}$$
 
 The square-root correction grows as $\sqrt{M}$ — much slower than the original $LM/\mathrm{BW}$ or the floor $M/\mathrm{BW}$. The punch line:
 
@@ -1629,7 +1629,7 @@ The algorithms elsewhere in this note invoke the above construction with the fol
 | Binomial tree BC (§3.2) | $\lceil\log_2 N\rceil$ | tree parent + up to $\lceil\log_2 N\rceil$ children at root; $\leq 2$ at interior | yes at interior; root fan-out needs $\lceil\log_2 N\rceil$ ports for full pipeline | $M/\mathrm{BW}$ interior-limited; root bound by port count |
 | Binomial tree Reduce (§4.2) | $\lceil\log_2 N\rceil$ | same as BC (time-reverse dual) | same | $M/\mathrm{BW}$ |
 | Ring AR (§5.1) | $2(N-1)$ | 2 neighbor links throughout | yes — intrinsically pipelined with $P = N$ | $2(N-1)/N \cdot M/\mathrm{BW}$ |
-| Double binary tree AR (§5.2) | $2\lceil\log_2 N\rceil$ | $\leq 3$ (interior in one tree + leaf in sibling) | yes on any 3+ port tier | near $2\,M/\mathrm{BW}$ in practice |
+| Double binary tree AR (§5.2) | $2\lceil\log_2 N\rceil$ | $\leq 3$ (interior in one tree + leaf in sibling) | yes on any 3+ port tier | near $2\\,M/\mathrm{BW}$ in practice |
 | Plain recursive doubling AR (App. B.1) | $\lceil\log_2 N\rceil$ | $\lceil\log_2 N\rceil$ distinct partners | **no** at $N = 512$ (9 partners vs 2–8 ports) | does not improve — collapses to $\log_2 N \cdot M/\mathrm{BW}$ |
 | Rabenseifner AR (App. B.2) | $2\lceil\log_2 N\rceil$ | $\lceil\log_2 N\rceil$ distinct partners per phase | **no** at typical $N$ | does not improve — collapses to $2(N-1)/N \cdot M/\mathrm{BW}$ |
 
@@ -1665,7 +1665,7 @@ where $C_{\mathrm{primitive}}(N)$ is the algorithm's $n_\beta$ coefficient (§1)
 | A2A | $(N-1)/N$ | each rank's one $(N-1)/N$ of its payload goes off-rank |
 | Reduce | 1 | only the root's final accumulator link matters |
 
-Example: on an $N = 100$ AR measurement with algbw $= 450\,\mathrm{GB/s}$, busbw $= 450 \cdot 2 \cdot 99/100 \approx 891\,\mathrm{GB/s}$ — which is the number to compare directly against the fabric's peak link BW to judge algorithmic efficiency.
+Example: on an $N = 100$ AR measurement with algbw $= 450\\,\mathrm{GB/s}$, busbw $= 450 \cdot 2 \cdot 99/100 \approx 891\\,\mathrm{GB/s}$ — which is the number to compare directly against the fabric's peak link BW to judge algorithmic efficiency.
 
 **Why both metrics coexist — and when to use which.** algbw is the right number for performance modeling: step time is (compute + communication), and the communication term is $M / \mathrm{algbw}$. busbw is the right number for diagnosing *whether the fabric ceiling is reached*: it normalizes out the algorithm's structural $n_\beta$ factor (e.g., AR's 2× from the RS + AG decomposition) so the resulting number is directly comparable across primitives to the fabric's peak link BW. A collective whose busbw equals peak link BW has hit the fabric ceiling; one whose busbw is well below peak has headroom that a better algorithm or better placement might recover.
 

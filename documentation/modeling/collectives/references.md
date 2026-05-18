@@ -129,5 +129,5 @@ The following equations and empirical values were independently verified (not ju
 
 ### Known numerical caveats (documented in-line)
 
-- The $\alpha$ values used in worked examples ($\alpha = 0.5\,\mu$s intra-NVLink, $\alpha \approx 1\,\mu$s inter-domain) are order-of-magnitude estimates consistent with NVSwitch cut-through (~100 ns) + endpoint software floor (~800 ns). Exact values depend on the NCCL path chosen at runtime; the model's conclusions are robust to $\pm 2\times$ variation on $\alpha$ because the bandwidth term dominates for $M \geq$ few hundred KB.
+- The $\alpha$ values used in worked examples ($\alpha = 0.5\\,\mu$s intra-NVLink, $\alpha \approx 1\\,\mu$s inter-domain) are order-of-magnitude estimates consistent with NVSwitch cut-through (~100 ns) + endpoint software floor (~800 ns). Exact values depend on the NCCL path chosen at runtime; the model's conclusions are robust to $\pm 2\times$ variation on $\alpha$ because the bandwidth term dominates for $M \geq$ few hundred KB.
 - The A2A on star entries in `02_topology_mapping.md` §2.5 and §5.1 use the per-rank pairwise direct-send formula (NVSwitch aggregate bisection saturated), appropriate for MoE workloads where all ranks participate simultaneously.

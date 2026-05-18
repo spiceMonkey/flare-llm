@@ -51,7 +51,7 @@ Both sources show up in the cost model as a combination of "more $\alpha$" and "
 
 The cost formulas in `02_topology_mapping.md` and the realistic discounts in this note are both computed via the same technique: **bottleneck analysis**. Identify the link (or group of links) carrying the most bytes during a collective operation, and compute the time to drain it as
 
-$$t_{\mathrm{BW}} \;=\; \frac{\text{bytes through the bottleneck}}{\text{bottleneck throughput}}$$
+$$t_{\mathrm{BW}} \\;=\\; \frac{\text{bytes through the bottleneck}}{\text{bottleneck throughput}}$$
 
 This works because the operation isn't complete until every byte has reached its destination — the most-loaded link is the last to finish, and every other (lighter-loaded) link has already completed by the time it's done. The bottleneck's load and throughput therefore set wall-clock BW time; any scheduling trick that doesn't reduce the bottleneck's load doesn't reduce this time. See `02_topology_mapping.md §3.6` for the concrete derivation on torus A2A.
 
@@ -73,11 +73,11 @@ These are unavoidable without different silicon or different fabric architecture
 
 ### 2.1 Link BW utilization ceiling
 
-Nominal per-link bandwidth is set by pin count $\times$ signaling rate, but the fraction a collective actually sees is discounted by framing overheads, endpoint DMA efficiency, and flow-control headroom required to keep the link from stalling. NCCL-tests on an H100 NVLink4 node measures AR busbw $\approx 360\,\mathrm{GB/s}$ against $450\,\mathrm{GB/s}$ raw unidirectional link BW — a baseline $\eta_\beta \approx 0.80$ that shows up *without any concurrency at all*. This is the floor the software stack cannot beat: even a single TP AR on an otherwise-idle node pays it.
+Nominal per-link bandwidth is set by pin count $\times$ signaling rate, but the fraction a collective actually sees is discounted by framing overheads, endpoint DMA efficiency, and flow-control headroom required to keep the link from stalling. NCCL-tests on an H100 NVLink4 node measures AR busbw $\approx 360\\,\mathrm{GB/s}$ against $450\\,\mathrm{GB/s}$ raw unidirectional link BW — a baseline $\eta_\beta \approx 0.80$ that shows up *without any concurrency at all*. This is the floor the software stack cannot beat: even a single TP AR on an otherwise-idle node pays it.
 
 ### 2.2 Switch/fabric congestion under load
 
-Wormhole / cut-through routing keeps per-message BW close to peak once a path is established. Queue delay, not per-hop latency, is what inflates under load: as fabric utilization crosses $\sim 80\%$, head-of-line blocking and arbitration delay at each switch grow super-linearly. Effective $\alpha$ per message can double or triple when the fabric carries multiple concurrent traffic classes — training mixes gradient AR with activation AG/RS and DP AR; inference mixes TP AR with KV streaming and scheduler messages; HPC mixes MPI collectives with RDMA p2p. The α-β model doesn't price this implicitly, so congestion shows up as $\eta_\alpha > 1$.
+Wormhole / cut-through routing keeps per-message BW close to peak once a path is established. Queue delay, not per-hop latency, is what inflates under load: as fabric utilization crosses $\sim 80\\%$, head-of-line blocking and arbitration delay at each switch grow super-linearly. Effective $\alpha$ per message can double or triple when the fabric carries multiple concurrent traffic classes — training mixes gradient AR with activation AG/RS and DP AR; inference mixes TP AR with KV streaming and scheduler messages; HPC mixes MPI collectives with RDMA p2p. The α-β model doesn't price this implicitly, so congestion shows up as $\eta_\alpha > 1$.
 
 **Hierarchical specialization.** Multi-tier Clos and fat-tree fabrics typically oversubscribe upper tiers relative to leaves (e.g., 2:1 or 4:1 at the aggregation layer). When an upper-tier link saturates, credit-based flow control pushes backpressure into lower tiers — the same congestion mechanism, but per-tier $\eta$ treats tiers as independent and under-counts the coupling. Tight flow-controlled fabrics (InfiniBand, RoCE with PFC) violate the independence assumption; loose store-and-forward or timeout-based fabrics approximate it better. For scale-out INC paths (`04_in_network_collectives.md §2.2`), cross-tier coupling is what makes the $2k\alpha_\mathrm{switch}$ floor grow faster than the per-tier walk under saturation.
 
@@ -89,7 +89,7 @@ These are fixable in the scheduler — different rank layout, different group pl
 
 ### 3.1 Off-prefix group layouts
 
-Torus dim-decomp AR hits $n_\alpha = 2 \sum (D_i - 1)$ only when the collective group's ranks are contiguous along dim prefixes. A group of 16 ranks on an $8 \times 8 \times 8$ torus where the ranks are $\{(0,0,0), (1,0,0), \ldots, (7,0,0), (0,1,0), \ldots\}$ is prefix-contiguous along dim-0 — the algorithm runs as a single 8-ring.
+Torus dim-decomp AR hits $n_\alpha = 2 \sum (D_i - 1)$ only when the collective group's ranks are contiguous along dim prefixes. A group of 16 ranks on an $8 \times 8 \times 8$ torus where the ranks are $\\{(0,0,0), (1,0,0), \ldots, (7,0,0), (0,1,0), \ldots\\}$ is prefix-contiguous along dim-0 — the algorithm runs as a single 8-ring.
 
 But SLURM-style scatter allocation, or a job that inherits a random-looking rank layout, produces groups where ranks are spread across dim coordinates. Each algorithmic hop becomes a multi-hop path in the physical topology. The formula degrades back to the flat-ring bound ($n_\alpha \approx 2(N-1)$), often 2-4× the ideal. This is a **scheduler choice**, not a hardware limit: prefix-aligned allocation policies exist, and when available they eliminate this penalty entirely.
 
@@ -148,7 +148,7 @@ The flat-scalar profile above (one $(\eta_\alpha, \eta_\beta)$ pair per fabric) 
 
 **Oversubscription upper-bounds upper-tier $\eta_\beta$.** A tier oversubscribed at ratio $s \geq 1$ (`03_hierarchical_topologies.md §1`) has aggregate upper-tier BW equal to $1/s$ of the aggregate downlink demand. Under uniform cross-tier traffic, every byte climbing the tier competes for that $1/s$-fraction of capacity, so the **realized $\eta_\beta$ at that tier is capped**:
 
-$$\eta_\beta^{\mathrm{upper\text{-}tier}} \;\leq\; \min\!\left(\eta_\beta^{\mathrm{hw\,floor}}, \; \frac{1}{s}\right)$$
+$$\eta_\beta^{\mathrm{upper\text{-}tier}} \\;\leq\\; \min\\!\left(\eta_\beta^{\mathrm{hw\\,floor}}, \\; \frac{1}{s}\right)$$
 
 The inequality binds at $1/s$ whenever $s$ drives the cap below the tier's hardware floor (e.g., $s = 2$ at a tier whose hardware floor would otherwise be $0.80$ caps realized $\eta_\beta$ at $0.50$). Below $1/s$ the actual value is further discounted by ECMP (Equal-Cost Multi-Path) hash collisions, queue-buildup arbitration, and tier-coupling backpressure. ECMP load-balances each flow across one of several equal-cost upper-tier paths by hashing the packet's 5-tuple (src/dst IP, src/dst port, protocol) — deterministic per flow (so packets within a flow stay in order), but when distinct flows hash to the same path they pile onto it and leave other equivalent paths idle. The $\alpha$ side gets an **additive** inflation $\eta_\alpha > 1$ from cross-tier queueing under load (§2.2), not from oversubscription directly — oversubscription is a BW lever.
 
@@ -162,13 +162,13 @@ The inequality binds at $1/s$ whenever $s$ drives the cap below the tier's hardw
 
 The leaf row matches the single-tier NVSwitch-class floor (§4.1's crossbar row) because per-endpoint BW is not oversubscribed. The spine row's $\eta_\beta$ is $\min(0.80, 1/s)$ — oversubscription dominates the hardware floor once $s > 1.25$. $\eta_\alpha^{\mathrm{spine}} = 1.10\text{–}1.30$ reflects cross-tier queueing at moderate load on credit-based flow control (InfiniBand) or PFC-configured Ethernet; the factor climbs to 2–3× as fabric utilization crosses 80%.
 
-**3-tier Clos.** A super-spine tier extends the table with a third row. If the super-spine is oversubscribed at $s_3$ independently of the spine-tier $s_2$, cross-pod BW compounds: $\eta_\beta^{\mathrm{cross\text{-}pod}} \leq \min(1/s_2, \, 1/s_3)$ when traffic crosses both tiers. Most production Clos fabrics oversubscribe only one tier (typically the super-spine at $s_3 \in \{2, 4\}$), keeping the leaf-spine tier at $s_2 = 1$ — which pins $\eta_\beta^{\mathrm{cross\text{-}pod}} \leq 1/s_3$.
+**3-tier Clos.** A super-spine tier extends the table with a third row. If the super-spine is oversubscribed at $s_3$ independently of the spine-tier $s_2$, cross-pod BW compounds: $\eta_\beta^{\mathrm{cross\text{-}pod}} \leq \min(1/s_2, \\, 1/s_3)$ when traffic crosses both tiers. Most production Clos fabrics oversubscribe only one tier (typically the super-spine at $s_3 \in \\{2, 4\\}$), keeping the leaf-spine tier at $s_2 = 1$ — which pins $\eta_\beta^{\mathrm{cross\text{-}pod}} \leq 1/s_3$.
 
 **Applying per-tier $\eta$ in the AR cost formula.** For the two-tier RS → sub-AR → AG decomposition from `03_hierarchical_topologies.md §2.1`, each phase uses its own tier's coefficients:
 
-$$t_{\mathrm{AR,realistic}} \;=\; \underbrace{t_{\mathrm{RS,inner}}\!\left(\tfrac{N}{L},\, M\right)}_{\text{at } (\eta_\alpha^{\mathrm{inner}},\, \eta_\beta^{\mathrm{inner}})} \;+\; \underbrace{t_{\mathrm{AR,outer}}\!\left(L,\, \tfrac{ML}{N}\right)}_{\text{at } (\eta_\alpha^{\mathrm{outer}},\, \eta_\beta^{\mathrm{outer}})} \;+\; \underbrace{t_{\mathrm{AG,inner}}\!\left(\tfrac{N}{L},\, M\right)}_{\text{at } (\eta_\alpha^{\mathrm{inner}},\, \eta_\beta^{\mathrm{inner}})}$$
+$$t_{\mathrm{AR,realistic}} \\;=\\; \underbrace{t_{\mathrm{RS,inner}}\\!\left(\tfrac{N}{L},\\, M\right)}_{\text{at } (\eta_\alpha^{\mathrm{inner}},\\, \eta_\beta^{\mathrm{inner}})} \\;+\\; \underbrace{t_{\mathrm{AR,outer}}\\!\left(L,\\, \tfrac{ML}{N}\right)}_{\text{at } (\eta_\alpha^{\mathrm{outer}},\\, \eta_\beta^{\mathrm{outer}})} \\;+\\; \underbrace{t_{\mathrm{AG,inner}}\\!\left(\tfrac{N}{L},\\, M\right)}_{\text{at } (\eta_\alpha^{\mathrm{inner}},\\, \eta_\beta^{\mathrm{inner}})}$$
 
-The `inner`/`outer` naming follows `03_hierarchical_topologies.md §1.2`. In a flat leaf-spine Clos (single GPUs attached directly to leaves), `inner` is intra-leaf (η table's leaf row) and `outer` is cross-leaf (aggregate cross-leaf row, capped by $\min(\eta_\beta^{\mathrm{hw}},\, 1/s)$). In a NVL72 + IB SuperPOD, `inner` is the intra-pod NVLink fabric and `outer` is the IB Clos itself, with the leaf/spine sub-tiers feeding into $\eta^{\mathrm{outer}}$.
+The `inner`/`outer` naming follows `03_hierarchical_topologies.md §1.2`. In a flat leaf-spine Clos (single GPUs attached directly to leaves), `inner` is intra-leaf (η table's leaf row) and `outer` is cross-leaf (aggregate cross-leaf row, capped by $\min(\eta_\beta^{\mathrm{hw}},\\, 1/s)$). In a NVL72 + IB SuperPOD, `inner` is the intra-pod NVLink fabric and `outer` is the IB Clos itself, with the leaf/spine sub-tiers feeding into $\eta^{\mathrm{outer}}$.
 
 SHARP at the spine tier of the outer Clos (`04_in_network_collectives.md §2.2`) replaces the middle term with an INC AR at $n_\alpha = 2k$ switch hops. The spine-row $\eta_\beta$ still applies because oversubscription limits the BW the switch ALU can forward between tiers — SHARP sidesteps the $\alpha$-side contention but not the tier-BW cap from $s$.
 
@@ -176,7 +176,7 @@ SHARP at the spine tier of the outer Clos (`04_in_network_collectives.md §2.2`)
 
 ## 5. Re-running $N = 512$ under realistic $\eta$
 
-Using the realistic profile from §4.1, re-run the AR ladder from `04_in_network_collectives.md §3.1` at $N = 512$, $M = 16\,\mathrm{MB}$, $\alpha = 0.5\,\mu$s, $\mathrm{BW} = 900\,\mathrm{GB/s}$. We score the optimized pairings on each fabric — DBT on star, dim-decomp on torus, NVLS-style INC on the hypothetical single-switch star from `04_in_network_collectives.md §3` — per the scope assumption in §1.
+Using the realistic profile from §4.1, re-run the AR ladder from `04_in_network_collectives.md §3.1` at $N = 512$, $M = 16\\,\mathrm{MB}$, $\alpha = 0.5\\,\mu$s, $\mathrm{BW} = 900\\,\mathrm{GB/s}$. We score the optimized pairings on each fabric — DBT on star, dim-decomp on torus, NVLS-style INC on the hypothetical single-switch star from `04_in_network_collectives.md §3` — per the scope assumption in §1.
 
 ### 5.1 Ideal vs realistic AR cost
 
@@ -188,9 +188,9 @@ Using the realistic profile from §4.1, re-run the AR ladder from `04_in_network
 
 ### 5.2 What changed
 
-- **Star + INC loses $\sim 16\,\mu$s** (86% increase — the largest *relative* penalty of the three). Its ideal BW term is already at the raw-link ceiling ($M / \mathrm{BW}$), so the $\eta_\beta = 0.52$ realization loss nearly doubles the wall-clock cost. Despite this, INC is still the fastest at 35 μs — ~1.5× ahead of star+DBT and ~2.4× ahead of torus.
-- **Star + DBT loses $\sim 8\,\mu$s** (18% increase). The BW-dominated cost is inflated by $\eta_\beta = 0.80$; $\alpha$ is unaffected. A flat penalty on an already small BW term.
-- **Torus loses $\sim 27\,\mu$s** (47% increase). Both $\eta_\alpha$ and $\eta_\beta$ hit it. The BW term goes from matching star (35.5 μs) to 65% worse (59.2 μs). The $\alpha$ term inflates 20%.
+- **Star + INC loses $\sim 16\\,\mu$s** (86% increase — the largest *relative* penalty of the three). Its ideal BW term is already at the raw-link ceiling ($M / \mathrm{BW}$), so the $\eta_\beta = 0.52$ realization loss nearly doubles the wall-clock cost. Despite this, INC is still the fastest at 35 μs — ~1.5× ahead of star+DBT and ~2.4× ahead of torus.
+- **Star + DBT loses $\sim 8\\,\mu$s** (18% increase). The BW-dominated cost is inflated by $\eta_\beta = 0.80$; $\alpha$ is unaffected. A flat penalty on an already small BW term.
+- **Torus loses $\sim 27\\,\mu$s** (47% increase). Both $\eta_\alpha$ and $\eta_\beta$ hit it. The BW term goes from matching star (35.5 μs) to 65% worse (59.2 μs). The $\alpha$ term inflates 20%.
 
 ### 5.3 Margin compression
 
@@ -206,7 +206,7 @@ The non-INC margins also compress: star+DBT vs torus goes from 45 vs 57 μs (~25
 
 ### 5.4 AG / RS and A2A under realistic $\eta$
 
-§5.1–§5.3 covered AR. Re-running the AG / RS and A2A ladders from `04_in_network_collectives.md §3.3` at the same anchor ($N = 512$, $M = 16\,\mathrm{MB}$, $\alpha = 0.5\,\mu$s, $\mathrm{BW} = 900\,\mathrm{GB/s}$) uses a different $\eta_\beta$ for the INC row than AR did: there is no switch-ALU on the AG / RS critical path (only multicast), so INC AG / RS inherits the crossbar-multicast baseline $\eta_\beta = 0.80$ rather than NVLS's 0.52. This is the coefficient-level reflection of the "no BW ceiling lift" structural point from `04_in_network_collectives.md §1.4`: INC AG / RS runs at the same realized BW as a well-scheduled software AG / RS on a full-duplex crossbar.
+§5.1–§5.3 covered AR. Re-running the AG / RS and A2A ladders from `04_in_network_collectives.md §3.3` at the same anchor ($N = 512$, $M = 16\\,\mathrm{MB}$, $\alpha = 0.5\\,\mu$s, $\mathrm{BW} = 900\\,\mathrm{GB/s}$) uses a different $\eta_\beta$ for the INC row than AR did: there is no switch-ALU on the AG / RS critical path (only multicast), so INC AG / RS inherits the crossbar-multicast baseline $\eta_\beta = 0.80$ rather than NVLS's 0.52. This is the coefficient-level reflection of the "no BW ceiling lift" structural point from `04_in_network_collectives.md §1.4`: INC AG / RS runs at the same realized BW as a well-scheduled software AG / RS on a full-duplex crossbar.
 
 **AG / RS.**
 

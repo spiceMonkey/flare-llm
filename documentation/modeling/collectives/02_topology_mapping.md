@@ -195,8 +195,8 @@ Full mesh (4 ranks):        2D mesh example: 4×4 = 16 ranks (no wraparound)
 
 **α and BW calibration on a scale-up star.** On NVLink-5 / NVSwitch Gen4 class hardware:
 
-- $\alpha \approx 0.5\,\mu$s — switch cut-through ($\sim$100 ns) plus endpoint software overhead ($\sim$400 ns). Each algorithm "hop" in the star primitive costs this $\alpha$, which already includes the physical 2-link endpoint→switch→endpoint traversal as a single cut-through event.
-- $\mathrm{BW} \approx 900\,\mathrm{GB/s}$ per direction per GPU — a single NVLink-5 port's unidirectional bandwidth. All cost formulas from the prior note use this as the per-port BW.
+- $\alpha \approx 0.5\\,\mu$s — switch cut-through ($\sim$100 ns) plus endpoint software overhead ($\sim$400 ns). Each algorithm "hop" in the star primitive costs this $\alpha$, which already includes the physical 2-link endpoint→switch→endpoint traversal as a single cut-through event.
+- $\mathrm{BW} \approx 900\\,\mathrm{GB/s}$ per direction per GPU — a single NVLink-5 port's unidirectional bandwidth. All cost formulas from the prior note use this as the per-port BW.
 
 ### 2.1 Broadcast
 
@@ -440,9 +440,9 @@ On a 3-ring, bidirectional completes in 1 α per dim because each rank's two rin
 
 **Cost formula.** Each dim-$i$ phase is a $d_i$-rank pipelined ring BC at cost $(d_i - 1)\alpha + M/\mathrm{BW}$ unidirectional or $\lfloor d_i/2 \rfloor \alpha + M/\mathrm{BW}$ bidirectional (`01_collective_algorithms.md` §3.1). With pipelining across the $k$ dim phases, the BW term telescopes into a single $M/\mathrm{BW}$ (each phase re-uses the payload pipelined in from the previous dim, so only the source-side dispatch bottleneck — one $M$-worth of bytes through one outbound port — lands on the wall clock):
 
-$$t_{\mathrm{torus,BC,ring}} \;\approx\; \sum_i (d_i - 1)\,\alpha \;+\; \frac{M}{\mathrm{BW}} \quad\text{(unidirectional)}$$
+$$t_{\mathrm{torus,BC,ring}} \\;\approx\\; \sum_i (d_i - 1)\\,\alpha \\;+\\; \frac{M}{\mathrm{BW}} \quad\text{(unidirectional)}$$
 
-$$t_{\mathrm{torus,BC,bidir}} \;\approx\; \sum_i \lfloor d_i / 2 \rfloor\,\alpha \;+\; \frac{M}{\mathrm{BW}} \quad\text{(bidirectional)}$$
+$$t_{\mathrm{torus,BC,bidir}} \\;\approx\\; \sum_i \lfloor d_i / 2 \rfloor\\,\alpha \\;+\\; \frac{M}{\mathrm{BW}} \quad\text{(bidirectional)}$$
 
 **Switch-hosted multicast (NVLS / SHARP) is structurally unavailable on torus** — there is no central switch to fan out from — so the α floor is purely software-driven, unlike star (§2.1) where INC collapses α to $2\alpha_{\mathrm{switch}}$.
 
@@ -575,9 +575,9 @@ The 2×2×2 worked example above uses $d_i = 2$ where bidirectional and unidirec
 
 **Cost formula.** Each dim-$i$ phase is a $d_i$-rank pipelined ring Reduce at cost $(d_i - 1)\alpha + M/\mathrm{BW}$ unidirectional or $\lfloor d_i/2 \rfloor \alpha + M/\mathrm{BW}$ bidirectional (`01_collective_algorithms.md` §4.1). Symmetric to BC (§3.2), the BW term telescopes to $M/\mathrm{BW}$ overall under pipelining:
 
-$$t_{\mathrm{torus,Reduce,ring}} \;\approx\; \sum_i (d_i - 1)\,\alpha \;+\; \frac{M}{\mathrm{BW}} \quad\text{(unidirectional)}$$
+$$t_{\mathrm{torus,Reduce,ring}} \\;\approx\\; \sum_i (d_i - 1)\\,\alpha \\;+\\; \frac{M}{\mathrm{BW}} \quad\text{(unidirectional)}$$
 
-$$t_{\mathrm{torus,Reduce,bidir}} \;\approx\; \sum_i \lfloor d_i / 2 \rfloor\,\alpha \;+\; \frac{M}{\mathrm{BW}} \quad\text{(bidirectional)}$$
+$$t_{\mathrm{torus,Reduce,bidir}} \\;\approx\\; \sum_i \lfloor d_i / 2 \rfloor\\,\alpha \\;+\\; \frac{M}{\mathrm{BW}} \quad\text{(bidirectional)}$$
 
 As with BC, the torus has no in-network ALU (ICI is link-only) — so the α floor is software-driven; the RS phase of the full torus AR (§3.4) stays the preferred path when every rank needs the result anyway, avoiding the Reduce+BC decomposition (see `01_collective_algorithms.md` §4.3).
 
@@ -783,24 +783,27 @@ AR complete: every rank holds $[\Sigma_0, \Sigma_1, \ldots, \Sigma_7]$. Total ph
 
 **Why AG reverses the RS dim order.** The pairing is what makes the cost derivation telescope cleanly. Phase 1 (X-RS) shrinks chunks by $d_x$; the matching Phase 6 (X-AG) grows them back by $d_x$. Phase 2 (Y-RS) shrinks by $d_y$; the matching Phase 5 (Y-AG) grows by $d_y$. Phase 3 (Z-RS) / Phase 4 (Z-AG) pair similarly. Each RS–AG pair moves the same total bytes per rank, and the per-phase BW term depends only on the chunk size at that phase. Running AG in a different dim order would still produce correct output — each dim's AG stage is a self-contained copy — but the chunk-size bookkeeping would not match up against the RS phases and the telescoping derivation below would be messier.
 
-**Cost formula — α-term derivation.** Each dim-$i$ phase runs a $d_i$-rank ring RS (or AG), whose ring-primitive α-cost from `01_collective_algorithms.md` §5.1 is $(d_i - 1)\,\alpha$: a $d_i$-rank ring takes $d_i - 1$ sequential neighbor-exchange steps to complete one full RS (or AG) traversal. The schedule runs $k$ RS phases followed by $k$ AG phases, each on its own dim's ring, so the total sequential α-hops is the sum over *all* $2k$ phases:
+**Cost formula — α-term derivation.** Each dim-$i$ phase runs a $d_i$-rank ring RS (or AG), whose ring-primitive α-cost from `01_collective_algorithms.md` §5.1 is $(d_i - 1)\\,\alpha$: a $d_i$-rank ring takes $d_i - 1$ sequential neighbor-exchange steps to complete one full RS (or AG) traversal. The schedule runs $k$ RS phases followed by $k$ AG phases, each on its own dim's ring, so the total sequential α-hops is the sum over *all* $2k$ phases:
 
-$$n_\alpha = \underbrace{\sum_{i=1}^{k} (d_i - 1)}_{\text{k RS phases}} \;+\; \underbrace{\sum_{i=1}^{k} (d_i - 1)}_{\text{k AG phases}} \;=\; 2 \sum_i (d_i - 1)$$
+$$n_\alpha = \underbrace{\sum_{i=1}^{k} (d_i - 1)}_{\text{k RS phases}} \\;+\\; \underbrace{\sum_{i=1}^{k} (d_i - 1)}_{\text{k AG phases}} \\;=\\; 2 \sum_i (d_i - 1)$$
 
-**Concrete counts** — the index $i$ ranges over the $k$ dims (for a 3D torus, $i \in \{1, 2, 3\}$ with $d_1, d_2, d_3$ the per-axis sizes):
+**Concrete counts** — the index $i$ ranges over the $k$ dims (for a 3D torus, $i \in \\{1, 2, 3\\}$ with $d_1, d_2, d_3$ the per-axis sizes):
 
 - **2×2×2 torus** ($k = 3$, all $d_i = 2$):
-  $$n_\alpha = \sum_{i=1}^{3}(2 - 1) \;+\; \sum_{i=1}^{3}(2 - 1) \;=\; 3 + 3 \;=\; 6$$
+  $$n_\alpha = \sum_{i=1}^{3}(2 - 1) \\;+\\; \sum_{i=1}^{3}(2 - 1) \\;=\\; 3 + 3 \\;=\\; 6$$
   (3 RS hops + 3 AG hops; matches the §3.1 savings comparison.)
 
-- **8×8×8 torus** ($k = 3$, all $d_i = 8$):
-  $$n_\alpha = \sum_{i=1}^{3}(8 - 1) \;+\; \sum_{i=1}^{3}(8 - 1) \;=\; 21 + 21 \;=\; 42$$
+- **4×4×4 torus — TPU v4 / v5p single-rack cube** ($N = 64$, $k = 3$, all $d_i = 4$):
+  $$n_\alpha = \sum_{i=1}^{3}(4 - 1) \\;+\\; \sum_{i=1}^{3}(4 - 1) \\;=\\; 9 + 9 \\;=\\; 18$$
 
-- **16×16×16 TPU v5p** ($k = 3$, all $d_i = 16$):
-  $$n_\alpha = \sum_{i=1}^{3}(16 - 1) \;+\; \sum_{i=1}^{3}(16 - 1) \;=\; 45 + 45 \;=\; 90$$
+- **8×8×8 torus — TPU v4 / v5p multi-rack pod slice** ($N = 512$, used as the canonical anchor in §5 and `05_contention_and_congestion.md` §6):
+  $$n_\alpha = \sum_{i=1}^{3}(8 - 1) \\;+\\; \sum_{i=1}^{3}(8 - 1) \\;=\\; 21 + 21 \\;=\\; 42$$
+
+- **16×16×16 — TPU v4 / v5p full pod** ($N = 4096$, $k = 3$, all $d_i = 16$):
+  $$n_\alpha = \sum_{i=1}^{3}(16 - 1) \\;+\\; \sum_{i=1}^{3}(16 - 1) \\;=\\; 45 + 45 \\;=\\; 90$$
 
 - **Asymmetric 16×16×4** ($k = 3$, $d_1 = d_2 = 16$, $d_3 = 4$):
-  $$n_\alpha = \big[(16-1) + (16-1) + (4-1)\big] + \big[(16-1) + (16-1) + (4-1)\big] \;=\; 33 + 33 \;=\; 66$$
+  $$n_\alpha = \big[(16-1) + (16-1) + (4-1)\big] + \big[(16-1) + (16-1) + (4-1)\big] \\;=\\; 33 + 33 \\;=\\; 66$$
 
 Note that phases are **sequential across dims** (X-RS waits for Y-RS to start; cannot overlap because the next phase's input is the current phase's output). The parallelism is **within** a phase — the $(N/d_i)$ independent dim-rings run concurrently on disjoint wiring (§3.1), which is what keeps the BW term bandwidth-optimal rather than inflating the α term.
 
@@ -816,15 +819,15 @@ The subtlety: $M'$ shrinks from phase to phase because each RS phase reduces the
 
 Summing the three RS phases:
 
-$$\text{RS BW term} \;=\; \frac{M}{\mathrm{BW}} \cdot \left( \frac{d_x - 1}{d_x} \;+\; \frac{d_y - 1}{d_x d_y} \;+\; \frac{d_z - 1}{d_x d_y d_z} \right)$$
+$$\text{RS BW term} \\;=\\; \frac{M}{\mathrm{BW}} \cdot \left( \frac{d_x - 1}{d_x} \\;+\\; \frac{d_y - 1}{d_x d_y} \\;+\\; \frac{d_z - 1}{d_x d_y d_z} \right)$$
 
 **Telescoping trick.** Rewrite each summand using $(d - 1)/d = 1 - 1/d$:
 
-$$\underbrace{\left(1 - \tfrac{1}{d_x}\right)}_{\text{phase 1}} \;+\; \underbrace{\left(\tfrac{1}{d_x} - \tfrac{1}{d_x d_y}\right)}_{\text{phase 2}} \;+\; \underbrace{\left(\tfrac{1}{d_x d_y} - \tfrac{1}{d_x d_y d_z}\right)}_{\text{phase 3}} \;=\; 1 - \tfrac{1}{d_x d_y d_z} \;=\; \frac{N - 1}{N}$$
+$$\underbrace{\left(1 - \tfrac{1}{d_x}\right)}_{\text{phase 1}} \\;+\\; \underbrace{\left(\tfrac{1}{d_x} - \tfrac{1}{d_x d_y}\right)}_{\text{phase 2}} \\;+\\; \underbrace{\left(\tfrac{1}{d_x d_y} - \tfrac{1}{d_x d_y d_z}\right)}_{\text{phase 3}} \\;=\\; 1 - \tfrac{1}{d_x d_y d_z} \\;=\\; \frac{N - 1}{N}$$
 
 Inner fractions cancel pairwise — $1/d_x$ from phase 1 cancels $1/d_x$ from phase 2's positive side; $1/(d_x d_y)$ cancels between phase 2 and phase 3 likewise. What survives is $1 - 1/N$. So:
 
-$$\text{RS BW term} \;=\; \frac{N - 1}{N} \cdot \frac{M}{\mathrm{BW}}$$
+$$\text{RS BW term} \\;=\\; \frac{N - 1}{N} \cdot \frac{M}{\mathrm{BW}}$$
 
 **AG contribution — same derivation in reverse.** AG phases run in reverse dim order (Z-AG → Y-AG → X-AG), each *growing* the chunk size by the paired dim's factor. Ring AG on a $d_i$-rank ring has BW cost $\frac{d_i - 1}{d_i} \cdot \frac{M'}{\mathrm{BW}}$, identical to RS but with $M'$ now the **per-rank output size at phase exit**. Chunk size evolves $M/N \to M/(d_x d_y) \to M/d_x \to M$ across the three AG phases. Per-AG-phase BW contribution:
 
@@ -836,25 +839,25 @@ $$\text{RS BW term} \;=\; \frac{N - 1}{N} \cdot \frac{M}{\mathrm{BW}}$$
 
 Summing the three AG phases:
 
-$$\text{AG BW term} \;=\; \frac{M}{\mathrm{BW}} \cdot \left( \frac{d_z - 1}{d_x d_y d_z} \;+\; \frac{d_y - 1}{d_x d_y} \;+\; \frac{d_x - 1}{d_x} \right)$$
+$$\text{AG BW term} \\;=\\; \frac{M}{\mathrm{BW}} \cdot \left( \frac{d_z - 1}{d_x d_y d_z} \\;+\\; \frac{d_y - 1}{d_x d_y} \\;+\\; \frac{d_x - 1}{d_x} \right)$$
 
 These are the **same three summands as the RS sum** (just indexed in reverse), so the same telescoping collapse applies. Using $(d - 1)/d = 1 - 1/d$:
 
-$$\underbrace{\left(\tfrac{1}{d_x d_y} - \tfrac{1}{d_x d_y d_z}\right)}_{\text{phase 4}} \;+\; \underbrace{\left(\tfrac{1}{d_x} - \tfrac{1}{d_x d_y}\right)}_{\text{phase 5}} \;+\; \underbrace{\left(1 - \tfrac{1}{d_x}\right)}_{\text{phase 6}} \;=\; 1 - \tfrac{1}{N} \;=\; \frac{N - 1}{N}$$
+$$\underbrace{\left(\tfrac{1}{d_x d_y} - \tfrac{1}{d_x d_y d_z}\right)}_{\text{phase 4}} \\;+\\; \underbrace{\left(\tfrac{1}{d_x} - \tfrac{1}{d_x d_y}\right)}_{\text{phase 5}} \\;+\\; \underbrace{\left(1 - \tfrac{1}{d_x}\right)}_{\text{phase 6}} \\;=\\; 1 - \tfrac{1}{N} \\;=\\; \frac{N - 1}{N}$$
 
 Same pairwise cancellation as RS — $1/d_x$ between phases 5 and 6, $1/(d_x d_y)$ between phases 4 and 5, with $1$ and $-1/N$ surviving. So:
 
-$$\text{AG BW term} \;=\; \frac{N - 1}{N} \cdot \frac{M}{\mathrm{BW}}$$
+$$\text{AG BW term} \\;=\\; \frac{N - 1}{N} \cdot \frac{M}{\mathrm{BW}}$$
 
 **RS and AG are BW-symmetric by construction**: each AG phase moves the same total bytes per rank as its paired RS phase (phase 4 mirrors phase 3, phase 5 mirrors phase 2, phase 6 mirrors phase 1). The byte-count match is why the two sums evaluate to the same $(N-1)/N \cdot M / \mathrm{BW}$. Combined:
 
-$$\text{Total BW term} \;=\; \underbrace{\frac{N-1}{N} \cdot \frac{M}{\mathrm{BW}}}_{\text{RS}} \;+\; \underbrace{\frac{N-1}{N} \cdot \frac{M}{\mathrm{BW}}}_{\text{AG}} \;=\; 2 \cdot \frac{N-1}{N} \cdot \frac{M}{\mathrm{BW}}$$
+$$\text{Total BW term} \\;=\\; \underbrace{\frac{N-1}{N} \cdot \frac{M}{\mathrm{BW}}}_{\text{RS}} \\;+\\; \underbrace{\frac{N-1}{N} \cdot \frac{M}{\mathrm{BW}}}_{\text{AG}} \\;=\\; 2 \cdot \frac{N-1}{N} \cdot \frac{M}{\mathrm{BW}}$$
 
 This is the flat-ring bandwidth-optimal floor, unchanged by dim-decomposition.
 
 **Final cost formula**:
 
-$$t_{\mathrm{torus,AR}} \;=\; 2 \sum_i (d_i - 1)\,\alpha \;+\; 2 \cdot \frac{N-1}{N} \cdot \frac{M}{\mathrm{BW}}, \quad N = \prod_i d_i$$
+$$t_{\mathrm{torus,AR}} \\;=\\; 2 \sum_i (d_i - 1)\\,\alpha \\;+\\; 2 \cdot \frac{N-1}{N} \cdot \frac{M}{\mathrm{BW}}, \quad N = \prod_i d_i$$
 
 **Concrete BW counts** (AR BW term $= 2 \cdot (N-1)/N \cdot M / \mathrm{BW}$):
 
@@ -883,7 +886,7 @@ The caveat is scoped to **floating-point** only. Integer reductions — quantize
 
 **Cost formula.** Cost halves vs §3.4 because only one half (RS or AG) runs:
 
-$$t_{\mathrm{torus,AG\,or\,RS,ring}} = \sum_i (d_i - 1)\,\alpha + \frac{N-1}{N} \cdot \frac{M}{\mathrm{BW}}$$
+$$t_{\mathrm{torus,AG\\,or\\,RS,ring}} = \sum_i (d_i - 1)\\,\alpha + \frac{N-1}{N} \cdot \frac{M}{\mathrm{BW}}$$
 
 **Commercial shipment.** Dim-decomposed ring AG and RS ship on the same production torus stacks as the AR variant in §3.4: TPU via XLA / JAX, Trn2 via NeuronX CCL. The Rabenseifner-per-dim variant (Appendix A) is not shipped as an AG / RS kernel for the reasons discussed there.
 
@@ -980,17 +983,17 @@ Focus on `b→c` (direct cut at $y=0$, L→R direction). Under uniform shortest-
 | 7 | $b \to k$ | $b \to c \to g \to k$ | 3 |
 | 8 | $b \to o$ | $b \to c \to o$ *(Y-wrap on last hop)* | 2 |
 
-Each chunk uses `b→c` once for $M/(16\,\mathrm{BW})$. With 8 back-to-back re-uses:
+Each chunk uses `b→c` once for $M/(16\\,\mathrm{BW})$. With 8 back-to-back re-uses:
 
-$$t_{\mathrm{BW}} \;=\; 8 \cdot \frac{M}{16\,\mathrm{BW}} \;=\; \frac{M}{2\,\mathrm{BW}}$$
+$$t_{\mathrm{BW}} \\;=\\; 8 \cdot \frac{M}{16\\,\mathrm{BW}} \\;=\\; \frac{M}{2\\,\mathrm{BW}}$$
 
-Appendix D.3 derives the same result via the equivalent aggregate whole-cut view (4M cross-cut bytes / $8\,\mathrm{BW}$) and contrasts both against per-chunk-per-step reasoning.
+Appendix D.3 derives the same result via the equivalent aggregate whole-cut view (4M cross-cut bytes / $8\\,\mathrm{BW}$) and contrasts both against per-chunk-per-step reasoning.
 
 **Generalizing to arbitrary torus shape.** Extending the whole-cut view to arbitrary $d_i$, the BW term scales to $d_{\max}/8 \cdot M/\mathrm{BW}$. Appendix D.3 tracks how each of the three whole-cut quantities (severed-link count, cross-cut traffic, cut throughput) scales with $N$ and $d_{\max}$, and derives this formula.
 
 **General cost formula.** Combining the BW term with the α-term (one full ring-relay traversal across the diameter):
 
-$$t_{\mathrm{torus,A2A}} \;\approx\; \mathrm{diam} \cdot \alpha \;+\; \frac{d_{\max}}{8} \cdot \frac{M}{\mathrm{BW}}, \qquad \mathrm{diam} = \sum_i \lfloor d_i / 2 \rfloor$$
+$$t_{\mathrm{torus,A2A}} \\;\approx\\; \mathrm{diam} \cdot \alpha \\;+\\; \frac{d_{\max}}{8} \cdot \frac{M}{\mathrm{BW}}, \qquad \mathrm{diam} = \sum_i \lfloor d_i / 2 \rfloor$$
 
 The bandwidth term scales with $d_{\max}$ — *not* $N$. On star (the pairwise-direct baseline from `01_collective_algorithms.md` §7.2) the equivalent BW term is $(N-1)/N \cdot M/\mathrm{BW} \approx M/\mathrm{BW}$; the torus-vs-star penalty is therefore $d_{\max}/8$.
 
@@ -998,7 +1001,7 @@ The bandwidth term scales with $d_{\max}$ — *not* $N$. On star (the pairwise-d
 
 **Dim-decomposed A2A — alternative schedule.** Running $k$ successive per-dim A2As (§3.1-style decomposition, with bidirectional ring-relay A2A as the per-dim primitive — each phase runs A2A on every $d_i$-ring in parallel, using dim-$i$ wiring alone) gives the approximate cost
 
-$$t_{\mathrm{torus,A2A,decomp}} \;\approx\; \mathrm{diam} \cdot \alpha \;+\; \frac{\sum_i d_i}{8} \cdot \frac{M}{\mathrm{BW}}$$
+$$t_{\mathrm{torus,A2A,decomp}} \\;\approx\\; \mathrm{diam} \cdot \alpha \\;+\\; \frac{\sum_i d_i}{8} \cdot \frac{M}{\mathrm{BW}}$$
 
 — per-rank holding stays $M$ across phases (data redistributes without changing total per-rank volume), so each phase costs $\lfloor d_i/2 \rfloor \alpha + d_i/8 \cdot M/\mathrm{BW}$ and the $k$ phases sum sequentially. The α-term matches flat's $\mathrm{diam} \cdot \alpha$; the BW-term is worse than flat's $d_{\max}/8$ by factor $(\sum_i d_i) / d_{\max}$ — ${\sim}k\times$ on a cubic $k$-D torus — because dim-decomposed idles $k{-}1$ dims' wiring per phase while flat uses all dims concurrently via shortest-arc routing.
 
@@ -1028,11 +1031,11 @@ Full mesh replaces the central switch with $N(N-1)/2$ direct edges, one per rank
 
 **Example — ring AR.** The `01_collective_algorithms.md` §5.1 ring-AR cost
 
-$$t_{\mathrm{ring\,AR}} = 2(N-1)\,\alpha + 2\,\frac{N-1}{N}\cdot\frac{M}{\mathrm{BW}}$$
+$$t_{\mathrm{ring\\,AR}} = 2(N-1)\\,\alpha + 2\\,\frac{N-1}{N}\cdot\frac{M}{\mathrm{BW}}$$
 
 maps onto full mesh as
 
-$$t_{\mathrm{mesh,\,ring\,AR}} = 2(N-1)\,\alpha_{\mathrm{link}} + 2\,\frac{N-1}{N}\cdot\frac{M}{\mathrm{BW}}$$
+$$t_{\mathrm{mesh,\\,ring\\,AR}} = 2(N-1)\\,\alpha_{\mathrm{link}} + 2\\,\frac{N-1}{N}\cdot\frac{M}{\mathrm{BW}}$$
 
 Same formula; only α changes (switch cut-through term drops, leaving pure PHY-to-PHY link latency). Every other algorithm substitutes the same way — no topology correction beyond this α calibration.
 
@@ -1055,7 +1058,7 @@ A $k$-D mesh is a torus **without** the wraparound edges. The torus neighbor for
 
 **Algorithm coverage — what transfers from torus (§3).** The dim-decomposition framework (§3.1) and every per-primitive derivation in §3.2–§3.6 port over directly with "open $d_i$-line" substituted for "$d_i$-ring" as the per-dim inner primitive. Bucket-brigade RS/AG on an open line has the same α and BW as ring RS/AG (chunk-size telescoping is identical — each rank still sends $(d_i - 1)/d_i$ of its chunk per half); pipelined per-dim BC/Reduce inherit the same $\sum_i (d_i - 1)\alpha + M/\mathrm{BW}$ form. So the unidirectional torus formulas transfer verbatim:
 
-$$t_{\mathrm{mesh,AR}} = 2\sum_i (d_i - 1)\,\alpha + 2\,\frac{N-1}{N}\cdot\frac{M}{\mathrm{BW}}, \qquad t_{\mathrm{mesh,BC}} = t_{\mathrm{mesh,Reduce}} = \sum_i (d_i - 1)\,\alpha + \frac{M}{\mathrm{BW}}$$
+$$t_{\mathrm{mesh,AR}} = 2\sum_i (d_i - 1)\\,\alpha + 2\\,\frac{N-1}{N}\cdot\frac{M}{\mathrm{BW}}, \qquad t_{\mathrm{mesh,BC}} = t_{\mathrm{mesh,Reduce}} = \sum_i (d_i - 1)\\,\alpha + \frac{M}{\mathrm{BW}}$$
 
 (AG / RS are half of AR.) Like torus, mesh is link-only — no switch ASIC, so the INC paths from `01` §3.3 / §4.3 / §5.3 are unavailable.
 
@@ -1088,27 +1091,27 @@ Cost table for each (topology, primitive) pair at its dominant shipped algorithm
 
 | Topology | Primitive | Algorithm | Latency term | BW term | Shipped by |
 |---|---|---|---|---|---|
-| **Star** (§2) | BC | Binomial tree (pipelined) | $\lceil \log_2 N \rceil\,\alpha$ | $M/\mathrm{BW}$ | NCCL (default BC path) |
-|  | Reduce | Binomial tree (pipelined) | $\lceil \log_2 N \rceil\,\alpha$ | $M/\mathrm{BW}$ | NCCL (default Reduce path) |
-|  | AR | Double binary tree (pipelined) | $2\,\lceil \log_2 N \rceil\,\alpha$ | $M/\mathrm{BW}$ | NCCL (small–mid $M$) |
-|  | AR | Ring | $2(N{-}1)\,\alpha$ | $2(N{-}1)/N \cdot M/\mathrm{BW}$ | NCCL (bulk $M$) |
-|  | AG / RS | Ring | $(N{-}1)\,\alpha$ | $(N{-}1)/N \cdot M/\mathrm{BW}$ | NCCL |
-|  | A2A | Pairwise direct-send | $(N{-}1)\,\alpha$ | $(N{-}1)/N \cdot M/\mathrm{BW}$ | NCCL |
-| **Torus** (§3) | BC | Dim-decomp ring (bidirectional) | $\sum_i \lfloor d_i/2 \rfloor\,\alpha$ | $M/\mathrm{BW}$ | TPU, Trainium |
-|  | Reduce | Dim-decomp ring (bidirectional) | $\sum_i \lfloor d_i/2 \rfloor\,\alpha$ | $M/\mathrm{BW}$ | TPU, Trainium |
-|  | AR | Dim-decomp ring | $2 \sum_i (d_i{-}1)\,\alpha$ | $2(N{-}1)/N \cdot M/\mathrm{BW}$ | TPU (XLA / JAX), Trainium (NeuronX CCL) |
-|  | AG / RS | Dim-decomp ring | $\sum_i (d_i{-}1)\,\alpha$ | $(N{-}1)/N \cdot M/\mathrm{BW}$ | TPU, Trainium |
+| **Star** (§2) | BC | Binomial tree (pipelined) | $\lceil \log_2 N \rceil\\,\alpha$ | $M/\mathrm{BW}$ | NCCL (default BC path) |
+|  | Reduce | Binomial tree (pipelined) | $\lceil \log_2 N \rceil\\,\alpha$ | $M/\mathrm{BW}$ | NCCL (default Reduce path) |
+|  | AR | Double binary tree (pipelined) | $2\\,\lceil \log_2 N \rceil\\,\alpha$ | $M/\mathrm{BW}$ | NCCL (small–mid $M$) |
+|  | AR | Ring | $2(N{-}1)\\,\alpha$ | $2(N{-}1)/N \cdot M/\mathrm{BW}$ | NCCL (bulk $M$) |
+|  | AG / RS | Ring | $(N{-}1)\\,\alpha$ | $(N{-}1)/N \cdot M/\mathrm{BW}$ | NCCL |
+|  | A2A | Pairwise direct-send | $(N{-}1)\\,\alpha$ | $(N{-}1)/N \cdot M/\mathrm{BW}$ | NCCL |
+| **Torus** (§3) | BC | Dim-decomp ring (bidirectional) | $\sum_i \lfloor d_i/2 \rfloor\\,\alpha$ | $M/\mathrm{BW}$ | TPU, Trainium |
+|  | Reduce | Dim-decomp ring (bidirectional) | $\sum_i \lfloor d_i/2 \rfloor\\,\alpha$ | $M/\mathrm{BW}$ | TPU, Trainium |
+|  | AR | Dim-decomp ring | $2 \sum_i (d_i{-}1)\\,\alpha$ | $2(N{-}1)/N \cdot M/\mathrm{BW}$ | TPU (XLA / JAX), Trainium (NeuronX CCL) |
+|  | AG / RS | Dim-decomp ring | $\sum_i (d_i{-}1)\\,\alpha$ | $(N{-}1)/N \cdot M/\mathrm{BW}$ | TPU, Trainium |
 |  | A2A | Ring relay (bisection-bound) | $\mathrm{diam}\cdot\alpha$, $\mathrm{diam} = \sum_i \lfloor d_i/2 \rfloor$ | $(d_{\max}/8) \cdot M/\mathrm{BW}$ | TPU, Trainium |
-| **Full mesh** (§4.1) | BC | Binomial tree (pipelined) | $\lceil \log_2 N \rceil\,\alpha_{\mathrm{link}}$ | $M/\mathrm{BW}$ | Chiplet interposer (UCIe), DGX-1/2 hybrid cube-mesh (legacy), PCIe P2P |
-|  | Reduce | Binomial tree (pipelined) | $\lceil \log_2 N \rceil\,\alpha_{\mathrm{link}}$ | $M/\mathrm{BW}$ | same |
-|  | AR | Double binary tree (pipelined) | $2\,\lceil \log_2 N \rceil\,\alpha_{\mathrm{link}}$ | $M/\mathrm{BW}$ | same |
-|  | AR | Ring | $2(N{-}1)\,\alpha_{\mathrm{link}}$ | $2(N{-}1)/N \cdot M/\mathrm{BW}$ | same |
-|  | AG / RS | Ring | $(N{-}1)\,\alpha_{\mathrm{link}}$ | $(N{-}1)/N \cdot M/\mathrm{BW}$ | same |
-|  | A2A | Pairwise direct-send | $(N{-}1)\,\alpha_{\mathrm{link}}$ | $(N{-}1)/N \cdot M/\mathrm{BW}$ | same |
-| **k-D mesh** (§4.2) | BC | Dim-decomp open-line | $\sum_i (d_i{-}1)\,\alpha$ | $M/\mathrm{BW}$ | Chiplet HBM base-die, Xeon Phi KNL tile mesh |
-|  | Reduce | Dim-decomp open-line | $\sum_i (d_i{-}1)\,\alpha$ | $M/\mathrm{BW}$ | same |
-|  | AR | Dim-decomp open-line | $2 \sum_i (d_i{-}1)\,\alpha$ | $2(N{-}1)/N \cdot M/\mathrm{BW}$ | same |
-|  | AG / RS | Dim-decomp open-line | $\sum_i (d_i{-}1)\,\alpha$ | $(N{-}1)/N \cdot M/\mathrm{BW}$ | same |
+| **Full mesh** (§4.1) | BC | Binomial tree (pipelined) | $\lceil \log_2 N \rceil\\,\alpha_{\mathrm{link}}$ | $M/\mathrm{BW}$ | Chiplet interposer (UCIe), DGX-1/2 hybrid cube-mesh (legacy), PCIe P2P |
+|  | Reduce | Binomial tree (pipelined) | $\lceil \log_2 N \rceil\\,\alpha_{\mathrm{link}}$ | $M/\mathrm{BW}$ | same |
+|  | AR | Double binary tree (pipelined) | $2\\,\lceil \log_2 N \rceil\\,\alpha_{\mathrm{link}}$ | $M/\mathrm{BW}$ | same |
+|  | AR | Ring | $2(N{-}1)\\,\alpha_{\mathrm{link}}$ | $2(N{-}1)/N \cdot M/\mathrm{BW}$ | same |
+|  | AG / RS | Ring | $(N{-}1)\\,\alpha_{\mathrm{link}}$ | $(N{-}1)/N \cdot M/\mathrm{BW}$ | same |
+|  | A2A | Pairwise direct-send | $(N{-}1)\\,\alpha_{\mathrm{link}}$ | $(N{-}1)/N \cdot M/\mathrm{BW}$ | same |
+| **k-D mesh** (§4.2) | BC | Dim-decomp open-line | $\sum_i (d_i{-}1)\\,\alpha$ | $M/\mathrm{BW}$ | Chiplet HBM base-die, Xeon Phi KNL tile mesh |
+|  | Reduce | Dim-decomp open-line | $\sum_i (d_i{-}1)\\,\alpha$ | $M/\mathrm{BW}$ | same |
+|  | AR | Dim-decomp open-line | $2 \sum_i (d_i{-}1)\\,\alpha$ | $2(N{-}1)/N \cdot M/\mathrm{BW}$ | same |
+|  | AG / RS | Dim-decomp open-line | $\sum_i (d_i{-}1)\\,\alpha$ | $(N{-}1)/N \cdot M/\mathrm{BW}$ | same |
 |  | A2A | Ring relay (bisection halved) | $\mathrm{diam}\cdot\alpha$, $\mathrm{diam} = \sum_i (d_i{-}1)$ | $(d_{\max}/4) \cdot M/\mathrm{BW}$ | same |
 
 Six observations that the rest of this series builds on:
@@ -1117,7 +1120,7 @@ Six observations that the rest of this series builds on:
 2. **BC and Reduce hit the $M/\mathrm{BW}$ BW ceiling under pipelining, on every topology.** The entire topology-vs-topology gap for BC / Reduce lives in the α term: $\log_2 N$ (star tree), $\sum_i \lfloor d_i/2 \rfloor$ (bidirectional torus), $\sum_i (d_i{-}1)$ (open-line k-D mesh or unidirectional torus). The wraparound halves torus's α relative to same-shape k-D mesh; star's log-depth α beats both at any $N$ the switch can accommodate.
 3. **Torus pays a hard BW penalty on A2A under asymmetric shapes.** The $d_{\max}/8 \cdot M/\mathrm{BW}$ BW term has no algorithmic escape — it's set by the bisection cut, not by the schedule. At cubic $N^{1/k}$ per dim the penalty is $1\times$ (torus matches star's BW term exactly), but it scales linearly with $d_{\max}$ and reaches $32\times$ at $256 \times 2 \times 2$ — which is why torus pods aggressively reshape slices toward cubic layouts for MoE workloads.
 4. **k-D mesh is torus with a 2× A2A penalty.** For AR / AG / RS / BC / Reduce, k-D mesh's open-line substitutes for torus's ring with no change to the unidirectional α form ($\sum (d_i{-}1)\alpha$ either way) and no change to BW ($(N{-}1)/N \cdot M/\mathrm{BW}$ telescoping still holds on bucket brigade). For A2A, missing wraparound edges halve the bisection cut, so the BW term is $d_{\max}/4$ vs torus's $d_{\max}/8$ — exactly $2\times$ worse.
-5. **Tree-flavored algorithms ship on star but not on torus / mesh.** DBT is NCCL's default on switched fabrics and is selected by the tuner for small-$M$ AR; the structurally analogous dim-decomposed Rabenseifner variant on torus (Appendix A) is absent from both TPU and Trainium runtime stacks because the 1.5–4× α compression at production dim sizes $d_i \in \{4, 8, 16\}$ rarely beats the simpler ring kernel in practice. This is a fabric-economics decision, not a correctness one.
+5. **Tree-flavored algorithms ship on star but not on torus / mesh.** DBT is NCCL's default on switched fabrics and is selected by the tuner for small-$M$ AR; the structurally analogous dim-decomposed Rabenseifner variant on torus (Appendix A) is absent from both TPU and Trainium runtime stacks because the 1.5–4× α compression at production dim sizes $d_i \in \\{4, 8, 16\\}$ rarely beats the simpler ring kernel in practice. This is a fabric-economics decision, not a correctness one.
 6. **Star has an additional α-compression escape hatch via in-network collectives — direct-wired topologies (torus, full mesh, k-D mesh) do not.** Within a switched fabric, the reduction operation can move into the switch ASIC itself: switch-resident ALUs reduce flits on the fly and multicast the result back, collapsing $n_\alpha$ from $\log_2 N$ (DBT) all the way to $2$, independent of $N$. NVLS (NVSwitch), Quantum SHARP (InfiniBand fat-tree / Clos), and Tomahawk Ultra INC (Ethernet) all exploit this. Direct-wired topologies have no analogous path — the $N$-dependent $\alpha$ term comes from neighbor-router hops, which cannot be collapsed by moving the reduce into a central switch that does not exist. See `04_in_network_collectives.md` for the full mechanism and cost model.
 
 ### 5.2 Limitations
@@ -1145,20 +1148,20 @@ This appendix preserves the full derivation of the tree-flavored torus AR varian
 
 **Cost formula.** Summing $\lceil \log_2 d_i \rceil$ α hops per dim per half (RS or AG) and applying the same BW telescoping as §3.4:
 
-$$t_{\mathrm{torus,AR,Rab}} \;=\; 2 \sum_i \lceil \log_2 d_i \rceil\,\alpha + 2 \cdot \frac{N-1}{N} \cdot \frac{M}{\mathrm{BW}}, \quad N = \prod_i d_i$$
+$$t_{\mathrm{torus,AR,Rab}} \\;=\\; 2 \sum_i \lceil \log_2 d_i \rceil\\,\alpha + 2 \cdot \frac{N-1}{N} \cdot \frac{M}{\mathrm{BW}}, \quad N = \prod_i d_i$$
 
 For the AG / RS halves:
 
-$$t_{\mathrm{torus,AG\,or\,RS,Rab}} = \sum_i \lceil \log_2 d_i \rceil\,\alpha + \frac{N-1}{N} \cdot \frac{M}{\mathrm{BW}}$$
+$$t_{\mathrm{torus,AG\\,or\\,RS,Rab}} = \sum_i \lceil \log_2 d_i \rceil\\,\alpha + \frac{N-1}{N} \cdot \frac{M}{\mathrm{BW}}$$
 
-**Latency compression at $N = 512$.** For the $8 \times 8 \times 8$ layout: $\sum \lceil \log_2 d_i \rceil = 9$ hops, so $n_\alpha = 18$ for AR versus dim-decomp ring's 42 (2.3× compression) and flat ring's 1022 (57× compression). The marginal step from ring-per-dim (42) to Rabenseifner-per-dim (18) saves 24 α hops; at $\alpha = 0.5\,\mu$s that is 12 μs — meaningful at very small $M$, negligible once the BW term crosses a few tens of μs.
+**Latency compression at $N = 512$.** For the $8 \times 8 \times 8$ layout: $\sum \lceil \log_2 d_i \rceil = 9$ hops, so $n_\alpha = 18$ for AR versus dim-decomp ring's 42 (2.3× compression) and flat ring's 1022 (57× compression). The marginal step from ring-per-dim (42) to Rabenseifner-per-dim (18) saves 24 α hops; at $\alpha = 0.5\\,\mu$s that is 12 μs — meaningful at very small $M$, negligible once the BW term crosses a few tens of μs.
 
 **Why it does not ship on production torus fabrics.** Four constraints together:
 
-1. **Power-of-2 dim sizes required.** The halving-doubling schedule assumes $d_i$ is a power of 2 along each active dim. TPU v4 / v5p pods configured via OCS can choose $d_i \in \{2, 4, 8, 16\}$ per dim — compatible — but Trainium's fixed 2D-plus-Z 64-chip shape bakes in $d_i = \{4, 4, 4\}$. Any dim mismatch forces fallback to ring-per-dim for that dim, eroding the compression.
+1. **Power-of-2 dim sizes required.** The halving-doubling schedule assumes $d_i$ is a power of 2 along each active dim. TPU v4 / v5p pods configured via OCS can choose $d_i \in \\{2, 4, 8, 16\\}$ per dim — compatible — but Trainium's fixed 2D-plus-Z 64-chip shape bakes in $d_i = \\{4, 4, 4\\}$. Any dim mismatch forces fallback to ring-per-dim for that dim, eroding the compression.
 2. **Small per-dim $d_i$ limits the α savings.** At $d_i = 4$ the α compression is 1.5× (3 hops → 2); at $d_i = 8$ it is 2.3×. The $\log_2 d_i$ advantage only widens for large $d_i$, but production dim sizes top out around 16 because larger dims degrade A2A (§3.6 bisection-penalty scales as $d_{\max}$).
 3. **Kernel complexity dominates the α savings at bulk $M$.** Each halving-doubling step has butterfly-pattern neighbor exchange with doubling chunk size; mapping this onto the torus's fixed $2k$-neighbor wiring requires per-step chunk recomputation on the chip's reduce-engine. The ring kernel uses a single static schedule. For the $M \geq$ few hundred KB bulk regime where production workloads live, the BW term dominates and the extra hops the Rabenseifner variant saves do not pay for the kernel-complexity overhead.
-4. **α term is not on the critical path once BW dominates.** At $N = 512$, $\alpha = 0.5\,\mu$s, $\mathrm{BW} = 900\,\mathrm{GB/s}$, and $M = 16\,\mathrm{MB}$, the ring-per-dim AR cost is 21 μs α + 35.5 μs BW = 57 μs total; Rabenseifner-per-dim trims this to 9 μs α + 35.5 μs BW = 45 μs — a 21% saving on paper that is routinely erased by the kernel-complexity overhead in point 3.
+4. **α term is not on the critical path once BW dominates.** At $N = 512$, $\alpha = 0.5\\,\mu$s, $\mathrm{BW} = 900\\,\mathrm{GB/s}$, and $M = 16\\,\mathrm{MB}$, the ring-per-dim AR cost is 21 μs α + 35.5 μs BW = 57 μs total; Rabenseifner-per-dim trims this to 9 μs α + 35.5 μs BW = 45 μs — a 21% saving on paper that is routinely erased by the kernel-complexity overhead in point 3.
 
 This is a fabric-economics and software-simplicity decision, not a correctness one: dim-decomposed Rabenseifner-per-dim produces the same numerical result (up to floating-point ordering) as dim-decomposed ring, and either could be implemented on the same hardware. Production stacks ship the simpler ring-per-dim kernel because its α disadvantage is small at production dim sizes and its BW coefficient is exactly the same.
 
@@ -1301,7 +1304,7 @@ For ring RS on a $d$-rank ring, every rank sends one chunk per step through its 
 
 Total BW cost is computed **step by step**:
 
-$$t_{\mathrm{BW, ring\,RS}} = \sum_{\text{steps}} \frac{\text{chunk size at this step}}{\mathrm{BW}} \;=\; (d - 1) \cdot \frac{M/d}{\mathrm{BW}} \;=\; \frac{d - 1}{d} \cdot \frac{M}{\mathrm{BW}}$$
+$$t_{\mathrm{BW, ring\\,RS}} = \sum_{\text{steps}} \frac{\text{chunk size at this step}}{\mathrm{BW}} \\;=\\; (d - 1) \cdot \frac{M/d}{\mathrm{BW}} \\;=\\; \frac{d - 1}{d} \cdot \frac{M}{\mathrm{BW}}$$
 
 This works because the traffic is **lockstep symmetric** — no link is more loaded than any other, and summing per-step-per-rank costs captures the full BW cost. For dim-decomposed AR (§3.4), the same technique is applied per dim-phase with telescoping chunk sizes, summing to $(N-1)/N \cdot M/\mathrm{BW}$ across all phases.
 
@@ -1311,7 +1314,7 @@ For A2A ring-relay, chunks flow independently along shortest-arc paths across th
 
 Instead, identify the link (or group of links) carrying the most bytes over the whole phase and compute time to drain:
 
-$$t_{\mathrm{BW}} \;=\; \frac{\text{bytes through the bottleneck}}{\text{bottleneck throughput}}$$
+$$t_{\mathrm{BW}} \\;=\\; \frac{\text{bytes through the bottleneck}}{\text{bottleneck throughput}}$$
 
 **Why this works.** The phase ends only when every byte has reached its destination. The most-loaded link is the last to drain — lighter-loaded links finish earlier but don't reduce the phase time. Any scheduling trick that doesn't reduce the bottleneck's load doesn't reduce this time.
 
@@ -1327,7 +1330,7 @@ $$a \to b \to c \to g \to k$$
 
 Each hop moves a chunk of size $M/N = M/16$ at per-link $\mathrm{BW}$, so each hop's transit time is $M/(16 \cdot \mathrm{BW})$. Summed across all 4 hops:
 
-$$t_{a{\to}k\,\text{personal}} \;=\; 4 \cdot \frac{M}{16 \, \mathrm{BW}} \;=\; \frac{M}{4 \, \mathrm{BW}}$$
+$$t_{a{\to}k\\,\text{personal}} \\;=\\; 4 \cdot \frac{M}{16 \\, \mathrm{BW}} \\;=\\; \frac{M}{4 \\, \mathrm{BW}}$$
 
 This is **not** the phase time — after $a{\to}k$ arrives, the cut link that carried its cross-half hop is still busy serving other chunks.
 
@@ -1335,7 +1338,7 @@ This is **not** the phase time — after $a{\to}k$ arrives, the cut link that ca
 
 *Total cross-cut bytes, one direction.* Every left-half rank (8 of them) sends one chunk of size $M/N = M/16$ to every right-half rank (8 of them):
 
-$$\text{cross-cut bytes, L}\to\text{R} \;=\; \tfrac{N}{2} \cdot \tfrac{N}{2} \cdot \tfrac{M}{N} \;=\; 8 \cdot 8 \cdot \tfrac{M}{16} \;=\; 4M$$
+$$\text{cross-cut bytes, L}\to\text{R} \\;=\\; \tfrac{N}{2} \cdot \tfrac{N}{2} \cdot \tfrac{M}{N} \\;=\\; 8 \cdot 8 \cdot \tfrac{M}{16} \\;=\\; 4M$$
 
 *Byte-count is fixed by A2A semantics (not by routing).* A shortest-arc route from a left-half source to a right-half destination transitions halves exactly once — it uses exactly one cut edge, regardless of which shortest path is chosen. For $a{\to}k$, three equally-short routes exist; each uses exactly one cut hop:
 
@@ -1349,11 +1352,11 @@ $$\text{cross-cut bytes, L}\to\text{R} \;=\; \tfrac{N}{2} \cdot \tfrac{N}{2} \cd
 
 So all 4M cross-cut bytes pass through the 8 cut links exactly once, total — no scheduling trick reduces this.
 
-*Aggregate cut throughput, one direction.* 8 cut links × per-link $\mathrm{BW}$ per direction = $8\,\mathrm{BW}$. (Per-link BW is per-direction on a full-duplex link, as calibrated in §2; the symmetric R→L flow runs on the opposite channels of the same 8 links and drains concurrently.)
+*Aggregate cut throughput, one direction.* 8 cut links × per-link $\mathrm{BW}$ per direction = $8\\,\mathrm{BW}$. (Per-link BW is per-direction on a full-duplex link, as calibrated in §2; the symmetric R→L flow runs on the opposite channels of the same 8 links and drains concurrently.)
 
 *Divide:*
 
-$$t_{\mathrm{BW}} \;=\; \frac{4M}{8\,\mathrm{BW}} \;=\; \frac{M}{2\,\mathrm{BW}}$$
+$$t_{\mathrm{BW}} \\;=\\; \frac{4M}{8\\,\mathrm{BW}} \\;=\\; \frac{M}{2\\,\mathrm{BW}}$$
 
 **(3) Bottleneck analysis — single-link view** (zoom in on one cut link's busy-time). Focus on `b→c` (direct cut at $y=0$, L→R direction). Under uniform shortest-path routing, the 64 cross-cut chunks distribute across the 8 cut links → 8 chunks per cut link. The 8 chunks passing through `b→c` under X-first routing from row $y=0$ to the $x=2$ column:
 
@@ -1370,7 +1373,7 @@ $$t_{\mathrm{BW}} \;=\; \frac{4M}{8\,\mathrm{BW}} \;=\; \frac{M}{2\,\mathrm{BW}}
 
 Each chunk uses `b→c` exactly **once** somewhere in its journey (position doesn't matter for the BW arithmetic — only total occupancy does). Each use costs $M/(16 \cdot \mathrm{BW})$. Total occupancy:
 
-$$t_{b{\to}c\,\text{occupancy}} \;=\; 8 \cdot \frac{M}{16 \, \mathrm{BW}} \;=\; \frac{M}{2 \, \mathrm{BW}}$$
+$$t_{b{\to}c\\,\text{occupancy}} \\;=\\; 8 \cdot \frac{M}{16 \\, \mathrm{BW}} \\;=\\; \frac{M}{2 \\, \mathrm{BW}}$$
 
 (2) and (3) agree, as they must for a symmetric torus where every cut link carries the same load — cut-wide average = any-one-link occupancy.
 
@@ -1383,18 +1386,18 @@ $$t_{b{\to}c\,\text{occupancy}} \;=\; 8 \cdot \frac{M}{16 \, \mathrm{BW}} \;=\; 
 | Severed-link count | 8 | $2N / d_{\max}$ (2 links per dim-line × $N/d_{\max}$ dim-lines across the cut) |
 | Cross-cut chunks (one direction) | 64 | $(N/2) \cdot (N/2) = N^2/4$ |
 | Cross-cut bytes (one direction) | $4M$ | $(N^2/4) \cdot (M/N) = NM/4$ |
-| Cut throughput (one direction) | $8\,\mathrm{BW}$ | $(2N / d_{\max}) \cdot \mathrm{BW}$ |
+| Cut throughput (one direction) | $8\\,\mathrm{BW}$ | $(2N / d_{\max}) \cdot \mathrm{BW}$ |
 | Chunks per cut link | 8 | $(N^2/4) / (2N/d_{\max}) = N \cdot d_{\max}/8$ |
 
 Two quantities of interest fall out of this table. **The BW term**, dividing one-direction traffic by one-direction throughput (full-duplex → the symmetric opposite direction finishes concurrently, so this is the total BW phase time):
 
-$$t_{\mathrm{BW}} \;=\; \frac{NM/4}{(2N/d_{\max}) \cdot \mathrm{BW}} \;=\; \frac{d_{\max}}{8} \cdot \frac{M}{\mathrm{BW}}$$
+$$t_{\mathrm{BW}} \\;=\\; \frac{NM/4}{(2N/d_{\max}) \cdot \mathrm{BW}} \\;=\\; \frac{d_{\max}}{8} \cdot \frac{M}{\mathrm{BW}}$$
 
-4×4 check: $d_{\max}/8 \cdot M/\mathrm{BW} = 4/8 \cdot M/\mathrm{BW} = M/(2\,\mathrm{BW})$ ✓. This $d_{\max}/8$ factor is what §3.6's general cost formula uses.
+4×4 check: $d_{\max}/8 \cdot M/\mathrm{BW} = 4/8 \cdot M/\mathrm{BW} = M/(2\\,\mathrm{BW})$ ✓. This $d_{\max}/8$ factor is what §3.6's general cost formula uses.
 
 **The bottleneck-vs-personal ratio**, quantifying how much more loaded the bottleneck link is than one chunk's private path (chunks sharing the bottleneck, divided by hops in one chunk's journey):
 
-$$\frac{t_{\mathrm{bottleneck}}}{t_{\mathrm{longest chunk personal}}} \;=\; \frac{\text{chunks per cut link}}{\text{longest chunk hop count}} \;=\; \frac{N \cdot d_{\max} / 8}{\mathrm{diam}}$$
+$$\frac{t_{\mathrm{bottleneck}}}{t_{\mathrm{longest chunk personal}}} \\;=\\; \frac{\text{chunks per cut link}}{\text{longest chunk hop count}} \\;=\\; \frac{N \cdot d_{\max} / 8}{\mathrm{diam}}$$
 
 4×4 check: $(16 \cdot 4 / 8) / 4 = 8/4 = 2$ ✓ — the bottleneck serves 8 chunks while a single chunk's journey has only 4 hops, so the link is "shared more broadly" than any one chunk's path is "long."
 
@@ -1411,7 +1414,7 @@ The ratio grows roughly as $N / \mathrm{diam}$: large tori accumulate many chunk
 
 **Re-use interpretation (bridge analogy).** What the bottleneck formula is actually computing: **how many times is the bottleneck link re-used over the phase, and how long does each re-use take?**
 
-$$t_{\mathrm{BW, bottleneck}} \;=\; \underbrace{(\text{\# re-uses of bottleneck link})}_{\text{= \# chunks through it}} \;\times\; \underbrace{(\text{per-use time})}_{\text{= chunk size / BW}}$$
+$$t_{\mathrm{BW, bottleneck}} \\;=\\; \underbrace{(\text{\\# re-uses of bottleneck link})}_{\text{= \\# chunks through it}} \\;\times\\; \underbrace{(\text{per-use time})}_{\text{= chunk size / BW}}$$
 
 At b→c: 8 re-uses × M/(16·BW) per re-use = M/(2·BW). The ideal formula assumes **perfect pipelining** — each re-use happens back-to-back, with the link at 100% utilization during its busy period. (Real deployments fall short due to switch queueing, flow-control stalls, and scheduler bubbles; that gap is priced by $\eta_\beta$ in `05_contention_and_congestion.md` §4.)
 
@@ -1444,7 +1447,7 @@ In each of these cases, per-link loads differ from the average and only bottlene
 
 ### C.6 Relationship to $\eta_\beta$ in `05_contention_and_congestion.md`
 
-**The bottleneck formula derived above is the ideal lower bound — it does NOT include any $\eta_\beta$ discount.** Every $t_{\mathrm{BW}}$ computed in this note (§3.6's $M/(2\,\mathrm{BW})$ for 4×4 torus A2A, `03_hierarchical_topologies.md` §2.2's fat-tree A2A term, etc.) assumes:
+**The bottleneck formula derived above is the ideal lower bound — it does NOT include any $\eta_\beta$ discount.** Every $t_{\mathrm{BW}}$ computed in this note (§3.6's $M/(2\\,\mathrm{BW})$ for 4×4 torus A2A, `03_hierarchical_topologies.md` §2.2's fat-tree A2A term, etc.) assumes:
 
 - The bottleneck link runs at 100% utilization during its busy period.
 - Every re-use of the bottleneck happens back-to-back with no gaps between chunks.
@@ -1455,7 +1458,7 @@ Under those assumptions, the formula gives the **fastest possible phase time** o
 
 The coefficient $\eta_\beta \in (0, 1]$ introduced in `05_contention_and_congestion.md §4` is a **separate multiplicative discount applied on top of this note's ideal formulas**, quantifying the real-vs-ideal gap:
 
-$$t_{\mathrm{BW, realized}} \;=\; \frac{\text{bottleneck bytes}}{\eta_\beta \cdot \mathrm{BW}} \;=\; \frac{t_{\mathrm{BW, ideal}}}{\eta_\beta}$$
+$$t_{\mathrm{BW, realized}} \\;=\\; \frac{\text{bottleneck bytes}}{\eta_\beta \cdot \mathrm{BW}} \\;=\\; \frac{t_{\mathrm{BW, ideal}}}{\eta_\beta}$$
 
 **Bottom line.** Throughout `02_topology_mapping.md`, wherever you see a cost formula with plain $\mathrm{BW}$ (no $\eta_\beta$), it is the **$\eta_\beta = 1$ idealization**. The $\eta_\beta$ factor is not hidden inside any of the derivations here; it is strictly a `05_contention_and_congestion.md`-layer concept, applied externally when scoring realistic performance. When reading a `02_topology_mapping.md` BW-term, assume perfect pipelining and zero contention.
 

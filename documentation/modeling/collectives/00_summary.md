@@ -64,7 +64,7 @@ A one-page reference for the symbols, primitives, and canonical α-β cost formu
 
 Every collective cost in this series factors as
 
-$$t \;=\; n_\alpha \cdot \alpha \;+\; n_\beta \cdot \frac{M}{\mathrm{BW}}$$
+$$t \\;=\\; n_\alpha \cdot \alpha \\;+\\; n_\beta \cdot \frac{M}{\mathrm{BW}}$$
 
 - $n_\alpha$ counts sequential hops on the algorithm's critical path.
 - $n_\beta$ counts per-rank byte movement in units of $M$ (not the total fabric traffic).
@@ -102,9 +102,9 @@ Costs assume an abstract fully-connected fabric (every rank can reach every othe
 
 **Headline AR formulas:**
 
-$$t_{\mathrm{ring\,AR}} \;=\; 2(N-1)\,\alpha \;+\; \frac{2(N-1)}{N} \cdot \frac{M}{\mathrm{BW}}$$
+$$t_{\mathrm{ring\\,AR}} \\;=\\; 2(N-1)\\,\alpha \\;+\\; \frac{2(N-1)}{N} \cdot \frac{M}{\mathrm{BW}}$$
 
-$$t_{\mathrm{tree\,AR}} \;=\; 2\lceil \log_2 N \rceil \,\alpha \;+\; 2\,\frac{M}{\mathrm{BW}}$$
+$$t_{\mathrm{tree\\,AR}} \\;=\\; 2\lceil \log_2 N \rceil \\,\alpha \\;+\\; 2\\,\frac{M}{\mathrm{BW}}$$
 
 (DBT hits the BW floor as a hardware ceiling under asymptotic pipelining; the practice gap is documented in `01_collective_algorithms.md` §5.3.)
 
@@ -130,13 +130,13 @@ Bisection: torus $\mathrm{BW}_{\mathrm{bisect}} = (2N/d_{\max}) \cdot \mathrm{BW
 
 Multi-tier Clos / fat-tree. Two-tier AR with $L$ outer ranks each containing $N/L$ inner ranks decomposes as **inner RS → outer sub-AR → inner AG**:
 
-$$t_{\mathrm{AR}}^{\mathrm{hier}} \;=\; t_{\mathrm{RS,inner}}(M) \;+\; t_{\mathrm{AR,outer}}\!\left(\tfrac{M\,L}{N}\right) \;+\; t_{\mathrm{AG,inner}}(M)$$
+$$t_{\mathrm{AR}}^{\mathrm{hier}} \\;=\\; t_{\mathrm{RS,inner}}(M) \\;+\\; t_{\mathrm{AR,outer}}\\!\left(\tfrac{M\\,L}{N}\right) \\;+\\; t_{\mathrm{AG,inner}}(M)$$
 
 The middle phase ships the *telescoped* payload $ML/N$ — which is why hierarchical AR scales: the costliest tier (typically outer) carries less data.
 
 **Oversubscription at any tier boundary** multiplies that tier's BW term by $s$ (equivalent to $\eta_\beta = 1/s$ on cross-tier traffic):
 
-$$t_{\mathrm{BW,outer}} \;=\; s \cdot \frac{M\,L/N}{\mathrm{BW}_{\mathrm{outer}}}$$
+$$t_{\mathrm{BW,outer}} \\;=\\; s \cdot \frac{M\\,L/N}{\mathrm{BW}_{\mathrm{outer}}}$$
 
 A2A is the outlier: it cannot telescope, so per-tier ranks see $(N-1)/N \cdot M/\mathrm{BW}$ at the outer tier's bisection rate. See `03_hierarchical_topologies.md` §2.2.
 
@@ -148,11 +148,11 @@ INC moves the reduction or replication into the switch ASIC (NVLS / Quantum SHAR
 
 | Primitive | Required HW | $n_\alpha$ (INC) | $\mathrm{BW_{eff}}$ (INC) | Speedup vs software |
 |---|---|---|---|---|
-| AR | switch ALU + multicast xbar | $\sim 2\,\alpha_{\mathrm{switch}}$ | $\mathrm{BW}$ (vs SW $\mathrm{BW}/2$) | α: $\sim (N-1)$ or $\log_2 N$ ×; BW: **2×** |
+| AR | switch ALU + multicast xbar | $\sim 2\\,\alpha_{\mathrm{switch}}$ | $\mathrm{BW}$ (vs SW $\mathrm{BW}/2$) | α: $\sim (N-1)$ or $\log_2 N$ ×; BW: **2×** |
 | Reduce | switch ALU | $\sim \alpha_{\mathrm{switch}}$ | $\mathrm{BW}$ | α: $\sim \log_2 N$ ×; BW: 1× |
-| RS | switch ALU | $\sim 2\,\alpha_{\mathrm{switch}}$ | $\mathrm{BW}$ | α: $\sim (N-1)/2$ ×; BW: 1× |
-| AG | multicast xbar | $\sim 2\,\alpha_{\mathrm{switch}}$ | $\mathrm{BW}$ | α: $\sim (N-1)/2$ ×; BW: 1× |
-| BC | multicast xbar | $\sim 2\,\alpha_{\mathrm{switch}}$ | $\mathrm{BW}$ | α: $\sim \log_2 N$ ×; BW: 1× |
+| RS | switch ALU | $\sim 2\\,\alpha_{\mathrm{switch}}$ | $\mathrm{BW}$ | α: $\sim (N-1)/2$ ×; BW: 1× |
+| AG | multicast xbar | $\sim 2\\,\alpha_{\mathrm{switch}}$ | $\mathrm{BW}$ | α: $\sim (N-1)/2$ ×; BW: 1× |
+| BC | multicast xbar | $\sim 2\\,\alpha_{\mathrm{switch}}$ | $\mathrm{BW}$ | α: $\sim \log_2 N$ ×; BW: 1× |
 | A2A | crossbar scatter-gather (HW A2A; emerging) | $\sim \alpha_{\mathrm{switch}}$ | $(N-1)/N \cdot \mathrm{BW}$ | α: $\sim N$ ×; BW: 1× |
 
 **Scope.** SHARP-class INC is single-switch-domain (NVLS) or SHARP-enabled aggregation tree (Quantum SHARP, Spectrum-X SHARP). HW A2A ships today on Tomahawk Ultra and is on Rubin's roadmap. Cross-domain traffic falls back to software DBT / ring.
@@ -163,7 +163,7 @@ INC moves the reduction or replication into the switch ASIC (NVLS / Quantum SHAR
 
 Ideal-formula upper bounds inflate to realized cost via two scalar coefficients per (fabric, primitive):
 
-$$t_{\mathrm{realized}} \;=\; \eta_\alpha \cdot n_\alpha \cdot \alpha \;+\; n_\beta \cdot \frac{M}{\eta_\beta \cdot \mathrm{BW}}$$
+$$t_{\mathrm{realized}} \\;=\\; \eta_\alpha \cdot n_\alpha \cdot \alpha \\;+\\; n_\beta \cdot \frac{M}{\eta_\beta \cdot \mathrm{BW}}$$
 
 with $\eta_\alpha \geq 1$ and $\eta_\beta \in (0, 1]$.
 
