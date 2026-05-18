@@ -67,7 +67,7 @@ LLM inference, Transformer, parallelism, tensor parallelism, expert parallelism,
 
 This section defines parameter sizes and memory footprint for a given set of model parameters. The memory footprint include those from model weights, per-token activation/working memories, and KV cache. We avoid model-wide parameter aggregation here and instead focus on **per-layer** quantities, because pipeline-parallel stages own disjoint sets of layers. All parameter definitions assume stored precision of $b$ bytes per element (e.g., bf16 = 2 bytes).
 
-**Layout and mode parameterization.** Per-device formulas in §1.4 and below (and analogously in §2.1 / §2.3 / §3.5 / §5.3 / §5.5) are written in terms of the per-component effective sharding factors $D_{\text{attn}}$, $D_{\text{exp}}$, $D_{\text{kv}}$, $D_{\text{emb}}$ and the collective group sizes $G_{TP}$, $G_{EP}$ from `notation.md §1` rather than raw $TP$ / $EP$ divisors. This lets a single expression cover all three production-relevant `(layout, attention_mode)` configurations — orthogonal + TP-attention, orthogonal + DP-attention (DSv3 / SGLang on disjoint TP and EP groups), and co-located + DP-attention (DSv3 / SGLang on a single NVLink island, $\max(TP, EP)$ GPUs per replica) — without conditional branching. Each downstream section opens with a summary table mapping the abstract factors used in that section to each of the three configurations; the `notation.md §1` lookup table is the canonical source.
+**Layout and mode parameterization.** Per-device formulas in §1.4 and below (and analogously in §2.1 / §2.3 / §3.5 / §5.3 / §5.5) are written in terms of the per-component effective sharding factors $D_{\text{attn}}$, $D_{\text{exp}}$, $D_{\text{kv}}$, $D_{\text{emb}}$ and the collective group sizes $G_{TP}$, $G_{EP}$ from `notation.md §1` rather than raw $TP$ / $EP$ divisors. This lets a single expression cover all four production-relevant `(layout, attention_mode)` configurations — orthogonal + TP-attention, orthogonal + DP-attention (DSv3 / SGLang on disjoint TP and EP groups), co-located + DP-attention (DSv3 / SGLang on a single NVLink island, $\max(TP, EP)$ GPUs per replica), and co-located + TP-attention (DSr1 / NVL72 panel-(b) shape: TP=EP overlaid on the same GPU set with attention head-sharded across that group) — without conditional branching. Each downstream section opens with a summary table mapping the abstract factors used in that section to each of the four configurations; the `notation.md §1` lookup table is the canonical source.
 
 ---
 
@@ -283,15 +283,16 @@ generated token, which is negligible relative to the full cache.
 
 So far we've completed the all the memory footprint estimation for a model layer. When we introduce different parallelism schemes, some of these memories would be sharded by one or more of these parallelism dimensions, resulting in a somewhat complicated memory aggregateion per device. We now describe how these parameters are distributed across devices under PP/EP/TP/SP, and then derive simple modeling approximations.
 
-This section uses the per-component effective sharding factors $D_{\text{attn}}$, $D_{\text{exp}}$, $D_{\text{kv}}$, $D_{\text{emb}}$ from `notation.md §1` rather than raw $TP$ / $EP$ divisors, so a single expression covers all three production-relevant configurations. Resolving the abstract factors:
+This section uses the per-component effective sharding factors $D_{\text{attn}}$, $D_{\text{exp}}$, $D_{\text{kv}}$, $D_{\text{emb}}$ from `notation.md §1` rather than raw $TP$ / $EP$ divisors, so a single expression covers all four production-relevant configurations. Resolving the abstract factors:
 
 | configuration | $D_{\text{attn}}$ | $D_{\text{exp}}$ (MoE) | $D_{\text{kv}}$ | $D_{\text{emb}}$ |
 |---|---|---|---|---|
 | orthogonal + TP-attn | $TP$ | $TP \cdot EP$ | $TP$ (head) | $TP$ |
+| co-located + TP-attn | $TP$ | $EP$ | $TP$ (head) | $TP$ |
 | orthogonal + DP-attn | $1$ | $TP \cdot EP$ | $TP$ (seq) | $TP$ |
 | co-located + DP-attn | $1$ | $EP$ | $\max(TP, EP)$ (seq) | $TP$ |
 
-Dense FFN always uses $D_{\text{exp}} = TP$ (no EP axis to overlap; co-location does not apply). KV memory and traffic carry an additional $/SP$ factor on top of $D_{\text{kv}}$ when sequence parallelism is enabled. Formulas below use these symbols directly without further repetition of the table.
+Dense FFN always uses $D_{\text{exp}} = TP$ (no EP axis to overlap; co-location does not apply). KV memory and traffic carry an additional $/SP$ factor on top of $D_{\text{kv}}$ when sequence parallelism is enabled. Under co-location the structural constraint $TP = EP$ holds, so $\max(TP, EP)$ and $TP$ collapse to the same value in the co-located rows. Formulas below use these symbols directly without further repetition of the table.
 
 ### Per-device Parameter Memory
 
@@ -539,10 +540,11 @@ This section uses the per-component effective sharding factors $D_{\text{attn}}$
 | configuration | $D_{\text{attn}}$ | $D_{\text{exp}}$ (MoE) | $D_{\text{kv}}$ | $D_{\text{emb}}$ |
 |---|---|---|---|---|
 | orthogonal + TP-attn | $TP$ | $TP \cdot EP$ | $TP$ (head) | $TP$ |
+| co-located + TP-attn | $TP$ | $EP$ | $TP$ (head) | $TP$ |
 | orthogonal + DP-attn | $1$ | $TP \cdot EP$ | $TP$ (seq) | $TP$ |
 | co-located + DP-attn | $1$ | $EP$ | $\max(TP, EP)$ (seq) | $TP$ |
 
-Dense FFN always uses $D_{\text{exp}} = TP$. KV traffic carries an additional $/SP$ factor on top of $D_{\text{kv}}$ when sequence parallelism is enabled.
+Dense FFN always uses $D_{\text{exp}} = TP$. KV traffic carries an additional $/SP$ factor on top of $D_{\text{kv}}$ when sequence parallelism is enabled. Under co-location $TP = EP$ structurally, so $\max(TP, EP)$ and $TP$ collapse to the same value in the co-located rows.
 
 ---
 
@@ -580,13 +582,13 @@ T_{\theta,\text{FFN}} =
 \frac{P_{\text{FFN}}}{D_{\text{exp}}}\; b
 $$
 
-### Final parameter-traffic expression
+### Final parameter-traffic expression (dense layers)
 
-Combining these terms:
+For dense layers (every weight is read every step), combining these terms:
 
 $$
-T_{\theta,\text{device}}
-\approx
+T_{\theta,\text{device}}^{\text{dense}}
+=
 \frac{L}{PP}
 \left(
   \frac{P_{\text{attn}}}{D_{\text{attn}}}
@@ -597,13 +599,11 @@ T_{\theta,\text{device}}
 \left(
 \frac{2H^2 + 2 H H_{kv}}{D_{\text{attn}}}
 \;+\;
-\frac{3 H I N_{\text{exp}}}{D_{\text{exp}}}
+\frac{3 H I_{\text{dense}}}{TP}
 \right) b
 $$
 
-**For a dense MLP model:** $I = I_{\text{dense}}, \text{ } N_{\text{exp}} = EP = 1$ (so $D_{\text{exp}} = TP$).
-
-**And for a MoE model:** $I = I_{\text{moe}}$.
+(Dense FFN keeps $D_{\text{exp}} = TP$ regardless of layout, no EP axis to overlap.) For MoE layers the expert-FFN term is *not* the full-footprint expression; see the mixed-architecture form below.
 
 ### Mixed MoE/Dense Architectures
 
@@ -626,15 +626,30 @@ T_{\theta,\text{dense}} =
 \right) b
 $$
 
+For MoE layers, *per-step traffic* differs from the *static footprint* (cf. §1.4): expert weights enter HBM traffic only for the experts the current batch actually selects, while the static footprint must hold every expert because the next step may select any of them. The conventional "all weights read each step" simplification is exact for dense layers but over-counts for MoE at small $B$. Writing $\mathbb{E}[N_{\text{exp,touched}}^{\text{rank}}]$ for the expected number of unique experts touched on a single rank per step:
+
 $$
 T_{\theta,\text{moe}} =
 \frac{L_{\text{moe}}}{PP}\;
 \left(
 \frac{2H^2 + 2 H H_{kv}}{D_{\text{attn}}}
 \;+\;
-\frac{3 H I_{\text{moe}} N_{\text{exp}}}{D_{\text{exp}}}
+3 H I_{\text{moe}} \cdot \mathbb{E}[N_{\text{exp,touched}}^{\text{rank}}]
 \right) b
 $$
+
+Under the uniform-routing assumption (each token's $k$ active experts drawn independently and uniformly from the global $N_{\text{exp}}$ pool, then routed to whichever rank holds the selected expert), with $N_{\text{exp/rank}} = N_{\text{exp}} / D_{\text{exp}}$ experts held on each rank and $t_{\text{tokens/rank}} = B k_{\text{active}} / D_{\text{exp}}$ expert-touch events per rank per step:
+
+$$
+\mathbb{E}[N_{\text{exp,touched}}^{\text{rank}}]
+= N_{\text{exp/rank}}\!\left(1 - \!\left(1 - \frac{1}{N_{\text{exp/rank}}}\right)^{\!t_{\text{tokens/rank}}}\right)
+$$
+
+Asymptotics:
+- $B \to 0$: $\mathbb{E}[N_{\text{exp,touched}}^{\text{rank}}] \to t_{\text{tokens/rank}}$ (linear in $B$); traffic dominated by attention + a small expert slice.
+- $B k_{\text{active}} \gg N_{\text{exp}}$: $\mathbb{E}[N_{\text{exp,touched}}^{\text{rank}}] \to N_{\text{exp/rank}}$; expression recovers the full-footprint form $3 H I_{\text{moe}} N_{\text{exp}} / D_{\text{exp}}$.
+
+**Routing-uniformity caveat.** Real production routers can deviate from uniform routing: load-balancing-loss anti-correlation, expert hot-spotting, or capacity-factor saturation can make some experts touched more often than others, raising $\mathbb{E}[N_{\text{exp,touched}}^{\text{rank}}]$ above the uniform-routing value at fixed $B$. Modeling this requires per-deployment routing statistics not generally available; the uniform-routing assumption above is documented as a known source of model inaccuracy at small $B$.
 
 ### LM head parameter traffic
 
@@ -933,10 +948,11 @@ This subsection uses the per-component effective sharding factors from `notation
 | configuration | $D_{\text{attn}}$ | $D_{\text{exp}}$ (MoE) | $D_{\text{kv}}$ | $D_{\text{emb}}$ |
 |---|---|---|---|---|
 | orthogonal + TP-attn | $TP$ | $TP \cdot EP$ | $TP$ | $TP$ |
+| co-located + TP-attn | $TP$ | $EP$ | $TP$ | $TP$ |
 | orthogonal + DP-attn | $1$ | $TP \cdot EP$ | $TP$ | $TP$ |
 | co-located + DP-attn | $1$ | $EP$ | $\max(TP, EP)$ | $TP$ |
 
-Dense FFN always uses $D_{\text{exp}} = TP$. The KV-attention compute term carries an additional $/SP$ factor on top of $D_{\text{kv}}$ when sequence parallelism is enabled.
+Dense FFN always uses $D_{\text{exp}} = TP$. The KV-attention compute term carries an additional $/SP$ factor on top of $D_{\text{kv}}$ when sequence parallelism is enabled. Under co-location $TP = EP$ structurally.
 
 To find **per-device FLOPs**, we apply sharding from each parallelism dimension and then multiply by the number of layers on the PP stage.
 
@@ -1329,7 +1345,7 @@ On single-tier systems (e.g., NVL72), every axis collapses to tier 0 and the leg
 
 MoE layers require exchanging token activations across the expert-parallel (EP) dimension via all-to-all routing [DEEPSPEED-MOE]. EP communication follows a **bidirectional dispatch-and-combine pattern**: token activations are routed from the source rank to the rank holding the selected expert (top-$k$), and the expert's output is then sent back to the source rank to be added to the residual stream. We model these as **two distinct A2A collectives per MoE layer** ($n_{EP} = 2$ in §5.5), each costing one single-direction A2A — this aligns the cost-model bookkeeping with the kernel-launch counter (§7.1), since dispatch and combine are also two separate NCCL API calls.
 
-Let $k$ denote the number of active experts per token. Each direction carries a $kHb$ byte per-rank per-token payload; for a decode step of $B$ sequences the per-step payload is $B \cdot kHb$. The collective group size is $G_{EP}$ from `notation.md §1` (equal to $EP$ across all three configurations). The shipped A2A primitive is pairwise direct-send (NCCL on star; bisection-bound pairwise on torus). Bruck / log-hop A2A does **not** ship and does not appear in the cost — see `collectives/01_collective_algorithms.md §7` for the primitive derivations. On a star topology, the per-direction A2A cost is:
+Let $k$ denote the number of active experts per token. Each direction carries a $kHb$ byte per-rank per-token payload; for a decode step of $B$ sequences the per-step payload is $B \cdot kHb$. The collective group size is $G_{EP}$ from `notation.md §1` (equal to $EP$ across all four configurations). The shipped A2A primitive is pairwise direct-send (NCCL on star; bisection-bound pairwise on torus). Bruck / log-hop A2A does **not** ship and does not appear in the cost — see `collectives/01_collective_algorithms.md §7` for the primitive derivations. On a star topology, the per-direction A2A cost is:
 
 $$
 t_{EP}(B) \;=\; (G_{EP} - 1)\,\alpha_{EP} \;+\; \frac{G_{EP} - 1}{G_{EP}} \cdot \frac{B \cdot k H \, b}{BW_{\text{EP}}}
@@ -1355,7 +1371,7 @@ The cost-model formulas in this section are written for the **gather-then-dispat
 
 ## 5.3 Tensor Parallel (TP) Communication
 
-TP groups compute each layer in parallel across $G_{TP}$ devices (group size from `notation.md §1`; $G_{TP} = TP$ across all three configurations) using column- and row-parallel linear layers [MEGATRON]. Each layer fires two TP collectives: one in the **attention** block (after the output projection) and one in the **MLP / MoE expert** block (after the down projection). The collective in the attention block depends on the attention parallelism mode:
+TP groups compute each layer in parallel across $G_{TP}$ devices (group size from `notation.md §1`; $G_{TP} = TP$ across all four configurations) using column- and row-parallel linear layers [MEGATRON]. Each layer fires two TP collectives: one in the **attention** block (after the output projection) and one in the **MLP / MoE expert** block (after the down projection). The collective in the attention block depends on the attention parallelism mode:
 
 - **TP-attention (default):** all-reduce (AR) — sums partial outputs across the $G_{TP}$ ranks that each hold a shard of the heads.
 - **DP-attention:** all-gather (AG) — each rank already holds the full attention output for its assigned sequence subset; the AG gathers all sequences' hidden states so the downstream TP-sharded FFN can run [DSV3, SGLANG-DPATTN].
@@ -1521,10 +1537,11 @@ This subsection uses the per-component effective sharding factors $D_{\text{attn
 | configuration | $D_{\text{attn}}$ | $D_{\text{exp}}$ (MoE) | $D_{\text{kv}}$ | $D_{\text{emb}}$ | $N_{\text{replica}}$ |
 |---|---|---|---|---|---|
 | orthogonal + TP-attn | $TP$ | $TP \cdot EP$ | $TP$ | $TP$ | $PP \cdot TP \cdot EP \cdot SP$ |
+| co-located + TP-attn | $TP$ | $EP$ | $TP$ | $TP$ | $PP \cdot \max(TP, EP) \cdot SP$ |
 | orthogonal + DP-attn | $1$ | $TP \cdot EP$ | $TP$ | $TP$ | $PP \cdot TP \cdot EP \cdot SP$ |
 | co-located + DP-attn | $1$ | $EP$ | $\max(TP, EP)$ | $TP$ | $PP \cdot \max(TP, EP) \cdot SP$ |
 
-Dense FFN always uses $D_{\text{exp}} = TP$.
+Dense FFN always uses $D_{\text{exp}} = TP$. Under co-location $TP = EP$ structurally.
 
 We define the total per-device static footprint as
 
@@ -1725,7 +1742,7 @@ Because the LM head lives on stage $PP{-}1$ only (not divided by $PP$, $EP$, or 
 
 ## 6.3 When Each Layout / Attention-Mode Pays
 
-§6.1 and §6.2 cover *what* each $(layout, attention\_mode)$ configuration costs in HBM and per-step latency. This subsection covers *which* configuration to pick for a given deployment — when each of the three production-relevant configurations from `notation.md §1` actually pays off relative to the orthogonal + TP-attention default.
+§6.1 and §6.2 cover *what* each $(layout, attention\_mode)$ configuration costs in HBM and per-step latency. This subsection covers *which* configuration to pick for a given deployment — when each of the four production-relevant configurations from `notation.md §1` actually pays off relative to the orthogonal + TP-attention default.
 
 ### Orthogonal + TP-attention (the default)
 
@@ -1751,7 +1768,7 @@ TP and EP overlap on the same physical GPUs of a replica, dropping $N_{\text{rep
 
 1. **Per-device HBM can absorb the larger expert footprint.** Either the expert weights are small enough (low $N_{\text{exp}}$ or compact $I_{\text{moe}}$) or aggressive quantization (FP4 / INT4) keeps $1/EP$ of the experts under HBM. DSv3 satisfies this via FP4 + a sparsity factor of $k = 8$ active experts out of $N_{\text{exp}} = 256$. [DSV3]
 2. **All collectives benefit from staying inside one fast fabric tier.** Orthogonal $TP = 8, EP = 8$ on 64 GPUs spans multiple NVLink islands — the EP all-to-all crosses a slower tier on every layer, paying the slow tier's $\alpha$ on every collective. Co-located $TP = EP = 8$ on 8 GPUs keeps both collectives on NVLink. The latency win is concentrated in the small-$M$ decode regime where $\alpha$ dominates.
-3. **Co-location-only DP-attn replication cost is acceptable.** Co-location forces DP-attn (no separate TP group exists for head-sharding to land on). This brings the same attention-weight replication cost as orthogonal + DP-attn — fine for MLA / aggressive GQA models, costly for full MHA.
+3. **Attention mode choice under co-location.** Co-location supports both attention modes on the overlaid GPU set: TP-attn head-shards across the same group that holds the experts (no replication cost; per-layer TP all-reduce fires on the same ranks as the MoE A2A), and DP-attn replicates attention and batch-shards (replication cost equal to orthogonal + DP-attn — fine for MLA / aggressive GQA models, costly for full MHA). Pick TP-attn under co-location when the attention block is head-structured enough to benefit from sharding ($n_q$ divides $TP$, GQA $n_{kv} \geq TP$, or full MHA); pick DP-attn when MLA flatness or aggressive-GQA $n_{kv}$ saturation makes attention replication free anyway.
 
 In short: co-location is the right choice when the workload is MoE-dominated, attention is small (MLA-class), and keeping the world inside one NVLink island unlocks meaningful $\alpha$-cost savings on every collective.
 
@@ -1763,6 +1780,7 @@ In short: co-location is the right choice when the workload is MoE-dominated, at
 | MLA-class attention, single fabric tier, $G_{TP} \le 8$ | orthogonal + DP-attn |
 | MLA-class attention, large $G_{TP}$ on multi-tier fabric | orthogonal + DP-attn |
 | MLA-class attention, MoE-dominant, $TP = EP$ targets a single NVLink island | co-located + DP-attn |
+| MoE-dominant, head-structured attention (MHA / GQA with $n_{kv} \ge TP$), $TP = EP$ overlaid on the same NVLink island | co-located + TP-attn (DSr1 / NVL72 panel-(b) pattern) |
 | Multi-tier fabric where orthogonal would put EP A2A on slower tier | co-located + DP-attn (when memory permits) |
 
 ---

@@ -29,6 +29,7 @@ from .memory_placement import resolve_placement, t_mem_from_placement
 from .primitives import (
     dense_weight_bytes,
     moe_weight_bytes,
+    moe_weight_traffic_bytes,
     kv_bytes_per_seq,
     linear_flops_per_token,
     aggregate_per_stage,
@@ -294,14 +295,24 @@ def compute_traffic(
     tuner: TuningSpec,
     framework: FrameworkSpec,
 ) -> TrafficResults:
-    """Per-token HBM traffic per device (weights + KV cache read)."""
+    """Per-step HBM traffic per device (weights + KV cache read).
+
+    Dense weights (attention, dense-FFN) are read every step → traffic
+    equals footprint. MoE expert weights are read only for the experts
+    the current batch actually touches → traffic uses an expectation-
+    of-touched-experts correction that converges to the footprint at
+    large B. See `core/primitives/weight_quantities.py` for the formula
+    and the uniform-routing assumption.
+    """
     S = tuner.S_decode
     B = tuner.B_decode
 
     # Parameter traffic (embedding is outside the forward path by convention).
+    # Dense weights: read every step. MoE: uses B-aware expectation of touched
+    # experts (only the routed-to experts contribute to per-step HBM traffic).
     T_theta = (
         dense_weight_bytes(model, partition, framework)
-        + moe_weight_bytes(model, partition, framework)
+        + moe_weight_traffic_bytes(model, partition, framework, B)
     )
     # KV read traffic for one sequence of S context tokens.
     T_kv = kv_bytes_per_seq(model, partition, framework, S)

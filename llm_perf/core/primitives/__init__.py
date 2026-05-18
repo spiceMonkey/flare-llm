@@ -62,12 +62,13 @@ from .collective_cost import (
     realistic_cost,
 )
 from .stage_aggregator import aggregate_per_stage
-from .weight_footprint import (
+from .weight_quantities import (
     dense_weight_bytes,
     moe_weight_bytes,
+    moe_weight_traffic_bytes,
     embedding_bytes,
 )
-from .kv_footprint import kv_bytes_per_seq
+from .kv_quantities import kv_bytes_per_seq
 from .linear_flops import linear_flops_per_token
 from .mla_flops import (
     mla_proj_flops_per_layer_per_device,
@@ -136,9 +137,10 @@ __all__ = [
     "realistic_cost",
     # llm_perf-local stage aggregator
     "aggregate_per_stage",
-    # footprints
+    # weight & KV quantities (footprint + per-step traffic)
     "dense_weight_bytes",
     "moe_weight_bytes",
+    "moe_weight_traffic_bytes",
     "embedding_bytes",
     "kv_bytes_per_seq",
     "linear_flops_per_token",

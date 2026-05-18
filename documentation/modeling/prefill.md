@@ -211,15 +211,16 @@ FlashAttention [FA1, FA2] tiles the $S \times S$ attention matrix into SRAM-resi
 
 ## 1.5 Per-Device Total FLOPs Under Parallelism
 
-Parallelism distributes prefill FLOPs across devices following the same canonical nesting as decode (`DP → PP → EP → TP → SP` under the orthogonal layout) [MEGATRON, MEGATRON3]. The same per-component effective sharding factors $D_{\text{attn}}$, $D_{\text{exp}}$, $D_{\text{kv}}$, $D_{\text{emb}}$ from `notation.md §1` apply here so a single expression covers all three production-relevant configurations. Resolving the abstract factors:
+Parallelism distributes prefill FLOPs across devices following the same canonical nesting as decode (`DP → PP → EP → TP → SP` under the orthogonal layout) [MEGATRON, MEGATRON3]. The same per-component effective sharding factors $D_{\text{attn}}$, $D_{\text{exp}}$, $D_{\text{kv}}$, $D_{\text{emb}}$ from `notation.md §1` apply here so a single expression covers all four production-relevant configurations. Resolving the abstract factors:
 
 | configuration | $D_{\text{attn}}$ | $D_{\text{exp}}$ (MoE) | $D_{\text{kv}}$ | $D_{\text{emb}}$ |
 |---|---|---|---|---|
 | orthogonal + TP-attn | $TP$ | $TP \cdot EP$ | $TP$ (head) | $TP$ |
+| co-located + TP-attn | $TP$ | $EP$ | $TP$ (head) | $TP$ |
 | orthogonal + DP-attn | $1$ | $TP \cdot EP$ | $TP$ (seq) | $TP$ |
 | co-located + DP-attn | $1$ | $EP$ | $\max(TP, EP)$ (seq) | $TP$ |
 
-Dense FFN always uses $D_{\text{exp}} = TP$. The KV-attention compute term carries an additional $/SP$ factor on top of $D_{\text{kv}}$ when sequence parallelism is enabled. Prefill per-device FLOPs are **invariant** under the TP-attn ↔ DP-attn swap (the per-rank work is the same whether split by head or by sequence — both reduce to a $1/D_{\text{attn}}$ or $1/D_{\text{kv}}$ share); attention weight footprint and the per-layer attention TP collective primitive (AR vs AG) change as derived in `decode.md §1.4` / `§5.3`. Formulas below use the abstract factors directly without further repetition of the table.
+Dense FFN always uses $D_{\text{exp}} = TP$. The KV-attention compute term carries an additional $/SP$ factor on top of $D_{\text{kv}}$ when sequence parallelism is enabled. Under co-location $TP = EP$ structurally, so $\max(TP, EP)$ and $TP$ collapse to the same value in the co-located rows. Prefill per-device FLOPs are **invariant** under the TP-attn ↔ DP-attn swap (the per-rank work is the same whether split by head or by sequence — both reduce to a $1/D_{\text{attn}}$ or $1/D_{\text{kv}}$ share); attention weight footprint and the per-layer attention TP collective primitive (AR vs AG) change as derived in `decode.md §1.4` / `§5.3`. Formulas below use the abstract factors directly without further repetition of the table.
 
 ### PP sharding
 
@@ -555,7 +556,7 @@ $$
 
 ### TP collectives (prefill)
 
-The per-layer TP collective synchronizes the partial hidden-state outputs after Row-Parallel matrix multiplications (the **all-reduce (AR)** under TP-attention or under any FFN block) or redistributes per-rank sequence-shards to the TP-sharded form expected by the downstream FFN (the **all-gather (AG)** at the attention → FFN boundary under DP-attention). During prefill, the post-projection output has shape $[B_{\text{prefill}} \cdot S_{\text{input}} \times H]$, so the per-call logical message size is $M_{TP}^{\text{prefill}}(B_{\text{prefill}}) = B_{\text{prefill}} \cdot S_{\text{input}} \cdot H \cdot b$ (vs. $H \cdot b$ during single-token decode). The collective group size is $G_{TP}$ from `notation.md §1` (equal to $TP$ across all three configurations). NCCL ships ring (large-$M$) and DBT (small-$M$) variants for both AR and AG on a star fabric, selected via `tuner.ar_algorithm` (`collectives/02_topology_mapping.md §2`). The per-call costs:
+The per-layer TP collective synchronizes the partial hidden-state outputs after Row-Parallel matrix multiplications (the **all-reduce (AR)** under TP-attention or under any FFN block) or redistributes per-rank sequence-shards to the TP-sharded form expected by the downstream FFN (the **all-gather (AG)** at the attention → FFN boundary under DP-attention). During prefill, the post-projection output has shape $[B_{\text{prefill}} \cdot S_{\text{input}} \times H]$, so the per-call logical message size is $M_{TP}^{\text{prefill}}(B_{\text{prefill}}) = B_{\text{prefill}} \cdot S_{\text{input}} \cdot H \cdot b$ (vs. $H \cdot b$ during single-token decode). The collective group size is $G_{TP}$ from `notation.md §1` (equal to $TP$ across all four configurations). NCCL ships ring (large-$M$) and DBT (small-$M$) variants for both AR and AG on a star fabric, selected via `tuner.ar_algorithm` (`collectives/02_topology_mapping.md §2`). The per-call costs:
 
 $$
 t_{TP,\text{AR}}^{\text{prefill,ring}}(B_{\text{prefill}}) \;=\; 2(G_{TP}-1)\,\alpha_{TP} \;+\; 2 \cdot \frac{G_{TP}-1}{G_{TP}} \cdot \frac{B_{\text{prefill}} \cdot S_{\text{input}} \cdot H \cdot b}{BW_{\text{TP}}}
@@ -573,7 +574,7 @@ The per-layer TP cost depends on attention mode: under TP-attention the attentio
 
 ### EP All-to-All (prefill, MoE)
 
-For MoE layers, the Dispatch + Combine payload per direction is $B_{\text{prefill}} \cdot S_{\text{input}} \cdot k \cdot H \cdot b$ (vs. $k \cdot H \cdot b$ during single-token decode). The collective group size is $G_{EP}$ from `notation.md §1` (equal to $EP$ across all three configurations). The shipped A2A primitive is pairwise direct-send (NCCL on star; bisection-bound pairwise on torus) — see `collectives/01_collective_algorithms.md §7`. Substituting $M_{EP}^{\text{prefill}}(B_{\text{prefill}}) = B_{\text{prefill}} \cdot S_{\text{input}} \cdot k H \cdot b$ into the star pairwise form (the $\times 2$ Dispatch + Combine factor is recovered via $n_{EP} = 2$ in the per-layer accumulator below):
+For MoE layers, the Dispatch + Combine payload per direction is $B_{\text{prefill}} \cdot S_{\text{input}} \cdot k \cdot H \cdot b$ (vs. $k \cdot H \cdot b$ during single-token decode). The collective group size is $G_{EP}$ from `notation.md §1` (equal to $EP$ across all four configurations). The shipped A2A primitive is pairwise direct-send (NCCL on star; bisection-bound pairwise on torus) — see `collectives/01_collective_algorithms.md §7`. Substituting $M_{EP}^{\text{prefill}}(B_{\text{prefill}}) = B_{\text{prefill}} \cdot S_{\text{input}} \cdot k H \cdot b$ into the star pairwise form (the $\times 2$ Dispatch + Combine factor is recovered via $n_{EP} = 2$ in the per-layer accumulator below):
 
 $$
 t_{EP}^{\text{prefill}}(B_{\text{prefill}}) \;=\; (G_{EP}-1)\,\alpha_{EP} \;+\; \frac{G_{EP}-1}{G_{EP}} \cdot \frac{B_{\text{prefill}} \cdot S_{\text{input}} \cdot k H \cdot b}{BW_{\text{EP}}}
