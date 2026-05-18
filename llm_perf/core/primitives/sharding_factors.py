@@ -9,10 +9,10 @@ configurations. The lookup table:
 
     tp_ep_layout  attention_mode  D_attn  D_exp(MoE)   D_kv          D_emb  G_TP    G_EP  N_replica
     orthogonal    tp              TP      TP*EP        TP   (head)   TP     TP(AR)  EP    PP*TP*EP*SP
+    co_located    tp              TP      EP           TP   (head)   TP     TP(AR)  EP    PP*max(TP,EP)*SP
     orthogonal    dp              1       TP*EP        TP   (seq)    TP     TP(AG)  EP    PP*TP*EP*SP
     co_located    dp              1       EP           max(TP,EP)    TP     TP(AG)  EP    PP*max(TP,EP)*SP
                                                         (seq)
-    co_located    tp              TP      EP           TP   (head)   TP     TP(AR)  EP    PP*max(TP,EP)*SP
 
 Dense FFN always uses D_exp = TP regardless of tp_ep_layout (no EP axis to
 overlap). The fourth combination (co_located + tp) models the production
