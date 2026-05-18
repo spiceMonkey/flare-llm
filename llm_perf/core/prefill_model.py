@@ -11,6 +11,8 @@ from ..utils import GB_TO_BYTES, TB_TO_FLOPS
 from .decode_model import _eta_TC_at_mb, _eta_beta_at_B, effective_peak_flops_TF
 from .memory_placement import resolve_placement, t_mem_from_placement
 from .primitives import (
+    attn_proj_flops_per_token,
+    ffn_flops_per_token,
     dense_weight_bytes,
     moe_weight_bytes,
     kv_bytes_per_seq,
@@ -522,8 +524,27 @@ def compute_prefill_latency(
     # ── Batched prefill (§4) ─────────────────────────────
 
     if B_pf > 1:
-        # FLOPs scale linearly with B_prefill
-        t_batched_compute = B_pf * flops.F_prefill_device / R_gpu
+        # FLOPs scale with B_prefill — but under DP-attention the batch is
+        # sequence-sharded across the TP group, so per-rank attention work
+        # scales with B_pf/G_TP, not B_pf. The FFN/MoE block always scales
+        # with full B_pf (each rank does its D_exp-sharded share of FFN for
+        # all batch). Mirrors the decode-side compute_flops correction;
+        # the score/value piece already absorbs the batch shard via D_kv=G_TP
+        # under DP-attn, so only the projection term needs the explicit
+        # divisor here.
+        F_attn_proj_pp = attn_proj_flops_per_token(model, partition, fw) * S
+        F_ffn_pp = ffn_flops_per_token(model, partition, fw) * S
+        F_attn_sv_pp = flops.F_prefill_device - F_attn_proj_pp - F_ffn_pp
+        if fw.attention_mode == "dp" and partition.TP > 1:
+            B_attn = B_pf / partition.TP
+        else:
+            B_attn = B_pf
+        F_batched_total = (
+            B_attn * F_attn_proj_pp
+            + B_pf * F_attn_sv_pp
+            + B_pf * F_ffn_pp
+        )
+        t_batched_compute = F_batched_total / R_gpu
         # η_TC at the batched payload (already computed above using B_pf · S).
         t_batched_compute_eff = t_batched_compute / eta_TC if eta_TC > 0 else float("inf")
         # Traffic: weights loaded once + B_pf * KV writes per request

@@ -291,13 +291,25 @@ For a **pure MoE model** ($L_{\text{dense}} = 0$), the router term $2 H N_{\text
 
 ### Per-step (batched) FLOPs
 
-A batched prefill pass concurrently processes $B_{\text{prefill}}$ requests, each carrying $S_{\text{input}}$ tokens. Because every request runs the same forward pass independently — no cross-request attention — FLOPs scale linearly with $B_{\text{prefill}}$:
+A batched prefill pass concurrently processes $B_{\text{prefill}}$ requests, each carrying $S_{\text{input}}$ tokens. Because every request runs the same forward pass independently — no cross-request attention — FLOPs scale linearly with $B_{\text{prefill}}$ to first order. However, under DP-attention the batch is sequence-sharded across the TP group (each rank handles $B_{\text{prefill}} / G_{TP}$ requests' worth of attention while the FFN/MoE block stays $B_{\text{prefill}}$-wide on every rank), so per-rank per-step compute decomposes by block — mirroring the decode-side derivation in `decode.md §3.5`:
 
 $$
-F_{\text{prefill,step,device}}(B_{\text{prefill}}) \;=\; B_{\text{prefill}} \cdot F_{\text{prefill,device}}
+F_{\text{prefill,step,device}}(B_{\text{prefill}}) \;=\; B_{\text{attn}}^{\text{rank}} \cdot F_{\text{attn,prefill,device}} \;+\; B_{\text{prefill}} \cdot F_{\text{ffn,prefill,device}}
 $$
 
-Note the attention term scales as $B_{\text{prefill}} \cdot S_{\text{input}}^2$ (each request's $S^2$ independently), **not** $(B_{\text{prefill}} \cdot S_{\text{input}})^2$ — there is no quadratic cross-request term.
+with the per-rank batch divisor for the attention block:
+
+$$
+B_{\text{attn}}^{\text{rank}} \;=\;
+\begin{cases}
+B_{\text{prefill}} / G_{TP} & \text{attention\_mode} = \text{DP-attn (batch shard)} \\
+B_{\text{prefill}} & \text{attention\_mode} = \text{TP-attn (head shard)}
+\end{cases}
+$$
+
+Under TP-attention the per-token attention formula already carries the $/D_{\text{attn}} = /TP$ divisor and each rank sees all $B_{\text{prefill}}$ requests, so the two pictures collapse to the same per-rank flux. Under DP-attention ($D_{\text{attn}} = 1$, weights replicated) the batch divisor must be applied explicitly to the projection term; the score / value piece $4 H S^2 / (D_{\text{KV}} \cdot SP)$ already absorbs the batch shard via $D_{\text{KV}} = G_{TP}$ under DP-attn, so only the projection needs the explicit $B_{\text{prefill}} / G_{TP}$ scaling. Note the attention term scales as $B_{\text{prefill}} \cdot S_{\text{input}}^2$ (each request's $S^2$ independently), **not** $(B_{\text{prefill}} \cdot S_{\text{input}})^2$ — there is no quadratic cross-request term.
+
+Edge case at $B_{\text{prefill}} < G_{TP}$: the formula gives a sub-1 per-rank attention work, which mathematically represents the average across ranks (some idle, some processing full requests). Real production deployments at $B_{\text{prefill}} < G_{TP}$ typically engage sequence-parallelism (SP) to shard $S_{\text{input}}$ instead of relying on DP-attention's batch shard; the framework treats the two axes independently via the SP and attention-mode knobs.
 
 This is the per-step, per-device FLOP count consumed in the §3 roofline. All downstream HW latency formulas (§3, §4) carry the $(B_{\text{prefill}})$ argument explicitly.
 
