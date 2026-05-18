@@ -193,10 +193,11 @@ class FlopsResults:
 
 @dataclass
 class TrafficResults:
-    T_theta: float
-    T_kv: float
-    T_token_eff: float
-    T_step_eff: float
+    T_theta: float          # per-device weight traffic per step (B-independent for dense; B-aware for MoE)
+    T_kv_token: float       # per-device, per-token KV traffic (one active sequence's KV-history read, all stage layers); matches decode.md §2.3 T_{KV,token}
+    T_kv_device: float      # per-device, per-step KV traffic aggregated over B sequences: B * T_kv_token; matches decode.md §2.3 T_{KV,device}(B)
+    T_token_eff: float      # effective per-token (B=1) traffic
+    T_step_eff: float       # effective per-step (batched) traffic = T_theta + T_kv_device
 
 
 @dataclass
@@ -345,16 +346,21 @@ def compute_traffic(
         dense_weight_bytes(model, partition, framework)
         + moe_weight_traffic_bytes(model, partition, framework, B)
     )
-    # KV read traffic for one sequence of S context tokens.
-    T_kv = kv_bytes_per_seq(model, partition, framework, S)
+    # KV read traffic for one sequence of S context tokens (per-token / per-sequence,
+    # per-device — decode.md §2.3 T_{KV,token}).
+    T_kv_token = kv_bytes_per_seq(model, partition, framework, S)
+    # Device-aggregate per step: B sequences each read their own KV history
+    # (decode.md §2.3 T_{KV,device}(B) = B · T_{KV,token}).
+    T_kv_device = B * T_kv_token
 
-    T_token_eff = T_theta + T_kv
+    T_token_eff = T_theta + T_kv_token
     # Batched step: weights loaded once, KV read per sequence in the batch.
-    T_step_eff = T_theta + B * T_kv
+    T_step_eff = T_theta + T_kv_device
 
     return TrafficResults(
         T_theta=T_theta,
-        T_kv=T_kv,
+        T_kv_token=T_kv_token,
+        T_kv_device=T_kv_device,
         T_token_eff=T_token_eff,
         T_step_eff=T_step_eff,
     )
@@ -589,7 +595,7 @@ def compute_latency(
     tiers = system.device.get_tiers()
     placement = resolve_placement(
         T_theta_device=traffic.T_theta,
-        T_kv_per_request_device=traffic.T_kv,
+        T_kv_per_request_device=traffic.T_kv_token,
         B=max(1, B),
         tiers=tiers,
         placement=tuner.placement,
@@ -696,7 +702,8 @@ def compute_latency(
     # memory-bound to compute-bound. For multi-tier devices, sram.md §2.2
     # gives the exact two-tier form when weights and KV live on separate
     # tiers; the single-tier formula here matches that special case W=K=tier-0.
-    denom = flops.F_token_device * BW_top - traffic.T_kv * R_gpu
+    # B* uses the per-token KV term (decode.md §4 B^star formula uses T_{KV,token}).
+    denom = flops.F_token_device * BW_top - traffic.T_kv_token * R_gpu
     B_star = (traffic.T_theta * R_gpu / denom) if denom > 0 else float("inf")
 
     # Speculative-decoding extension (decode.md §8). Compose verify-step

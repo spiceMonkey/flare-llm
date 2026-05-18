@@ -21,7 +21,8 @@ from .primitives import (
 class MemoryResults:
     M_theta_device: float
     M_act_device: float
-    M_kv_device: float
+    M_kv_token: float       # per-device, per-sequence KV memory (one resident sequence's KV history, all stage layers); matches decode.md §1.3 M_{KV,token}
+    M_kv_device: float      # per-device, per-step KV memory aggregated over B sequences: B * M_kv_token; matches decode.md §1.3 M_{KV,device}(B)
     M_total_device: float
     fits_in_HBM: bool                       # legacy name; True iff every tier fits
     M_resident_per_tier: List[float] = field(default_factory=list)  # bytes per tier
@@ -86,8 +87,10 @@ def compute_memory(
         H_kv = model.H_kv()
         M_act_device = B * (4 * H + 2 * H_kv) * b
 
-    # KV memory M_kv_device (B sequences, each with context S)
-    M_kv_device = B * kv_bytes_per_seq(model, partition, framework, S)
+    # KV memory: per-sequence building block (decode.md §1.3 M_{KV,token})
+    # and the device-aggregate for B resident sequences.
+    M_kv_token = kv_bytes_per_seq(model, partition, framework, S)
+    M_kv_device = B * M_kv_token
 
     M_total = M_theta_device + M_act_device + M_kv_device
 
@@ -100,7 +103,7 @@ def compute_memory(
     try:
         placement = resolve_placement(
             T_theta_device=M_theta_device,
-            T_kv_per_request_device=kv_bytes_per_seq(model, partition, framework, S),
+            T_kv_per_request_device=M_kv_token,
             B=max(1, B),
             tiers=tiers,
             placement=tuner.placement,
@@ -122,6 +125,7 @@ def compute_memory(
     return MemoryResults(
         M_theta_device=M_theta_device,
         M_act_device=M_act_device,
+        M_kv_token=M_kv_token,
         M_kv_device=M_kv_device,
         M_total_device=M_total,
         fits_in_HBM=fits,

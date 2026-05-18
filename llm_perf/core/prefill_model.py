@@ -46,9 +46,9 @@ class PrefillFlopsResults:
 
 @dataclass
 class PrefillTrafficResults:
-    T_theta_device: float           # weight read traffic (same as decode)
-    T_kv_write_device: float        # KV cache write traffic for S_input tokens
-    T_prefill_device: float         # total per-device traffic
+    T_theta_device: float           # weight read traffic (same as decode); B_pf-independent
+    T_kv_write_per_request: float   # per-device, per-prefill-request KV write traffic (S_input tokens worth). Mirrors decode's T_kv_token: the per-unit building block, NOT the batched-prefill aggregate. For B_pf concurrent requests, the device-aggregate is B_pf * T_kv_write_per_request.
+    T_prefill_device: float         # single-request per-device total traffic: T_theta_device + T_kv_write_per_request
 
 
 @dataclass
@@ -184,13 +184,13 @@ def compute_prefill_traffic(
     )
 
     # KV cache write traffic: writing S_input KV entries for one sequence
-    T_kv_write_device = kv_bytes_per_seq(model, partition, framework, S)
+    T_kv_write_per_request = kv_bytes_per_seq(model, partition, framework, S)
 
-    T_prefill_device = T_theta_device + T_kv_write_device
+    T_prefill_device = T_theta_device + T_kv_write_per_request
 
     return PrefillTrafficResults(
         T_theta_device=T_theta_device,
-        T_kv_write_device=T_kv_write_device,
+        T_kv_write_per_request=T_kv_write_per_request,
         T_prefill_device=T_prefill_device,
     )
 
@@ -456,7 +456,7 @@ def compute_prefill_latency(
         """
         return t_local_gpu + max(0.0, t_SW_per_stage - rho_SW * t_local_gpu)
 
-    # Per-tier memory time helper. T_kv_write_device is per-request; the
+    # Per-tier memory time helper. T_kv_write_per_request is per-request; the
     # placement layer treats it the same as decode's T_KV (sram.md §1.3
     # "T_KV,i is per-request bytes"). For chunked / batched prefill the same
     # helper is reused with B = batch count and the chunk's KV term.
@@ -505,7 +505,7 @@ def compute_prefill_latency(
     mb_prefill = max(1, B_pf) * max(1, S) / max(1, PP)
     eta_TC = _eta_TC_at_mb(system.device.tensor_core_efficiency, mb_prefill)
     t_prefill_compute_eff = t_prefill_compute / eta_TC if eta_TC > 0 else float("inf")
-    t_prefill_mem = _t_mem(traffic.T_theta_device, traffic.T_kv_write_device, B=1)
+    t_prefill_mem = _t_mem(traffic.T_theta_device, traffic.T_kv_write_per_request, B=1)
     t_prefill_local_gpu = max(t_prefill_compute_eff, t_prefill_mem)
     t_prefill_local = _compose_SW(t_prefill_local_gpu)
     t_prefill_comm = comm.t_prefill_comm
@@ -550,7 +550,7 @@ def compute_prefill_latency(
         # Traffic: weights loaded once + B_pf * KV writes per request
         # (multi-tier sum; placement re-resolved at this B).
         t_batched_mem = _t_mem(
-            traffic.T_theta_device, traffic.T_kv_write_device, B=B_pf,
+            traffic.T_theta_device, traffic.T_kv_write_per_request, B=B_pf,
         )
         t_batched_local_gpu = max(t_batched_compute_eff, t_batched_mem)
         t_batched_local = _compose_SW(t_batched_local_gpu)

@@ -286,6 +286,9 @@ def run_framework(
     moe_a2a_pattern: str = "gather",
     kernel_launch_us: float | None = None,
     bytes_per_param: float | None = None,
+    serving_overlap_factor: float | None = None,
+    sw_overlap_factor: float | None = None,
+    comm_overlap_factor: float | None = None,
 ) -> list[FrameworkPoint]:
     """Run InferenceCalculator across a B sweep, return per-B latency breakdown.
 
@@ -327,6 +330,12 @@ def run_framework(
     )
     if kernel_launch_us is not None:
         fw_kwargs["kernel_launch_us"] = kernel_launch_us
+    if serving_overlap_factor is not None:
+        fw_kwargs["serving_overlap_factor"] = serving_overlap_factor
+    if sw_overlap_factor is not None:
+        fw_kwargs["sw_overlap_factor"] = sw_overlap_factor
+    if comm_overlap_factor is not None:
+        fw_kwargs["comm_overlap_factor"] = comm_overlap_factor
     framework = FrameworkSpec(**fw_kwargs)
 
     out: list[FrameworkPoint] = []
@@ -385,6 +394,9 @@ def predict_at(
     moe_a2a_pattern: str = "gather",
     kernel_launch_us: float | None = None,
     bytes_per_param: float | None = None,
+    serving_overlap_factor: float | None = None,
+    sw_overlap_factor: float | None = None,
+    comm_overlap_factor: float | None = None,
 ) -> float:
     """Predict TPOT (ms) at a single B — used to align with measured points."""
     pts = run_framework(
@@ -397,6 +409,9 @@ def predict_at(
         moe_a2a_pattern=moe_a2a_pattern,
         kernel_launch_us=kernel_launch_us,
         bytes_per_param=bytes_per_param,
+        serving_overlap_factor=serving_overlap_factor,
+        sw_overlap_factor=sw_overlap_factor,
+        comm_overlap_factor=comm_overlap_factor,
     )
     if not pts:
         return float("nan")
@@ -468,12 +483,25 @@ def plot_tpot_vs_B(
     title: str,
     subtitle: str,
     out_path: Path,
+    primary_label: str | None = None,
+    secondary: (
+        tuple[str, Sequence[FrameworkPoint], Sequence[MeasuredPoint]]
+        | list[tuple[str, Sequence[FrameworkPoint], Sequence[MeasuredPoint]]]
+        | None
+    ) = None,
+    xlim: tuple[float, float] | None = None,
 ) -> None:
     """Single-panel TPOT-vs-B plot with framework breakdown + measured points.
 
     Plots compute / mem / comm / LM / serving / total components (matching
     the existing sandbox style). Measured points overlay as markers labeled
     with their concurrency.
+
+    `secondary`: optional overlay(s) of additional workloads' TPOT model curve
+    and measured scatter (no breakdown). Accepts either a single
+    `(label, framework, measured)` tuple or a list of them. Use when a single
+    calibration is validated against multiple workload regimes on the same
+    panel (e.g. short- vs long-context decode).
     """
     import os
     import matplotlib
@@ -502,19 +530,53 @@ def plot_tpot_vs_B(
     ax.plot(bs, [p.TPOT_ms      for p in fx], "-",  c="black",       lw=2.5*l_scale,             label="TPOT (composed)")
 
     if measured:
+        prim_label = (f"InferenceX measured {primary_label} (n={len(measured)})"
+                      if primary_label else f"InferenceX measured (n={len(measured)})")
         ax.scatter([m.B for m in measured], [m.tpot_ms for m in measured],
                    c="navy", marker="D", s=70*(l_scale**2), edgecolors="black", linewidths=0.5*l_scale,
-                   zorder=10, label=f"InferenceX measured (n={len(measured)})")
+                   zorder=10, label=prim_label)
         for m in measured:
             ax.annotate(f"c={m.B}", (m.B, m.tpot_ms),
                         textcoords="offset points", xytext=(6, 4),
                         fontsize=6*f_scale, color="navy", alpha=0.7)
+
+    if secondary is not None:
+        # Normalize to list. A bare 3-tuple is a single overlay (legacy form).
+        sec_list = (
+            [secondary]
+            if (isinstance(secondary, tuple) and len(secondary) == 3
+                and isinstance(secondary[0], str))
+            else list(secondary)
+        )
+        sec_styles = [
+            ("teal",          "^",  ( 6, -10)),
+            ("darkmagenta",   "s",  ( 6,  10)),
+            ("saddlebrown",   "v",  (-12, -10)),
+        ]
+        for i, (sec_label, sec_fw, sec_meas) in enumerate(sec_list):
+            color, marker, dxy = sec_styles[i % len(sec_styles)]
+            sec_fx = [p for p in sec_fw if p.fits_in_HBM] or list(sec_fw)
+            sec_bs = [p.B for p in sec_fx]
+            ax.plot(sec_bs, [p.TPOT_ms for p in sec_fx], "-",
+                    c=color, lw=2.5*l_scale,
+                    label=f"TPOT ({sec_label})")
+            if sec_meas:
+                ax.scatter([m.B for m in sec_meas], [m.tpot_ms for m in sec_meas],
+                           c=color, marker=marker, s=70*(l_scale**2), edgecolors="black",
+                           linewidths=0.5*l_scale, zorder=10,
+                           label=f"InferenceX measured {sec_label} (n={len(sec_meas)})")
+                for m in sec_meas:
+                    ax.annotate(f"c={m.B}", (m.B, m.tpot_ms),
+                                textcoords="offset points", xytext=dxy,
+                                fontsize=6*f_scale, color=color, alpha=0.7)
 
     ax.set_xlabel("Concurrency (B)", fontsize=12*f_scale)
     ax.set_ylabel("Time per decode step (ms)", fontsize=12*f_scale)
     ax.tick_params(axis="both", labelsize=10*f_scale)
     ax.set_xscale("log")
     ax.set_yscale("log")
+    if xlim is not None:
+        ax.set_xlim(*xlim)
     ax.grid(True, alpha=0.3, which="both")
 
     if _paper:

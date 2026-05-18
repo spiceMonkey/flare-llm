@@ -14,10 +14,25 @@ class LlmPerfEquations:
             "latex": r"M_{\text{act,device}} = (4H + 2H_{kv}) b",
             "expr": " (4*H + 2*H_kv) * b ",
         },
-        "M_kv_device": {
-            "description": "Per-device KV cache memory.",
-            "latex": r"M_{\text{KV,device}} = \frac{L}{PP} \frac{2 S H_{kv} b}{TP \cdot SP}",
+        "M_kv_token": {
+            "description": "Per-device, per-sequence KV cache memory (one resident sequence's history across the L/PP stage layers).",
+            "latex": r"M_{\text{KV,token}} = \frac{L}{PP} \frac{2 S H_{kv} b}{TP \cdot SP}",
             "expr": " (L/PP) * (2*S*H_kv*b) / (TP*SP) ",
+        },
+        "M_kv_device": {
+            "description": "Per-device KV cache memory aggregated over B resident sequences.",
+            "latex": r"M_{\text{KV,device}}(B) = B \cdot M_{\text{KV,token}} = B \cdot \frac{L}{PP} \frac{2 S H_{kv} b}{TP \cdot SP}",
+            "expr": " B * (L/PP) * (2*S*H_kv*b) / (TP*SP) ",
+        },
+        "T_kv_token": {
+            "description": "Per-device, per-token KV traffic per decode step (one active sequence's KV-history read across the L/PP stage layers); equals M_KV,token for decode.",
+            "latex": r"T_{\text{KV,token}} \approx \frac{L}{PP} \cdot \frac{2 S H_{kv} b}{TP \cdot SP}",
+            "expr": " (L/PP) * (2*S*H_kv*b) / (TP*SP) ",
+        },
+        "T_kv_device": {
+            "description": "Per-device per-step KV traffic aggregated over B active sequences (decode.md §2.3).",
+            "latex": r"T_{\text{KV,device}}(B) = B \cdot T_{\text{KV,token}} \approx B \cdot \frac{L}{PP} \cdot \frac{2 S H_{kv} b}{TP \cdot SP}",
+            "expr": " B * (L/PP) * (2*S*H_kv*b) / (TP*SP) ",
         },
         "F_token_device": {
             "description": "Per-device FLOPs per decoded token on a PP stage.",

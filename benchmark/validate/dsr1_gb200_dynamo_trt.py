@@ -36,6 +36,11 @@ MODEL = "DeepSeek-R1-0528"
 SYSTEM = "gb200.72gpu"
 PRECISION = "fp4"
 ISL, OSL = 1024, 1024
+# CO-LOCATED panel loads two workloads per shape: short-context (1K/1K,
+# compute/weight-bound) and long-context (8K/1K, KV-traffic-bound). Same
+# calibration must fit both — validates that bw_eta / c_serving /
+# kernel_launch_us are hardware/stack properties, not workload knobs.
+CO_LOCATED_WORKLOADS = [(1024, 1024), (8192, 1024)]
 
 # Per-stack calibration. Production DSv3/R1 on Dynamo+TRT-LLM with
 # DP-attention uses scatter-direct MoE A2A (decode.md §5.2): dispatch
@@ -144,61 +149,83 @@ def run_exact(args) -> tuple[list[tuple], int]:
     return rows, len(measured)
 
 
-def run_colocated(args) -> tuple[list[tuple], int]:
-    """Cut 2: TP+EP co-located DSv3 production shape (TP=EP=N on N GPUs)."""
+def _run_colocated_workload(args, tp_ep: int, isl: int, osl: int):
+    """Helper: load measured + run framework sweep for one (shape, ISL/OSL) cut."""
+    measured = load_measured(
+        MODEL, isl=isl, osl=osl, precision=PRECISION,
+        decode_tp=tp_ep, decode_ep=tp_ep, num_decode_gpu=tp_ep,
+        dp_attention=True,
+        framework={"dynamo-trt", "trt", "trt-llm", "trtllm", "dynamo-trt-llm"},
+        hardware="gb200",
+    )
+    S_decode = isl + osl // 2
+    framework = run_framework(
+        model="deepseek_r1_0528", system_id=SYSTEM,
+        PP=1, TP=tp_ep, EP=tp_ep, SP=1,
+        attention_mode="dp", tp_ep_layout="co_located",
+        num_devices=tp_ep, S_decode=S_decode,
+        B_sweep=log_spaced_B(8192),
+        flops_eta=args.flops_eta, bw_eta=args.bw_eta,
+        c_serving_us=args.c_serving_us,
+        moe_a2a_pattern=DEFAULT_MOE_A2A_PATTERN,
+        kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US,
+        bytes_per_param=0.5,
+    )
     rows = []
-    n = 0
-    for tp_ep in (8, 16, 32):
-        measured = load_measured(
-            MODEL, isl=ISL, osl=OSL, precision=PRECISION,
-            decode_tp=tp_ep, decode_ep=tp_ep, num_decode_gpu=tp_ep,
-            dp_attention=True,
-            framework={"dynamo-trt", "trt", "trt-llm", "trtllm", "dynamo-trt-llm"},
-            hardware="gb200",
-        )
-        print(f"\n[CO-LOCATED] TP=EP={tp_ep} on {tp_ep}-GPU replica, "
-              f"ISL={ISL} OSL={OSL} {PRECISION} | {len(measured)} measured points")
-        if not measured:
-            continue
-        n += len(measured)
-
-        framework = run_framework(
+    for m in measured:
+        pred = predict_at(
             model="deepseek_r1_0528", system_id=SYSTEM,
             PP=1, TP=tp_ep, EP=tp_ep, SP=1,
             attention_mode="dp", tp_ep_layout="co_located",
-            num_devices=tp_ep, S_decode=ISL + OSL // 2,
-            B_sweep=log_spaced_B(8192),
+            num_devices=tp_ep, S_decode=S_decode, B=m.B,
             flops_eta=args.flops_eta, bw_eta=args.bw_eta,
             c_serving_us=args.c_serving_us,
             moe_a2a_pattern=DEFAULT_MOE_A2A_PATTERN,
             kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US,
             bytes_per_param=0.5,
         )
-        for m in measured:
-            pred = predict_at(
-                model="deepseek_r1_0528", system_id=SYSTEM,
-                PP=1, TP=tp_ep, EP=tp_ep, SP=1,
-                attention_mode="dp", tp_ep_layout="co_located",
-                num_devices=tp_ep, S_decode=ISL + OSL // 2, B=m.B,
-                flops_eta=args.flops_eta, bw_eta=args.bw_eta,
-                c_serving_us=args.c_serving_us,
-                moe_a2a_pattern=DEFAULT_MOE_A2A_PATTERN,
-                kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US,
-                bytes_per_param=0.5,
-            )
-            rows.append((f"TP=EP={tp_ep}", m.B, m.tpot_ms, pred))
+        rows.append((f"TP=EP={tp_ep} {isl}/{osl}", m.B, m.tpot_ms, pred))
+    return framework, measured, rows
 
+
+def run_colocated(args) -> tuple[list[tuple], int]:
+    """Cut 2: TP+EP co-located DSv3 production shape (TP=EP=N on N GPUs).
+
+    Two workloads overlaid per shape — short-context (1K/1K, compute/weight-
+    bound) and long-context (8K/1K, KV-traffic-bound). Same calibration must
+    fit both regimes; the panel directly visualizes whether bw_eta /
+    c_serving / kernel_launch_us hold across bottleneck regimes.
+    """
+    all_rows = []
+    n_total = 0
+    for tp_ep in (8, 16, 32):
+        wl_primary, wl_secondary = CO_LOCATED_WORKLOADS
+        fw_prim, meas_prim, rows_prim = _run_colocated_workload(args, tp_ep, *wl_primary)
+        fw_sec,  meas_sec,  rows_sec  = _run_colocated_workload(args, tp_ep, *wl_secondary)
+        print(f"\n[CO-LOCATED] TP=EP={tp_ep} on {tp_ep}-GPU replica | "
+              f"{wl_primary[0]}/{wl_primary[1]}: {len(meas_prim)} pts, "
+              f"{wl_secondary[0]}/{wl_secondary[1]}: {len(meas_sec)} pts")
+        if not meas_prim and not meas_sec:
+            continue
+        all_rows.extend(rows_prim)
+        all_rows.extend(rows_sec)
+        n_total += len(meas_prim) + len(meas_sec)
+
+        prim_lbl = f"ISL={wl_primary[0]} OSL={wl_primary[1]}"
+        sec_lbl  = f"ISL={wl_secondary[0]} OSL={wl_secondary[1]}"
         out = args.out_dir / f"dsr1_dynamo_trt_colocated_tp{tp_ep}ep{tp_ep}{eta_filename_tag(args.flops_eta, args.bw_eta, args.c_serving_us)}.png"
         plot_tpot_vs_B(
-            framework=framework, measured=measured,
+            framework=fw_prim, measured=meas_prim,
             title=f"DSR1 / GB200 / Dynamo-TRT — CO-LOCATED TP=EP={tp_ep} on {tp_ep}-GPU replica",
             subtitle=f"tp_ep_layout=co_located attention_mode=dp PP=1 TP={tp_ep} EP={tp_ep} SP=1 | "
-                     f"ISL={ISL} OSL={OSL} FP4 | sys={SYSTEM} | {topology_tag(SYSTEM)} | {eta_subtitle(args.flops_eta, args.bw_eta, args.c_serving_us)}",
+                     f"{prim_lbl} + {sec_lbl} FP4 | sys={SYSTEM} | {topology_tag(SYSTEM)} | {eta_subtitle(args.flops_eta, args.bw_eta, args.c_serving_us)}",
             out_path=out,
+            primary_label=prim_lbl,
+            secondary=(sec_lbl, fw_sec, meas_sec),
         )
         print(f"  saved: {out.relative_to(args.out_dir.parent.parent)}")
 
-    return rows, n
+    return all_rows, n_total
 
 
 def run_colo_tp_attn(args) -> tuple[list[tuple], int]:
