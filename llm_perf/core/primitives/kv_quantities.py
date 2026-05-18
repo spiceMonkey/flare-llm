@@ -1,9 +1,13 @@
-"""KV cache footprint primitive — per-device bytes for a single sequence.
+"""KV cache footprint and per-step traffic — per-device bytes per sequence.
 
-Given a sequence of `n_tokens` KV entries, returns the per-device bytes
-needed to store that sequence's keys and values across all layers:
+Single primitive that serves *both* quantities simultaneously: the KV
+memory footprint and the KV per-step traffic share the same formula
+because, in decode, the full KV cache of every in-flight sequence is
+read at every step (each sequence's score / value attention traverses
+its entire context). Unlike the weight-θ split in `weight_quantities.py`,
+no expert-style masking applies to KV — what's resident is what's read.
 
-    M_kv = (L / PP) · 2 · n_tokens · H_kv · b / (D_kv · SP)
+    M_kv_per_seq = T_kv_per_seq = (L / PP) · 2 · n_tokens · H_kv · b / (D_kv · SP)
 
 - Factor of 2 covers keys and values.
 - (L/PP) is the layer slice owned by this pipeline stage.
@@ -14,9 +18,9 @@ needed to store that sequence's keys and values across all layers:
   D_kv = max(TP, EP) (sequence-shard across the entire replica's GPUs).
 - SP further shards the sequence dimension on top of D_kv.
 
-This is the single source of truth for KV traffic (decode per-step read,
-prefill per-pass write) and KV memory (batched decode residency, paged
-block sizing). Callers multiply by B sequences / B_prefill as needed.
+Callers multiply by B sequences / B_prefill as needed: memory uses
+B × kv_bytes_per_seq for residency; traffic uses B × kv_bytes_per_seq
+for the per-step batched read.
 """
 
 from ...specs.framework_spec import FrameworkSpec

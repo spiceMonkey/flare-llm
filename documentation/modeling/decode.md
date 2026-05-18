@@ -580,13 +580,13 @@ T_{\theta,\text{FFN}} =
 \frac{P_{\text{FFN}}}{D_{\text{exp}}}\; b
 $$
 
-### Final parameter-traffic expression
+### Final parameter-traffic expression (dense layers)
 
-Combining these terms:
+For dense layers (every weight is read every step), combining these terms:
 
 $$
-T_{\theta,\text{device}}
-\approx
+T_{\theta,\text{device}}^{\text{dense}}
+=
 \frac{L}{PP}
 \left(
   \frac{P_{\text{attn}}}{D_{\text{attn}}}
@@ -597,13 +597,11 @@ T_{\theta,\text{device}}
 \left(
 \frac{2H^2 + 2 H H_{kv}}{D_{\text{attn}}}
 \;+\;
-\frac{3 H I N_{\text{exp}}}{D_{\text{exp}}}
+\frac{3 H I_{\text{dense}}}{TP}
 \right) b
 $$
 
-**For a dense MLP model:** $I = I_{\text{dense}}, \text{ } N_{\text{exp}} = EP = 1$ (so $D_{\text{exp}} = TP$).
-
-**And for a MoE model:** $I = I_{\text{moe}}$.
+(Dense FFN keeps $D_{\text{exp}} = TP$ regardless of layout, no EP axis to overlap.) For MoE layers the expert-FFN term is *not* the full-footprint expression; see the mixed-architecture form below.
 
 ### Mixed MoE/Dense Architectures
 
@@ -626,15 +624,30 @@ T_{\theta,\text{dense}} =
 \right) b
 $$
 
+For MoE layers, *per-step traffic* differs from the *static footprint* (cf. §1.4): expert weights enter HBM traffic only for the experts the current batch actually selects, while the static footprint must hold every expert because the next step may select any of them. The conventional "all weights read each step" simplification is exact for dense layers but over-counts for MoE at small $B$. Writing $\mathbb{E}[N_{\text{exp,touched}}^{\text{rank}}]$ for the expected number of unique experts touched on a single rank per step:
+
 $$
 T_{\theta,\text{moe}} =
 \frac{L_{\text{moe}}}{PP}\;
 \left(
 \frac{2H^2 + 2 H H_{kv}}{D_{\text{attn}}}
 \;+\;
-\frac{3 H I_{\text{moe}} N_{\text{exp}}}{D_{\text{exp}}}
+3 H I_{\text{moe}} \cdot \mathbb{E}[N_{\text{exp,touched}}^{\text{rank}}]
 \right) b
 $$
+
+Under the uniform-routing assumption (each token's $k$ active experts drawn independently and uniformly from the global $N_{\text{exp}}$ pool, then routed to whichever rank holds the selected expert), with $N_{\text{exp/rank}} = N_{\text{exp}} / D_{\text{exp}}$ experts held on each rank and $t_{\text{tokens/rank}} = B k_{\text{active}} / D_{\text{exp}}$ expert-touch events per rank per step:
+
+$$
+\mathbb{E}[N_{\text{exp,touched}}^{\text{rank}}]
+= N_{\text{exp/rank}}\!\left(1 - \!\left(1 - \frac{1}{N_{\text{exp/rank}}}\right)^{\!t_{\text{tokens/rank}}}\right)
+$$
+
+Asymptotics:
+- $B \to 0$: $\mathbb{E}[N_{\text{exp,touched}}^{\text{rank}}] \to t_{\text{tokens/rank}}$ (linear in $B$); traffic dominated by attention + a small expert slice.
+- $B k_{\text{active}} \gg N_{\text{exp}}$: $\mathbb{E}[N_{\text{exp,touched}}^{\text{rank}}] \to N_{\text{exp/rank}}$; expression recovers the full-footprint form $3 H I_{\text{moe}} N_{\text{exp}} / D_{\text{exp}}$.
+
+**Routing-uniformity caveat.** Real production routers can deviate from uniform routing: load-balancing-loss anti-correlation, expert hot-spotting, or capacity-factor saturation can make some experts touched more often than others, raising $\mathbb{E}[N_{\text{exp,touched}}^{\text{rank}}]$ above the uniform-routing value at fixed $B$. Modeling this requires per-deployment routing statistics not generally available; the uniform-routing assumption above is documented as a known source of model inaccuracy at small $B$.
 
 ### LM head parameter traffic
 

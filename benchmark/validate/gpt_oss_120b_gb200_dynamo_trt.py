@@ -25,12 +25,19 @@ PRECISION = "fp4"
 ISL, OSL = 1024, 1024
 TP, EP, NUM = 4, 1, 4
 
-# Per-stack calibration. Anchor case for Dynamo+TRT — fits to ~9% MAE at
-# (bw_eta=1.0, c_serving=22 µs/seq), exactly matching the §7.2 calibration
-# range for "production CUDA-Graph stacks". Confirms the 22 µs anchor is
-# Dynamo-specific (raw TRT-LLM needs c_serving 4–5× higher; see
-# dsr1_b200_trt and llama3_70b_*).
-DEFAULT_BW_ETA = 1.4286
+# Per-stack calibration. Dynamo+TRT anchor case. The previous super-nameplate
+# bw_eta=1.4286 (physically impossible) was a tuning hack compensating for the
+# pre-`moe_weight_traffic_bytes` over-count of T_theta (full N_exp footprint
+# read every step regardless of B). With T_theta(B) correctly modeled as the
+# expectation of touched experts, bw_eta resets to a realistic 0.7 (matches
+# the DSr1 GB200 calibration on the same hardware). The residual ~38% MAE
+# reflects a remaining slope/offset gap: at B=1 the model under-predicts
+# (~0.8 ms vs measured 1.9 ms — suggests a B-independent per-step overhead
+# not captured), and at large B it over-predicts (predicted curve rises
+# faster than measured). Resolving this likely requires a fixed per-step
+# overhead term or precision-aware kernel-launch budget; documented as a
+# §5 Limitation.
+DEFAULT_BW_ETA = 0.7
 DEFAULT_C_SERVING_US = 22.0
 
 

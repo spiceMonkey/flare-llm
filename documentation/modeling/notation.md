@@ -151,15 +151,15 @@ Parameter sizes:
 - $P_{\text{emb}}$ — Embedding parameter count.
 - $P_{\text{lm}}$ — LM head parameter count (0 if weight-tied).
 
-Memory capacity (bytes **stored** in HBM):
-- $M_{\theta,\text{device}}$ — Parameter memory on this device.
+Memory capacity (bytes **stored** in HBM — the maximum resident set, must fit regardless of which experts the current step touches):
+- $M_{\theta,\text{device}}$ — Parameter memory on this device. For MoE layers this is the *full* $N_{\text{exp}}$ footprint (every expert weight must be resident because the next step may select any).
 - $M_{\text{KV,device}}$ — KV cache storage (keys + values).
 - $M_{\text{act,device}}$ — Activation working memory per token during decoding.
 - $M_{\text{HBM}}$ — Available HBM capacity per device.
 
-Memory traffic (bytes **moved** between HBM and compute per token):
-- $T_{\theta,\text{device}}$ — Parameter traffic (weights read per token).
-- $T_{\text{KV,device}}$ — KV traffic (read + write per new token).
+Memory traffic (bytes **moved** between HBM and compute per step):
+- $T_{\theta,\text{device}}$ — Parameter traffic per step. For dense layers equals the corresponding footprint; **for MoE layers, expert weights enter traffic only for the experts the current batch touches**, so $T_{\theta,\text{moe}}(B) < M_{\theta,\text{moe}}$ at small $B$ and converges to $M_{\theta,\text{moe}}$ as $B \cdot k_{\text{active}} \gg N_{\text{exp}}$ (`decode.md §2.1`). Under the uniform-routing assumption, expert traffic uses $\mathbb{E}[N_{\text{exp,touched}}^{\text{rank}}]$ in place of $N_{\text{exp}}/D_{\text{exp}}$.
+- $T_{\text{KV,device}}$ — KV traffic per step. Equals the per-step memory footprint of the in-flight KV cache because every sequence's full context is traversed at every decode step.
 - $T_{\text{act,device}}$ — Activation traffic (intermediate reads/writes).
 - $T_{\text{token,device}}$ — Total per-token traffic on this device.
 - $T_{\text{token,device}}^{\text{eff}}$ — Effective traffic after FlashAttention-style optimizations.
