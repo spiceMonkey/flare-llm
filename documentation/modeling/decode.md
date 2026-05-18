@@ -22,7 +22,7 @@ LLM inference, Transformer, parallelism, tensor parallelism, expert parallelism,
 - [2. Memory Traffic During Decoding](#2-memory-traffic-during-decoding)
   - [2.1 Model Parameter Traffic $T_{\theta,\text{device}}$](#21-model-parameter-traffic-t_theta_textdevice)
   - [2.2 Activation Traffic $T_{\text{act,device}}$](#22-activation-traffic-t_textactdevice)
-  - [2.3 KV Cache Traffic $T_{\text{KV,device}}$](#23-kv-cache-traffic-t_textkvdevice)
+  - [2.3 KV Cache Traffic $T_{\text{KV,device}}(B)$](#23-kv-cache-traffic-t_textkvdeviceb)
   - [2.4 Total and Effective Traffic](#24-total-and-effective-traffic)
   - [2.5 Static Memory Footprint vs. Memory Traffic](#25-static-memory-footprint-vs-memory-traffic-important-distinction)
 
@@ -430,22 +430,24 @@ The semantic of $D_{\text{kv}}$ depends on the attention mode:
 - Under **TP-attn** (default), $D_{\text{kv}} = TP$ and the divisor is the head-shard across the $TP$ ranks.
 - Under **DP-attn** (DSv3 / SGLang), $D_{\text{kv}} = TP$ for orthogonal layout (sequence-shard across the $TP$ ranks now acting as DP-attn ranks; per-device byte count unchanged from TP-attn) or $D_{\text{kv}} = \max(TP, EP)$ for co-located layout (sequence-shard across the entire replica's GPU set).
 
-For a batch of $B$ resident sequences, each carries its own KV history. The **per-device** KV memory footprint scales linearly with $B$:
+For a batch of $B$ resident sequences, each carries its own KV history. We factor the per-device KV memory into a **per-sequence** building block $M_{\text{KV,token}}$ that captures the per-device byte cost of one sequence's KV history (the symbol uses "token" to parallel the per-token compute and traffic terms in §2.3, §3.5 — for decode each active sequence equals one new token per step):
 
 $$
-M_{\text{KV,device}}(B) =
+M_{\text{KV,token}}
+\;=\;
+\frac{L}{PP}
+\cdot
+\frac{(2 S H_{kv}) b}{D_{\text{kv}} \cdot SP}
+$$
+
+and the **per-device** KV memory footprint as the linear-in-$B$ scaling:
+
+$$
+M_{\text{KV,device}}(B) \;=\; B \cdot M_{\text{KV,token}}
+\;=\;
 B \cdot \frac{L}{PP}
-\frac{
-    M_{\text{KV,layer}}
-}{
-    D_{\text{kv}} \cdot SP
-} =
-B \cdot \frac{L}{PP}
-\frac{
-     (2 S H_{kv}) b
-}{
-    D_{\text{kv}} \cdot SP
-}
+\cdot
+\frac{(2 S H_{kv}) b}{D_{\text{kv}} \cdot SP}
 $$
 
 which:
@@ -535,16 +537,7 @@ In autoregressive decoding, each step generates one new token per active sequenc
 
 Throughout this section, the per-step traffic quantities below are consistent with this asymmetry. Optimizations like FlashAttention or Fused-MLP do **not** reduce weight traffic; they only reduce the traffic of intermediate activations.
 
-This section uses the per-component effective sharding factors $D_{\text{attn}}$, $D_{\text{exp}}$, $D_{\text{kv}}$, $D_{\text{emb}}$ from `notation.md §1`. Resolving the abstract factors:
-
-| configuration | $D_{\text{attn}}$ | $D_{\text{exp}}$ (MoE) | $D_{\text{kv}}$ | $D_{\text{emb}}$ |
-|---|---|---|---|---|
-| orthogonal + TP-attn | $TP$ | $TP \cdot EP$ | $TP$ (head) | $TP$ |
-| co-located + TP-attn | $TP$ | $EP$ | $TP$ (head) | $TP$ |
-| orthogonal + DP-attn | $1$ | $TP \cdot EP$ | $TP$ (seq) | $TP$ |
-| co-located + DP-attn | $1$ | $EP$ | $\max(TP, EP)$ (seq) | $TP$ |
-
-Dense FFN always uses $D_{\text{exp}} = TP$. KV traffic carries an additional $/SP$ factor on top of $D_{\text{kv}}$ when sequence parallelism is enabled. Under co-location $TP = EP$ structurally, so $\max(TP, EP)$ and $TP$ collapse to the same value in the co-located rows.
+This section uses the per-component effective sharding factors $D_{\text{attn}}$, $D_{\text{exp}}$, $D_{\text{kv}}$, $D_{\text{emb}}$ from `notation.md §1`. The four-row lookup mapping `(layout, attention_mode)` to factor values is given once in §1.4 above (and canonically in `notation.md §1`); we do not repeat it here. Reminder of the SP-specific adjustment: KV traffic carries an additional $/SP$ factor on top of $D_{\text{kv}}$ when sequence parallelism is enabled.
 
 ---
 
@@ -671,7 +664,7 @@ Because FlashAttention drastically reduces the score matrix traffic, the residua
 
 ---
 
-## 2.3 KV Cache Traffic $T_{\text{KV,device}}$
+## 2.3 KV Cache Traffic $T_{\text{KV,device}}(B)$
 
 KV cache must be **fully read** for each new token to compute attention against the history.
 For large $S$, the write term (appending the new token) is negligible compared to reading the history.
@@ -686,13 +679,23 @@ $$
 
 > **Variant note.** Multi-head Latent Attention (MLA) replaces $2 H_{kv}$ above with the head-shared latent dimension $(d_c + d_{qk,\mathrm{rope}})$, typically 25× smaller than the equivalent dense MHA. See `attention.md §3.4`.
 
-KV is sharded by $D_{\text{kv}}$ (head or sequence depending on layout/mode; see the §2 intro table above) and by $SP$ (sequence parallelism, when enabled). Each device sees a $\frac{1}{D_{\text{kv}} \cdot SP}$ shard of the per-layer traffic.
+KV is sharded by $D_{\text{kv}}$ (head or sequence depending on layout/mode; see §1.4) and by $SP$ (sequence parallelism, when enabled). Each device sees a $\frac{1}{D_{\text{kv}} \cdot SP}$ shard of the per-layer traffic.
 
-For a PP stage with $L/PP$ layers and $B$ active sequences in the batch — each streaming its own KV history — the **per-step per-device KV traffic** is:
+We factor the per-device KV traffic into a **per-token** building block $T_{\text{KV,token}}$ (per-device traffic generated by one active sequence per step, summed across the $L/PP$ layers on the stage) and a linear-in-$B$ aggregator. The naming parallels the per-token compute terms $F_{\text{attn,token,device}}$ and $F_{\text{ffn,token,device}}$ in §3.5 — for decode each active sequence produces one new token per step, so per-token and per-sequence coincide:
 
 $$
-T_{\text{KV,device}}(B)
-\approx
+T_{\text{KV,token}}
+\;\approx\;
+\frac{L}{PP}
+\cdot
+\frac{2 S H_{kv} \, b}{D_{\text{kv}} \cdot SP}
+$$
+
+For a PP stage with $B$ active sequences in the batch — each streaming its own KV history — the **per-step per-device KV traffic** is:
+
+$$
+T_{\text{KV,device}}(B) \;=\; B \cdot T_{\text{KV,token}}
+\;\approx\;
 B \cdot \frac{L}{PP}
 \cdot
 \frac{2 S H_{kv} \, b}{D_{\text{kv}} \cdot SP}
@@ -917,6 +920,8 @@ This matches:
 - MoE layer:
   $F_{\text{ffn}} = 6H (k I_{\text{moe}}) + 2H N_{\text{exp}} = 6H I_{\text{moe}} k + 2H N_{\text{exp}}$
 
+> **Note on MoE compute vs. traffic.** The fixed factor $k$ in $F_{\text{ffn,moe}}$ stays exact even at small $B$, in contrast to MoE *weight traffic* (§2.1 *MoE weight traffic*), where bytes-read-per-step depends on the expected number of distinct experts touched on each rank and is genuinely sub-linear in $B$. The asymmetry is the per-(token, expert) coupling: **compute is independent** — two tokens hitting the same expert do two separate gated MLP evaluations, so $B \cdot k$ correctly counts total expert invocations and the per-rank batched FLOPs are exactly $B \cdot k \cdot 6 H I_{\text{moe}} / D_{\text{exp}}$ under uniform routing (no expectation needed). **Traffic is shared** — one HBM read of an expert's weights serves all tokens hitting it that step — so it saturates sub-linearly in $B$ and requires the touched-experts expectation formula. The same per-(token, expert) independence applies to the router term $2 H N_{\text{exp}}$, which fires once per token regardless of routing collisions.
+
 ---
 
 ## 3.4 LayerNorm and Elementwise FLOPs
@@ -943,16 +948,7 @@ where:
 
 $F_{\text{norm}}$ is dropped per Section 3.4.
 
-This subsection uses the per-component effective sharding factors from `notation.md §1`. Resolving the abstract factors:
-
-| configuration | $D_{\text{attn}}$ | $D_{\text{exp}}$ (MoE) | $D_{\text{kv}}$ | $D_{\text{emb}}$ |
-|---|---|---|---|---|
-| orthogonal + TP-attn | $TP$ | $TP \cdot EP$ | $TP$ | $TP$ |
-| co-located + TP-attn | $TP$ | $EP$ | $TP$ | $TP$ |
-| orthogonal + DP-attn | $1$ | $TP \cdot EP$ | $TP$ | $TP$ |
-| co-located + DP-attn | $1$ | $EP$ | $\max(TP, EP)$ | $TP$ |
-
-Dense FFN always uses $D_{\text{exp}} = TP$. The KV-attention compute term carries an additional $/SP$ factor on top of $D_{\text{kv}}$ when sequence parallelism is enabled. Under co-location $TP = EP$ structurally.
+This subsection uses the per-component effective sharding factors from `notation.md §1`; the four-row lookup mapping `(layout, attention_mode)` to factor values is in §1.4 above (canonical source: `notation.md §1`). FLOPs-specific reminder: the KV-attention compute term $F_{\text{attn,KV}}$ carries an additional $/SP$ factor on top of $D_{\text{kv}}$ when sequence parallelism is enabled.
 
 To find **per-device FLOPs**, we apply sharding from each parallelism dimension and then multiply by the number of layers on the PP stage.
 
@@ -1131,7 +1127,7 @@ This is the per-step, per-device FLOP count consumed in the roofline (§4). All 
 
 # 4. Compute vs. Memory Bound (Roofline Model)
 
-Sections 2 and 3 derived the **per-step memory traffic** $T_{\text{step,device}}^{\text{eff}}(B) = T_{\theta,\text{device}} + B \cdot T_{\text{KV,device}}$ and the **per-step FLOPs per device** $F_{\text{step,device}}(B) = B_{\text{attn}}^{\text{rank}} \cdot F_{\text{attn,token,device}} + B \cdot F_{\text{ffn,token,device}}$ (with $B_{\text{attn}}^{\text{rank}} = B / G_{TP}$ under DP-attention and $B$ under TP-attention; see §3.5 *Per-step (batched) FLOPs*). The compute roofline divides FLOPs by sustained device throughput $R_{\text{GPU}}$ (FLOPs/s):
+Sections 2 and 3 derived the **per-step memory traffic** $T_{\text{step,device}}^{\text{eff}}(B) = T_{\theta,\text{device}} + B \cdot T_{\text{KV,token}}$ and the **per-step FLOPs per device** $F_{\text{step,device}}(B) = B_{\text{attn}}^{\text{rank}} \cdot F_{\text{attn,token,device}} + B \cdot F_{\text{ffn,token,device}}$ (with $B_{\text{attn}}^{\text{rank}} = B / G_{TP}$ under DP-attention and $B$ under TP-attention; see §3.5 *Per-step (batched) FLOPs*). The compute roofline divides FLOPs by sustained device throughput $R_{\text{GPU}}$ (FLOPs/s):
 
 $$
 t_{\text{compute}}(B) = \frac{F_{\text{step,device}}(B)}{R_{\text{GPU}}} = \frac{B \cdot F_{\text{token,device}}}{R_{\text{GPU}}}
@@ -1148,7 +1144,7 @@ The $\alpha_i$ floor is kept here so the device roofline matches the standard $\
 **Single-tier reduction.** When $n = 1$ — single-tier devices like H100 / B200 / Groq LPU, or any system modeled before opening up the tier list — the sum collapses to one term:
 
 $$
-t_{\text{mem}}(B) = \alpha_0 \;+\; \frac{T_{\theta,\text{device}} + B \cdot T_{\text{KV,device}}}{BW_{\text{eff},0}}
+t_{\text{mem}}(B) = \alpha_0 \;+\; \frac{T_{\theta,\text{device}} + B \cdot T_{\text{KV,token}}}{BW_{\text{eff},0}}
 \qquad (n = 1)
 $$
 
@@ -1174,11 +1170,11 @@ The **operational intensity** for decoding on this device is [ROOFLINE]:
 $$
 \text{OI}(B) =
 \frac{F_{\text{step,device}}(B)}{T_{\text{step,device}}^{\text{eff}}(B)} =
-\frac{B \cdot F_{\text{token,device}}}{T_{\theta,\text{device}} + B \cdot T_{\text{KV,device}}}
+\frac{B \cdot F_{\text{token,device}}}{T_{\theta,\text{device}} + B \cdot T_{\text{KV,token}}}
 \quad \text{(FLOPs per byte)}
 $$
 
-For the **single-token, single-sequence** baseline ($B = 1$), the formula collapses to $\text{OI}(1) = F_{\text{token,device}} / (T_{\theta,\text{device}} + T_{\text{KV,device}})$, which establishes the fundamental memory-bound character of decode. As $B$ grows, $\text{OI}(B)$ rises (weight reads amortize across more sequences); the crossover-batch analysis is in the dedicated subsection below.
+For the **single-token, single-sequence** baseline ($B = 1$), the formula collapses to $\text{OI}(1) = F_{\text{token,device}} / (T_{\theta,\text{device}} + T_{\text{KV,token}})$, which establishes the fundamental memory-bound character of decode. As $B$ grows, $\text{OI}(B)$ rises (weight reads amortize across more sequences); the crossover-batch analysis is in the dedicated subsection below.
 
 High-level interpretation:
 
@@ -1227,7 +1223,7 @@ The short-context limit collapses to the same $2/b$ for a different reason: when
 
 ### Compute-Bound Crossover ($B^\star$)
 
-The full $\text{OI}(B) = B \cdot F_{\text{token,device}} / (T_{\theta,\text{device}} + B \cdot T_{\text{KV,device}})$ has two limiting regimes:
+The full $\text{OI}(B) = B \cdot F_{\text{token,device}} / (T_{\theta,\text{device}} + B \cdot T_{\text{KV,token}})$ has two limiting regimes:
 
 **Memory-bound limit** ($B$ small, weight traffic dominates the denominator):
 
@@ -1243,7 +1239,7 @@ At small $B$, the model is **weight-traffic-limited**. The $B = 1$ case recovers
 
 $$
 \lim_{B \to \infty} \text{OI}(B) =
-\frac{F_{\text{token,device}}}{T_{\text{KV,device}}}
+\frac{F_{\text{token,device}}}{T_{\text{KV,token}}}
 $$
 
 At large $B$, KV cache reads dominate and the intensity saturates at this asymptotic ceiling.
@@ -1253,7 +1249,7 @@ At large $B$, KV cache reads dominate and the intensity saturates at this asympt
 $$
 B^\star =
 \frac{T_{\theta,\text{device}} \cdot R_{\text{GPU}}}
-     {F_{\text{token,device}} \cdot BW_{\text{mem}} - T_{\text{KV,device}} \cdot R_{\text{GPU}}}
+     {F_{\text{token,device}} \cdot BW_{\text{mem}} - T_{\text{KV,token}} \cdot R_{\text{GPU}}}
 $$
 
 **Existence condition.** $B^\star$ is finite and positive iff the denominator is positive. Rearranging into ridge-point form:
@@ -1261,14 +1257,14 @@ $$
 $$
 B^\star < \infty
 \quad\Longleftrightarrow\quad
-\frac{F_{\text{token,device}}}{T_{\text{KV,device}}} \;>\; \frac{R_{\text{GPU}}}{BW_{\text{mem}}} = R_{\text{ridge}}
+\frac{F_{\text{token,device}}}{T_{\text{KV,token}}} \;>\; \frac{R_{\text{GPU}}}{BW_{\text{mem}}} = R_{\text{ridge}}
 $$
 
-i.e., the **arithmetic intensity of KV traffic alone** (per-token FLOPs over per-sequence KV bytes) must exceed the device ridge point. Intuition: $\text{OI}(B)$ asymptotes to $F_{\text{token,device}} / T_{\text{KV,device}}$ as $B \to \infty$; if this asymptotic ceiling itself sits below $R_{\text{ridge}}$, the roofline is never crossed regardless of batch size.
+i.e., the **arithmetic intensity of KV traffic alone** (per-token FLOPs over per-sequence KV bytes) must exceed the device ridge point. Intuition: $\text{OI}(B)$ asymptotes to $F_{\text{token,device}} / T_{\text{KV,token}}$ as $B \to \infty$; if this asymptotic ceiling itself sits below $R_{\text{ridge}}$, the roofline is never crossed regardless of batch size.
 
-**No-crossover regime.** When the inequality is violated — typical of very long contexts on small models, where $T_{\text{KV,device}}$ grows linearly in $S$ while $F_{\text{token,device}}$ stays fixed — decode remains memory-bound at every $B$, and $B^\star \to \infty$. In this regime batching still amortizes *weight* traffic ($T_{\theta,\text{device}} / B$ per token), which continues to reduce per-sequence TPOT, but it **cannot** push the step into the compute-bound zone; adding more sequences only adds linear KV bandwidth pressure until HBM saturates.
+**No-crossover regime.** When the inequality is violated — typical of very long contexts on small models, where $T_{\text{KV,token}}$ grows linearly in $S$ while $F_{\text{token,device}}$ stays fixed — decode remains memory-bound at every $B$, and $B^\star \to \infty$. In this regime batching still amortizes *weight* traffic ($T_{\theta,\text{device}} / B$ per token), which continues to reduce per-sequence TPOT, but it **cannot** push the step into the compute-bound zone; adding more sequences only adds linear KV bandwidth pressure until HBM saturates.
 
-**Weight-dominated approximation.** When $T_{\text{KV,device}}$ is small relative to $T_{\theta,\text{device}} / B^\star$ (short-context decode where weight traffic dominates), $B^\star$ simplifies to:
+**Weight-dominated approximation.** When $T_{\text{KV,token}}$ is small relative to $T_{\theta,\text{device}} / B^\star$ (short-context decode where weight traffic dominates), $B^\star$ simplifies to:
 
 $$
 B^\star \;\approx\;
@@ -1294,7 +1290,7 @@ t_{\text{local}}(B) = \max\!\bigl(t_{\text{compute}}(B),\; t_{\text{mem}}(B)\big
 t_{\text{mem}}(B) = \sum_{i=0}^{n-1} \frac{T_{\theta,i} + B \cdot T_{\text{KV},i}}{BW_{\text{eff},i}}
 $$
 
-(Single-tier devices collapse the sum to one term, recovering $t_{\text{mem}}(B) = (T_{\theta,\text{device}} + B \cdot T_{\text{KV,device}}) / BW_{\text{mem}}$ — see §4.) We now incorporate the **inter-device communication time** that arises during decoding under distributed parallelism. The four within-replica parallelism dimensions $PP$, $EP$, $TP$, $SP$ each contribute their own per-step collective; $DP$ has none (replicas are independent). Their *physical mapping* to GPUs follows the layout choice (`notation.md §1`): the orthogonal layout maps each axis to a disjoint GPU set within a replica (the canonical Megatron-LM nesting `DP → PP → EP → TP → SP`), while TP+EP co-location overlays $TP$ and $EP$ on the same physical GPU set (DSv3 / SGLang / NVIDIA Dynamo production decode). Collective group sizes $G_{TP}$, $G_{EP}$ from `notation.md §1` carry through identically across both layouts; the per-rank message sizes use the per-component sharding factors $D_{\text{kv}}$, $D_{\text{attn}}$ to absorb layout-dependent shape changes.
+(Single-tier devices collapse the sum to one term, recovering $t_{\text{mem}}(B) = (T_{\theta,\text{device}} + B \cdot T_{\text{KV,token}}) / BW_{\text{mem}}$ — see §4.) We now incorporate the **inter-device communication time** that arises during decoding under distributed parallelism. The four within-replica parallelism dimensions $PP$, $EP$, $TP$, $SP$ each contribute their own per-step collective; $DP$ has none (replicas are independent). Their *physical mapping* to GPUs follows the layout choice (`notation.md §1`): the orthogonal layout maps each axis to a disjoint GPU set within a replica (the canonical Megatron-LM nesting `DP → PP → EP → TP → SP`), while TP+EP co-location overlays $TP$ and $EP$ on the same physical GPU set (DSv3 / SGLang / NVIDIA Dynamo production decode). Collective group sizes $G_{TP}$, $G_{EP}$ from `notation.md §1` carry through identically across both layouts; the per-rank message sizes use the per-component sharding factors $D_{\text{kv}}$, $D_{\text{attn}}$ to absorb layout-dependent shape changes.
 
 All communication costs follow the standard $\alpha$–$\beta$ latency model [ALPHA-BETA]:
 
@@ -1369,6 +1365,8 @@ t_{EP}(B) \;=\; (G_{EP} - 1)\,\alpha_{EP} \;+\; \frac{G_{EP} - 1}{G_{EP}} \cdot 
 $$
 
 §5.5's per-layer accumulator multiplies this by $n_{EP} = 2$ to recover the full Dispatch + Combine cost. For torus EP fabrics, substitute the bisection-bound form of `collectives/02_topology_mapping.md §3` with $M = B \cdot kHb$. For dense models ($EP = G_{EP} = 1$), $t_{EP}(B) = 0$.
+
+> **Note on expectation under uniform routing.** Unlike MoE weight traffic (§2.1), where bytes-read-per-step is the expected number of *touched experts* per rank and is genuinely sub-linear in $B$ at small $B$, the per-rank A2A send / receive volume above is the deterministic $\frac{G_{EP}-1}{G_{EP}} \cdot B k H b$. Each token-expert assignment generates its own dispatch payload regardless of routing collisions — two tokens hitting the same expert send two separate hidden vectors — so the β-side scales exactly linearly in $B$ with no expectation correction. The same independence applies to TP, SP, and PP collectives in §5.3–§5.5: their payloads are deterministic by construction (every rank participates in every collective every step), and the expectation question does not arise. The only place expectation would tighten the EP A2A model is the *number of active destination links* at extremely small $B \cdot k < G_{EP}$ — when some destination ranks receive zero tokens that step. We omit this correction: the regime is rare in production decode (running EP this wide at $B$ this small has no throughput justification), the α-cost dominates the budget at small $B$ anyway, and the resulting overestimate is bounded by $(G_{EP} - \mathbb{E}[\text{active dests}]) \cdot \alpha_{EP}$ — typically well under 1% of $t_{\text{step}}$.
 
 > **Co-located note.** Under the co-located layout the $G_{EP}$ ranks share physical GPUs with the $G_{TP}$ ranks. The all-to-all wire payload per call is unchanged (still $B \cdot kHb$ per direction across $G_{EP}$ ranks), but the EP A2A and any TP collective on the same physical GPUs cannot run concurrently — they share the NVLink bandwidth and serialize at the fabric layer. This shows up in the §5.5 per-stage accumulator naturally because TP and EP collectives are already accumulated sequentially.
 
@@ -1549,16 +1547,16 @@ A parallel configuration $(DP, PP, EP, TP, SP)$ together with the layout / atten
 
 within the available HBM capacity $M_{\text{HBM}}$.
 
-This subsection uses the per-component effective sharding factors $D_{\text{attn}}$, $D_{\text{exp}}$, $D_{\text{kv}}$, $D_{\text{emb}}$ from `notation.md §1`. Resolving the abstract factors:
+This subsection uses the per-component effective sharding factors $D_{\text{attn}}$, $D_{\text{exp}}$, $D_{\text{kv}}$, $D_{\text{emb}}$ from §1.4 above (canonical source: `notation.md §1`). Replica counting introduces one additional per-layout quantity not used elsewhere in decode.md, $N_{\text{replica}}$ (the number of independent model copies a given partition produces), which we list here for the partition-strategy derivations below:
 
-| configuration | $D_{\text{attn}}$ | $D_{\text{exp}}$ (MoE) | $D_{\text{kv}}$ | $D_{\text{emb}}$ | $N_{\text{replica}}$ |
-|---|---|---|---|---|---|
-| orthogonal + TP-attn | $TP$ | $TP \cdot EP$ | $TP$ | $TP$ | $PP \cdot TP \cdot EP \cdot SP$ |
-| co-located + TP-attn | $TP$ | $EP$ | $TP$ | $TP$ | $PP \cdot \max(TP, EP) \cdot SP$ |
-| orthogonal + DP-attn | $1$ | $TP \cdot EP$ | $TP$ | $TP$ | $PP \cdot TP \cdot EP \cdot SP$ |
-| co-located + DP-attn | $1$ | $EP$ | $\max(TP, EP)$ | $TP$ | $PP \cdot \max(TP, EP) \cdot SP$ |
+| layout × attention_mode | $N_{\text{replica}}$ |
+|---|---|
+| orthogonal + TP-attn | $PP \cdot TP \cdot EP \cdot SP$ |
+| co-located + TP-attn | $PP \cdot \max(TP, EP) \cdot SP$ |
+| orthogonal + DP-attn | $PP \cdot TP \cdot EP \cdot SP$ |
+| co-located + DP-attn | $PP \cdot \max(TP, EP) \cdot SP$ |
 
-Dense FFN always uses $D_{\text{exp}} = TP$. Under co-location $TP = EP$ structurally.
+The two co-located rows collapse to the same $N_{\text{replica}}$ formula because $TP = EP$ structurally under co-location.
 
 We define the total per-device static footprint as
 
@@ -1641,7 +1639,7 @@ Weights amortize once per step; KV reads scale with $B$ (§4):
 
 $$
 t_{\text{mem}}(B) =
-\frac{T_{\theta,\text{device}} + B \cdot T_{\text{KV,device}}}{BW_{\text{mem}}}
+\frac{T_{\theta,\text{device}} + B \cdot T_{\text{KV,token}}}{BW_{\text{mem}}}
 $$
 
 This is the single-tier, dropped-$\alpha$ shorthand of the multi-tier $\alpha$–$\beta$ form in §4 — kept here for compactness on the assumption that on-die tier $\alpha$ contributes well under 0.1% of $t_{\text{mem}}$. Reinstate $\alpha_i$ per §4 when modeling small-read regimes.
@@ -2000,7 +1998,7 @@ The verify step runs the same model as vanilla decode but with $n_{\text{tok,ver
 - **Compute scales linearly with $n_{\text{tok,verify}}$.** Every Q/K/V/O projection, every attention score, every FFN GEMM does $n_{\text{tok,verify}}$ times more work per sequence: $F_{\text{token,device}}^{\text{verify}} = n_{\text{tok,verify}} \cdot F_{\text{token,device}}$.
 - **Communication payload scales linearly with $n_{\text{tok,verify}}$.** Each per-layer TP collective (all-reduce under TP-attention, all-gather under DP-attention; see §5.3) carries $n_{\text{tok,verify}}$ times the activations: per-rank message size is $B \cdot n_{\text{tok,verify}} \cdot H b$ instead of $B \cdot Hb$. The MoE Dispatch + Combine all-to-alls scale identically.
 - **Weight traffic is unchanged.** Weights load once per verify step, exactly as in vanilla decode: $T_{\theta,\text{device}}^{\text{verify}} = T_{\theta,\text{device}}$.
-- **KV-cache read traffic is approximately unchanged.** Each sequence's existing $S$-token KV is read once per layer per step regardless of how many query tokens piggyback on the read (FlashAttention's standard batched-Q kernel pattern). The draft tokens add at most $n_{\text{tok,draft}}$ positions to the per-sequence KV scan, which is negligible at $S \gg n_{\text{tok,draft}}$ — typical decode contexts have $S$ in the thousands and $n_{\text{tok,draft}}$ ≤ 5: $T_{\text{KV,device}}^{\text{verify}} \approx T_{\text{KV,device}}$.
+- **KV-cache read traffic is approximately unchanged.** Each sequence's existing $S$-token KV is read once per layer per step regardless of how many query tokens piggyback on the read (FlashAttention's standard batched-Q kernel pattern). The draft tokens add at most $n_{\text{tok,draft}}$ positions to the per-sequence KV scan, which is negligible at $S \gg n_{\text{tok,draft}}$ — typical decode contexts have $S$ in the thousands and $n_{\text{tok,draft}}$ ≤ 5: $T_{\text{KV,token}}^{\text{verify}} \approx T_{\text{KV,token}}$.
 
 Threading these through the §6.2 / §7.3 composition, the verify-step compute time, memory time, and roofline are:
 
@@ -2064,7 +2062,7 @@ This ratio is $\ge 1$ because $N_{\text{tok/step}} \le n_{\text{tok,verify}}$ �
 The compute-bound crossover under speculation shifts down by $\approx n_{\text{tok,verify}}$ relative to vanilla decode (§4): the verify step hits compute-bound at:
 
 $$
-B^\star_{\text{spec}} \;\approx\; \frac{T_{\theta,\text{device}} \cdot R_{\text{GPU}}}{n_{\text{tok,verify}} \cdot F_{\text{token,device}} \cdot BW_{\text{mem}} - T_{\text{KV,device}} \cdot R_{\text{GPU}}}
+B^\star_{\text{spec}} \;\approx\; \frac{T_{\theta,\text{device}} \cdot R_{\text{GPU}}}{n_{\text{tok,verify}} \cdot F_{\text{token,device}} \cdot BW_{\text{mem}} - T_{\text{KV,token}} \cdot R_{\text{GPU}}}
 $$
 
 For typical MoE decode where $B^\star$ from §4 is in the hundreds-to-thousands range, $B^\star_{\text{spec}}$ at $n_{\text{tok,verify}} = 5$ falls to the tens-to-hundreds range — speculation buys back compute headroom that the vanilla decode roofline left on the table.
@@ -2080,17 +2078,3 @@ The TPOT-vs-batch curve under speculation has three operating regimes:
 **Separate draft model (EAGLE / Medusa, not MTP).** The above derivation folds the draft cost into the verify pass under the assumption that drafts come from the target model itself (MTP). For a separate draft model whose forward cost is a non-trivial fraction of the verify step, add the draft latency as a serial term: $t_{\text{step}}^{\text{spec,sep}}(B) = t_{\text{draft}}(B) + t_{\text{step,user}}^{\text{verify}}(B)$. EAGLE's draft is $\approx$10% of the target verify cost; Medusa's parallel heads add a small constant per head. We omit a detailed draft-model roofline here — the cost is workload-specific and best calibrated rather than derived.
 
 **Acceptance-rate calibration.** $p_{\text{accept}}$ is **not** a per-architecture constant — it depends on the model, the draft method, the temperature, the corpus, and the position in the sequence. Reported empirical values at temperature 0: MTP on DSv3 ≈ 0.85–0.90 per-token at draft depth 1 [DSV3]; EAGLE on Llama-3 70B ≈ 0.75–0.85 at depth 4 [EAGLE]; Medusa-2 on Vicuna-13B ≈ 0.6–0.7 across heads [MEDUSA]. The framework treats $p_{\text{accept}}$ as a tuning knob to be measured on the target deployment.
-
-**Symbol summary (added by this section).**
-
-| Symbol | Definition | Where introduced |
-|--------|-----------|------------------|
-| $n_{\text{tok,draft}}$ | Number of draft tokens proposed per verify step. | §8 |
-| $n_{\text{tok,verify}}$ | $n_{\text{tok,draft}} + 1$; tokens evaluated per verify step per sequence. | §8.1 |
-| $p_{\text{accept}}$ | Per-token draft acceptance probability ∈ [0, 1]. | §8 |
-| $\mathbb{E}[N_{\text{accept,draft}}]$ | Expected accepted draft tokens per step (truncated geometric). | §8.2 |
-| $N_{\text{tok/step}}$ | Total expected accepted tokens per verify step (1 + $\mathbb{E}[N_{\text{accept,draft}}]$). | §8.2 |
-| $t_{\text{compute}}^{\text{verify}}(B)$, $t_{\text{mem}}^{\text{verify}}(B)$, $t_{\text{local}}^{\text{verify}}(B)$ | Verify-step roofline components (§8.3). | §8.3 |
-| $t_{\text{comm}}^{\text{verify}}(B)$, $t_{\text{step,user}}^{\text{verify}}(B)$ | Verify-step communication budget and user-observed step time (§8.3). | §8.3 |
-| $\mathrm{TPOT_{spec}}(B)$ | Effective TPOT under speculative decoding (§8.4). | §8.4 |
-| $B^\star_{\text{spec}}$ | Verify-step compute-bound crossover batch (§8.4). | §8.4 |

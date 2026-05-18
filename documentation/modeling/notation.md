@@ -80,7 +80,7 @@ The second row (co-located + TP-attn) corresponds to the production pattern wher
 
 **Enabling conditions for co-location.** Per-device HBM must hold $1/EP$ (rather than $1/(TP \cdot EP)$) of the expert weights, OR the attention block is compact enough (Multi-head Latent Attention (MLA) or aggressive grouped-query attention (GQA)) that DP-attn replication costs little. DSv3 satisfies both via MLA + FP4 quantization [DSV3].
 
-All `decode.md` derivations from §1 onward use the abstract factors $D_{\text{attn}}$, $D_{\text{exp}}$, $D_{\text{kv}}$, $D_{\text{emb}}$, $G_{TP}$, $G_{EP}$, $N_{\text{replica}}$. Each downstream section in `decode.md` opens with a small summary table mapping the abstract factors used in that section to each of the four configurations; this `notation.md §1` table is the canonical source. Per-device formulas live in `decode.md §1.4` (memory), `§2.1`, `§2.3` (traffic), `§3.5` (FLOPs), `§5.3`, `§5.5` (communication); operational guidance on when each mode pays lives in `§6.3` (partition strategy).
+All `decode.md` derivations from §1 onward use the abstract factors $D_{\text{attn}}$, $D_{\text{exp}}$, $D_{\text{kv}}$, $D_{\text{emb}}$, $G_{TP}$, $G_{EP}$, $N_{\text{replica}}$. `decode.md §1.4` mirrors this `notation.md §1` table once (the canonical decode-side reference); subsequent sections (`§2`, `§3.5`, `§5.3`, `§5.5`) cite `§1.4` rather than re-printing the lookup. `decode.md §6.1` adds a partition-strategy-specific subtable for $N_{\text{replica}}$ alongside the §1.4 cite. Operational guidance on when each mode pays lives in `§6.3` (partition strategy).
 
 ---
 
@@ -154,13 +154,15 @@ Parameter sizes:
 
 Memory capacity (bytes **stored** in HBM — the maximum resident set, must fit regardless of which experts the current step touches):
 - $M_{\theta,\text{device}}$ — Parameter memory on this device. For MoE layers this is the *full* $N_{\text{exp}}$ footprint (every expert weight must be resident because the next step may select any).
-- $M_{\text{KV,device}}$ — KV cache storage (keys + values).
+- $M_{\text{KV,token}}$ — KV cache storage for **one active sequence** on this device (per-token building block; for decode each active sequence equals one new token per step).
+- $M_{\text{KV,device}}(B) = B \cdot M_{\text{KV,token}}$ — KV cache storage aggregated over the $B$ resident sequences on this device.
 - $M_{\text{act,device}}$ — Activation working memory per token during decoding.
 - $M_{\text{HBM}}$ — Available HBM capacity per device.
 
 Memory traffic (bytes **moved** between HBM and compute per step):
 - $T_{\theta,\text{device}}$ — Parameter traffic per step. For dense layers equals the corresponding footprint; **for MoE layers, expert weights enter traffic only for the experts the current batch touches**, so $T_{\theta,\text{moe}}(B) < M_{\theta,\text{moe}}$ at small $B$ and converges to $M_{\theta,\text{moe}}$ as $B \cdot k_{\text{active}} \gg N_{\text{exp}}$ (`decode.md §2.1`). Under the uniform-routing assumption, expert traffic uses $\mathbb{E}[N_{\text{exp,touched}}^{\text{rank}}]$ in place of $N_{\text{exp}}/D_{\text{exp}}$.
-- $T_{\text{KV,device}}$ — KV traffic per step. Equals the per-step memory footprint of the in-flight KV cache because every sequence's full context is traversed at every decode step.
+- $T_{\text{KV,token}}$ — Per-token, per-device KV traffic per step (one active sequence's KV-history read across the $L/PP$ layers on the stage).
+- $T_{\text{KV,device}}(B) = B \cdot T_{\text{KV,token}}$ — Per-step per-device KV traffic aggregated over the $B$ active sequences. Equals the per-step memory footprint of the in-flight KV cache because every sequence's full context is traversed at every decode step.
 - $T_{\text{act,device}}$ — Activation traffic (intermediate reads/writes).
 - $T_{\text{token,device}}$ — Total per-token traffic on this device.
 - $T_{\text{token,device}}^{\text{eff}}$ — Effective traffic after FlashAttention-style optimizations.
@@ -273,10 +275,10 @@ _(→ decode.md)_
 _(→ decode.md §4)_
 
 - $OI(B)$ — Operational intensity as a function of batch size $B$:
-  $$OI(B) = \frac{B \times F_{\text{token,device}}}{T_{\theta,\text{device}} + B \times T_{\text{KV,device}}}$$
+  $$OI(B) = \frac{B \times F_{\text{token,device}}}{T_{\theta,\text{device}} + B \times T_{\text{KV,token}}}$$
 - $B^*$ — Crossover batch size where the roofline transitions from memory-bound to compute-bound:
-  $$B^* = \frac{T_{\theta,\text{device}} \times R_{\text{GPU}}}{F_{\text{token,device}} \times BW_{\text{mem}} - T_{\text{KV,device}} \times R_{\text{GPU}}}$$
-  **Existence:** finite and positive iff $F_{\text{token,device}} / T_{\text{KV,device}} > R_{\text{ridge}}$ (asymptotic OI ceiling exceeds the ridge point). When violated — e.g., very long contexts on small models — decode stays memory-bound at every $B$ and $B^{\star} \to \infty$ (decode.md §4).
+  $$B^* = \frac{T_{\theta,\text{device}} \times R_{\text{GPU}}}{F_{\text{token,device}} \times BW_{\text{mem}} - T_{\text{KV,token}} \times R_{\text{GPU}}}$$
+  **Existence:** finite and positive iff $F_{\text{token,device}} / T_{\text{KV,token}} > R_{\text{ridge}}$ (asymptotic OI ceiling exceeds the ridge point). When violated — e.g., very long contexts on small models — decode stays memory-bound at every $B$ and $B^{\star} \to \infty$ (decode.md §4).
 - $\text{TPOT}(B)$ — Batched Time Per Output Token (user-observed): $t_{\text{step,user}}(B)$.
   Memory-bound ($B \ll B^*$): $\approx T_{\theta,\text{device}} / BW_{\text{mem}}$ (flat in $B$).
   Compute-bound ($B \gg B^*$): $\approx B \cdot F_{\text{token,device}} / R_{\text{GPU}}$ (linear in $B$).
