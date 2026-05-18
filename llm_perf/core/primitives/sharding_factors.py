@@ -4,20 +4,23 @@ Implements the unified deployment-knob abstraction documented in
 `notation.md §1` and used throughout `decode.md §1.4 / §2.1 / §2.3 / §3.5 /
 §5 / §6.1` and the symmetric prefill formulas.
 
-The framework supports three production-relevant `(tp_ep_layout, attention_mode)`
+The framework supports four production-relevant `(tp_ep_layout, attention_mode)`
 configurations. The lookup table:
 
     tp_ep_layout  attention_mode  D_attn  D_exp(MoE)   D_kv          D_emb  G_TP    G_EP  N_replica
     orthogonal    tp              TP      TP*EP        TP   (head)   TP     TP(AR)  EP    PP*TP*EP*SP
+    co_located    tp              TP      EP           TP   (head)   TP     TP(AR)  EP    PP*max(TP,EP)*SP
     orthogonal    dp              1       TP*EP        TP   (seq)    TP     TP(AG)  EP    PP*TP*EP*SP
     co_located    dp              1       EP           max(TP,EP)    TP     TP(AG)  EP    PP*max(TP,EP)*SP
                                                         (seq)
 
 Dense FFN always uses D_exp = TP regardless of tp_ep_layout (no EP axis to
-overlap). A theoretical fourth combination (co_located + tp) is rejected by
-the combined `(partition, framework)` invariant check (see compose_check
-below) because no separate TP group exists for head-sharding to land on
-under co-location.
+overlap). The fourth combination (co_located + tp) models the production
+pattern where TP=EP overlay on the same physical GPU set (e.g., the DSr1 /
+NVL72 panel-(b) deployment with TP=EP=8 on 8 GPUs) and attention is
+head-sharded across the same group. The TP all-reduce and the MoE all-to-all
+both run on that shared 8-GPU set; the structural invariant `TP == EP`
+under co-location still holds.
 
 Phase H: `attention_mode` and `tp_ep_layout` live on FrameworkSpec, not on
 PartitionSpec. Every helper here takes both `partition` (PP/TP/EP/SP) and
@@ -85,8 +88,11 @@ def D_kv(partition: PartitionSpec, framework: FrameworkSpec) -> int:
       - TP under orthogonal tp_ep_layout (head-shard under TP-attn or
         sequence-shard across the TP-as-DP-attn group under DP-attn —
         same byte count).
-      - max(TP, EP) under co-located tp_ep_layout (sequence-shard across
-        the entire replica's GPU set).
+      - max(TP, EP) under co-located tp_ep_layout. Under DP-attention this
+        is the sequence-shard across the entire replica's GPU set; under
+        TP-attention (TP == EP forced under co-location) this is the head-
+        shard across the TP group, which is the same set of ranks as the
+        EP group — numerically equal to max(TP, EP) since TP == EP.
     """
     if framework.tp_ep_layout == "co_located":
         return max(partition.TP, max(1, partition.EP))
@@ -128,28 +134,22 @@ def N_replica(partition: PartitionSpec, framework: FrameworkSpec) -> int:
 def compose_check(partition: PartitionSpec, framework: FrameworkSpec) -> None:
     """Validate the combined `(partition, framework)` invariants.
 
-    Two compose-time invariants — formerly enforced inside
-    PartitionSpec.__post_init__ when `attention_mode` and `tp_ep_layout`
-    lived there — now apply at the (partition, framework) join point.
-    Calculator paths that consume both specs should call this once at the
-    start of pipeline assembly.
+    One structural invariant applies at the (partition, framework) join
+    point. Calculator paths that consume both specs should call this once
+    at the start of pipeline assembly.
 
     Raises ValueError on:
-      - tp_ep_layout='co_located' with TP != EP (production deployments
-        overlay TP and EP on the same physical GPUs and use TP == EP, e.g.
-        DSv3 TP=EP=8); asymmetric (TP, EP) on a co-located tp_ep_layout
-        is not modeled.
-      - tp_ep_layout='co_located' with attention_mode != "dp" (no separate
-        TP group exists for head-sharding to land on under co-location).
+      - tp_ep_layout='co_located' with TP != EP. Co-located layouts overlay
+        TP and EP on the same physical GPUs (e.g., DSr1 NVL72 TP=EP=8 on
+        8 GPUs); asymmetric (TP, EP) on a co-located layout is not modeled.
+
+    Both attention_mode values ('tp' and 'dp') are allowed under either
+    layout. The co_located + tp_attention combination models the production
+    pattern where TP heads and EP experts both shard across the same
+    physical GPU set — see the module docstring's four-row lookup table
+    for the resulting D_attn / D_exp / D_kv / N_replica semantics.
     """
     if framework.tp_ep_layout == "co_located":
-        if framework.attention_mode != "dp":
-            raise ValueError(
-                "compose_check: framework.tp_ep_layout='co_located' forces "
-                "framework.attention_mode='dp' (no separate TP group exists "
-                "for head-sharding to land on under co-location); got "
-                f"attention_mode={framework.attention_mode!r}"
-            )
         if partition.TP != partition.EP:
             raise ValueError(
                 "compose_check: framework.tp_ep_layout='co_located' requires "

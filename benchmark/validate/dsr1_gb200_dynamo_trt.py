@@ -67,7 +67,12 @@ ISL, OSL = 1024, 1024
 # over-counts at large B (the offending TP=EP=16,32 cells run at B≥4000).
 DEFAULT_BW_ETA = 0.7143
 DEFAULT_C_SERVING_US = 0.0
-DEFAULT_KERNEL_LAUNCH_US = 7.0
+# kernel_launch_us: 1.5 µs per the FrameworkSpec docstring anchor for the
+# "CUDA Graphs replay (Dynamo / TRT-LLM)" case. Production Dynamo+TRT
+# deployments enable CUDA Graphs for steady-state decode (10-30% TPOT
+# savings); benchmark measurements of single cudaLaunchKernel under
+# graph replay sit in 1.3-2 µs (NVIDIA forums, PyTorch/CUDA-Graph blogs).
+DEFAULT_KERNEL_LAUNCH_US = 1.5
 DEFAULT_MOE_A2A_PATTERN = "scatter"
 
 
@@ -182,12 +187,14 @@ def run_colocated(args) -> tuple[list[tuple], int]:
     return rows, n
 
 
-def run_ortho(args) -> tuple[list[tuple], int]:
-    """Cut 3: TP=8 EP=8 dec=32 orthogonal (4 replicas of 8 GPUs each, TP-attn).
+def run_colo_tp_attn(args) -> tuple[list[tuple], int]:
+    """Cut 3: TP=EP=8 dec=32 co-located, TP-attention (4 replicas of 8 GPUs each).
 
-    Same shape as gb300/dynamo-trt's ORTHO cut. Scatter-direct is inert
-    (TP-attention disables it); only the kernel_launch / c_serving / bw_eta
-    knobs apply.
+    Each replica is 8 GPUs holding TP=EP=8 overlaid (attention head-sharded
+    across the same 8-rank group that holds the expert shards). Was previously
+    modeled as `tp_ep_layout="orthogonal"`, which double-counted the per-replica
+    GPU requirement (8×8=64 vs the production 8) and divided MoE work by
+    TP*EP=64 instead of EP=8; the co-located layout now matches the deployment.
     """
     rows: list[tuple] = []
     measured = load_measured(
@@ -197,7 +204,7 @@ def run_ortho(args) -> tuple[list[tuple], int]:
         framework={"dynamo-trt", "trt", "trt-llm", "trtllm", "dynamo-trt-llm"},
         hardware="gb200",
     )
-    print(f"\n[ORTHO] TP=8 EP=8 dec=32 (4 replicas × 8 GPUs, TP-attn) | "
+    print(f"\n[COLO TP-attn] TP=EP=8 dec=32 (4 replicas × 8 GPUs, TP-attn) | "
           f"{len(measured)} measured points")
     if not measured:
         return [], 0
@@ -205,7 +212,7 @@ def run_ortho(args) -> tuple[list[tuple], int]:
     framework = run_framework(
         model="deepseek_r1_0528", system_id=SYSTEM,
         PP=1, TP=8, EP=8, SP=1,
-        attention_mode="tp", tp_ep_layout="orthogonal",
+        attention_mode="tp", tp_ep_layout="co_located",
         num_devices=32, S_decode=ISL + OSL // 2,
         B_sweep=log_spaced_B(2048),
         flops_eta=args.flops_eta, bw_eta=args.bw_eta,
@@ -218,7 +225,7 @@ def run_ortho(args) -> tuple[list[tuple], int]:
         pred = predict_at(
             model="deepseek_r1_0528", system_id=SYSTEM,
             PP=1, TP=8, EP=8, SP=1,
-            attention_mode="tp", tp_ep_layout="orthogonal",
+            attention_mode="tp", tp_ep_layout="co_located",
             num_devices=32, S_decode=ISL + OSL // 2, B=m.B,
             flops_eta=args.flops_eta, bw_eta=args.bw_eta,
             c_serving_us=args.c_serving_us,
@@ -226,13 +233,13 @@ def run_ortho(args) -> tuple[list[tuple], int]:
             kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US,
             bytes_per_param=0.5,
         )
-        rows.append(("TP=8 EP=8 dec=32 ortho", m.B, m.tpot_ms, pred))
+        rows.append(("TP=EP=8 dec=32 colo TP-attn", m.B, m.tpot_ms, pred))
 
-    out = args.out_dir / f"dsr1_dynamo_trt_ortho_tp8ep8_dec32{eta_filename_tag(args.flops_eta, args.bw_eta, args.c_serving_us)}.png"
+    out = args.out_dir / f"dsr1_dynamo_trt_colo_tp_attn_tp8ep8_dec32{eta_filename_tag(args.flops_eta, args.bw_eta, args.c_serving_us)}.png"
     plot_tpot_vs_B(
         framework=framework, measured=measured,
-        title="DSR1 / GB200 / Dynamo-TRT — ORTHO TP=8 EP=8 dec=32 (4 replicas, TP-attn)",
-        subtitle=f"PP=1 TP=8 EP=8 attention_mode=tp tp_ep_layout=orthogonal | "
+        title="DSR1 / GB200 / Dynamo-TRT — CO-LOCATED TP-attn TP=EP=8 dec=32 (4 replicas)",
+        subtitle=f"PP=1 TP=EP=8 attention_mode=tp tp_ep_layout=co_located | "
                  f"ISL={ISL} OSL={OSL} FP4 | "
                  f"sys={SYSTEM} | {topology_tag(SYSTEM)} | {eta_subtitle(args.flops_eta, args.bw_eta, args.c_serving_us)}",
         out_path=out,
@@ -243,7 +250,7 @@ def run_ortho(args) -> tuple[list[tuple], int]:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
-    ap.add_argument("--cut", choices=["exact", "colocated", "ortho", "all"], default="all")
+    ap.add_argument("--cut", choices=["exact", "colocated", "colo_tp_attn", "all"], default="all")
     add_common_cli(ap, default_bw_eta=DEFAULT_BW_ETA, default_c_serving_us=DEFAULT_C_SERVING_US)
     args = ap.parse_args()
 
@@ -254,8 +261,8 @@ def main() -> int:
     if args.cut in ("colocated", "all"):
         rows, _ = run_colocated(args)
         all_rows.extend(rows)
-    if args.cut in ("ortho", "all"):
-        rows, _ = run_ortho(args)
+    if args.cut in ("colo_tp_attn", "all"):
+        rows, _ = run_colo_tp_attn(args)
         all_rows.extend(rows)
 
     if all_rows:
