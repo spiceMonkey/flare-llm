@@ -38,29 +38,36 @@ class FrameworkSpec:
 
     name: str
 
-    # ── Host-side overhead model (decode.md §7.1, §7.2) ────────────────
-    # Per-sequence per-step host work (decode.md §7.3):
-    # PagedAttention block-table gather, continuous-batching scheduler,
-    # per-sequence sampling glue, token-append + KV bookkeeping. Linear
-    # in B. **Composed with GPU work via `seq_overlap_factor`** —
-    # under CUDA-Graph replay the CPU runs ahead and host work hides
-    # behind GPU compute until it exceeds the per-step GPU time.
+    # ── Host-side overhead model (decode.md §7.1, §7.3) ────────────────
+    # Per-step host work decomposes into two components (decode.md §7.3):
+    #   t_step_seq(B) = (c_orch_us + c_seq_us · B) · 1e-6
+    # The composite gross host cost composes against the per-step hardware
+    # window t_step_base = γ_pp · t_stage,with_kernel + t_LM via the
+    # overlap factor seq_overlap_factor ρ_seq:
+    #   t_step_user = t_step_base
+    #               + max(0, t_step_seq - ρ_seq · t_step_base)
     #
-    # Gross per-step host work:
-    #   t_step_seq = c_seq_us * B * 1e-6     [seconds]
-    #
-    # Net contribution to t_step_user (after overlap with the per-step
-    # hardware window t_step_base = γ_pp · t_stage,with_kernel + t_LM):
-    #   t_step_seq = max(0, t_step_seq
-    #                     - seq_overlap_factor * t_step_base)
-    #
-    # Stack-dependent ranges for c_seq_us (decode.md §7.3):
+    # Per-sequence component — PagedAttention block-table gather,
+    # continuous-batching scheduler decisions, per-sequence sampling glue,
+    # token-append + KV bookkeeping. Linear in B (one inner loop per active
+    # sequence per step). Stack-dependent ranges for c_seq_us:
     # - C++/CUDA-graph + orchestrator (Dynamo+TRT): 5-22 µs/seq
     # - Mixed orchestrator + Python (Dynamo+SGLang): 25-50 µs/seq
     # - Raw C++ runtime (raw TRT-LLM): 50-100 µs/seq
     # - Aggressively fused C++: ~10 µs/seq lower bound
     # - Python-heavy (vLLM, SGLang eager): 30-60 µs/seq
     c_seq_us: float = 0.0
+
+    # Per-step orchestration component — B-independent per-step host floor:
+    # CUDA-Graph launch decision, scheduler tick, output framing, KV
+    # block-table refresh, sampling-decision glue that runs between graph
+    # launches. Fires once per decode step regardless of B (unlike c_seq_us
+    # which scales with active-sequence count). Survives CUDA-Graph
+    # absorption — these paths run between graph replays, not during them.
+    # Default 0 (legacy roofline). Stack-dependent calibration anchors
+    # pending; the c_step / Kimi-K2.5/Dynamo+vLLM panel-(d) ~10 ms gap is
+    # the primary empirical motivator.
+    c_orch_us: float = 0.0
 
     # Fraction of t_step_seq hidden behind GPU compute. Same physics
     # as kernel_overlap_factor (below) but applied to host-side per-sequence

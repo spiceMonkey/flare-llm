@@ -674,15 +674,19 @@ def compute_latency(
     #   ρ_seq = 1 → max(0, t_step_seq - t_step_base)  (full overlap;
     #                   host work hides while CPU has GPU compute to amortize against)
     #   ρ_seq = 0 → t_step_seq  (eager-mode; host work always blocks)
-    t_step_seq = framework.c_seq_us * max(1, B) * 1e-6
+    # Per-step gross host work: B-independent orchestration floor
+    # (c_orch · 1) plus per-sequence inner loops (c_seq · B). Both pay
+    # the same overlap composition against the per-step hardware window.
+    t_step_seq = (framework.c_orch_us + framework.c_seq_us * max(1, B)) * 1e-6
     rho_seq = framework.seq_overlap_factor
     t_step_base = t_stage_with_kernel * pp_bubble_factor + t_LM
     t_step_user = t_step_base + max(0.0, t_step_seq - rho_seq * t_step_base)
     TPOT = t_step_user
-    # t_step_seq is the GROSS per-step host work (= c_seq · B). Stored as-is
-    # in LatencyResults for plotting; the gated contribution to t_step_user
-    # is the inline max(...) above — readers see the gap between t_step_seq
-    # and t_step_user as the amount the overlap factor hid behind GPU work.
+    # t_step_seq is the GROSS per-step host work (= c_orch + c_seq · B).
+    # Stored as-is in LatencyResults for plotting; the gated contribution
+    # to t_step_user is the inline max(...) above — readers see the gap
+    # between t_step_seq and t_step_user as the amount the overlap factor
+    # hid behind GPU work.
 
     TPS_single = B / t_step_user if t_step_user > 0 else 0.0
 
