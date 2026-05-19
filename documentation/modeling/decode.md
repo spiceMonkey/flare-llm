@@ -1859,15 +1859,15 @@ $$
 
 with units of seconds per sequence per step (the framework parameterizes $c_{\mathrm{serving}}$ in microseconds for ergonomics). A more elaborate non-linear form (piecewise-linear in $B$ to capture cache-line effects in the block-table gather, $B \log B$ from per-step sorting) is possible but unnecessary for the typical 1 ≤ $B$ ≤ 1024 operating range; the linear fit captures the dominant scaling for all four components.
 
-**Composition with GPU work.** Like $t_{\text{stage,kernel}}$ (§7.1), the per-sequence serving work admits a CUDA-Graph-replay overlap: under graph replay the CPU launches the per-step graph in $\sim$1.5 µs and is then free for the duration of the GPU compute window, which it uses for exactly this per-sequence work (block-table assembly for the *next* step, sampling glue for the *previous* step's outputs, scheduler bookkeeping). The host work hides behind GPU compute until $t_{\text{serving,gross}}(B)$ exceeds the per-step GPU window $t_{\text{GPU,step}}$, at which point only the excess blocks. The composition is therefore parameterized by an overlap factor $\rho_{\mathrm{serving}} \in [0, 1]$:
+**Composition with hardware work.** Like $t_{\text{stage,kernel}}$ (§7.1), the per-sequence serving work admits a CUDA-Graph-replay overlap: under graph replay the CPU launches the per-step graph in $\sim$1.5 µs and is then free for the duration of the hardware step window, which it uses for exactly this per-sequence work (block-table assembly for the *next* step, sampling glue for the *previous* step's outputs, scheduler bookkeeping). The host work hides behind the per-step hardware window until $t_{\text{serving,gross}}(B)$ exceeds $t_{\text{step,hw}}$ (the per-step HW budget — GPU compute, memory, interconnect, plus any unhidden kernel-launch dispatch — defined fully in §7.3), at which point only the excess blocks. The composition is therefore parameterized by an overlap factor $\rho_{\mathrm{serving}} \in [0, 1]$:
 
 $$
-t_{\text{serving}}(B) = \max\!\left(0,\; t_{\text{serving,gross}}(B) - \rho_{\mathrm{serving}} \cdot t_{\text{GPU,step}}\right)
+t_{\text{serving}}(B) = \max\!\left(0,\; t_{\text{serving,gross}}(B) - \rho_{\mathrm{serving}} \cdot t_{\text{step,hw}}\right)
 $$
 
 with $\rho_{\mathrm{serving}} = 1$ for CUDA-Graph-replay stacks (full overlap; default), $\rho_{\mathrm{serving}} = 0$ for eager-mode stacks where Python interpreter stalls between graph launches break the CPU-runs-ahead invariant (host work always blocks). The two regimes are:
 
-- **CUDA-Graph regime** ($\rho_{\mathrm{serving}} = 1$). When $t_{\text{serving,gross}}(B) \le t_{\text{GPU,step}}$, $t_{\text{serving}}(B) = 0$ — host work is fully hidden. When $t_{\text{serving,gross}}(B) > t_{\text{GPU,step}}$, only the excess blocks the next step's compute window.
+- **CUDA-Graph regime** ($\rho_{\mathrm{serving}} = 1$). When $t_{\text{serving,gross}}(B) \le t_{\text{step,hw}}$, $t_{\text{serving}}(B) = 0$ — host work is fully hidden. When $t_{\text{serving,gross}}(B) > t_{\text{step,hw}}$, only the excess blocks the next step's hardware window.
 - **Eager regime** ($\rho_{\mathrm{serving}} = 0$). $t_{\text{serving}}(B) = t_{\text{serving,gross}}(B)$ always — the Python interpreter cannot use the GPU compute window for the next step's setup, so host work serializes after GPU compute.
 
 The term sits **outside** the pipeline-bubble multiplier $\gamma_{\text{pp}}$ since it fires once per step on the head node regardless of how the body is pipelined across stages. This composition is identical in form to $t_{\text{stage,kernel}}$'s composition via $\rho_{\mathrm{kernel}}$ (§7.1); the two terms model different host-side work (per-microbatch dispatch vs per-sequence runtime) but admit the same overlap physics.
@@ -1892,19 +1892,21 @@ When $c_{\mathrm{serving}} \to 0$, $t_{\text{serving}}(B) \to 0$ and the §7.3 u
 
 When the pipeline is **fully saturated** ($B \ge PP$), every stage holds a different microbatch on every step and all $PP$ stages run in parallel. The user-observed step time then collapses to the slowest per-stage cost — the assembled HW + kernel-launch cost on the bottleneck stage, plus the LM head surcharge on stage $PP{-}1$ and the per-sequence serving overhead on the head node, with no bubble penalty.
 
-Composing $t_{\text{stage,hw}}(B)$ (§6.2) and $t_{\text{stage,kernel}}$ (§7.1) follows the same overlap pattern as the compute/comm overlap in §6.2: GPU work runs as the base, host dispatch overlaps for a fraction $\rho_{\text{kernel}}$ of it, and any unhidden remainder serializes after. The LM head term $t_{\text{LM,hw}}(B)$ from §6.2 then adds on top (it fires once per step on the bottleneck stage and is part of the GPU compute window). The per-sequence serving overhead from §7.2 composes against the resulting per-step GPU window $t_{\text{GPU,step}}(B) = t_{\text{stage,hw}}(B) + \max(0, t_{\text{stage,kernel}} - \rho_{\text{kernel}} t_{\text{stage,hw}}(B)) + t_{\text{LM,hw}}(B)$ via $\rho_{\mathrm{serving}}$, the same overlap physics applied to host-side per-sequence work:
+Composing $t_{\text{stage,hw}}(B)$ (§6.2) and $t_{\text{stage,kernel}}$ (§7.1) follows the same overlap pattern as the compute/comm overlap in §6.2: hardware work runs as the base, host dispatch overlaps for a fraction $\rho_{\text{kernel}}$ of it, and any unhidden remainder serializes after. The pipeline-bubble multiplier $\gamma_{\text{pp}}$ from §7.2 then scales the per-stage body by traversal depth, and the LM head term $t_{\text{LM,hw}}(B)$ from §6.2 adds on top (it fires once per step on the bottleneck stage, outside $\gamma_{\text{pp}}$). The per-sequence serving overhead from §7.2 composes against the resulting per-step hardware window
+$$t_{\text{step,hw}}(B) \;=\; \gamma_{\text{pp}} \cdot \bigl[t_{\text{stage,hw}}(B) + \max(0,\; t_{\text{stage,kernel}} - \rho_{\text{kernel}} t_{\text{stage,hw}}(B))\bigr] \;+\; t_{\text{LM,hw}}(B)$$
+via $\rho_{\mathrm{serving}}$, the same overlap physics applied to host-side per-sequence work:
 
 $$
-t_{\text{step,user}}^{\text{sat}}(B) = t_{\text{GPU,step}}(B) + \max\!\bigl(0,\; t_{\text{serving,gross}}(B) - \rho_{\mathrm{serving}} \cdot t_{\text{GPU,step}}(B)\bigr)
+t_{\text{step,user}}^{\text{sat}}(B) = t_{\text{step,hw}}(B) + \max\!\bigl(0,\; t_{\text{serving,gross}}(B) - \rho_{\mathrm{serving}} \cdot t_{\text{step,hw}}(B)\bigr)
 $$
 
 Under the uniform-stage assumption (all $PP$ stages have identical body cost), the bottleneck stage is $PP{-}1$ and the additive $t_{\text{LM,hw}}(B)$ exactly captures its extra workload. For $PP = 1$, this also collapses to "single-stage body + LM head + serving overhead".
 
 **Regimes (assuming $\rho_{\text{kernel}} = \rho_{\mathrm{serving}} = 1$, the production CUDA-Graph defaults):**
 
-- $t_{\text{stage,hw}}(B) \ge t_{\text{stage,kernel}}$ and $t_{\text{GPU,step}}(B) \ge t_{\text{serving,gross}}(B)$: both overflow terms are 0, $t_{\text{step,user}}^{\text{sat}}(B) = t_{\text{stage,hw}}(B) + t_{\text{LM,hw}}(B)$ (HW-bound on the body — async dispatch and per-sequence host work both fully hidden by GPU work). This is the typical regime for moderate-to-large $B$ on production stacks.
-- $t_{\text{stage,hw}}(B) < t_{\text{stage,kernel}}$: the kernel-launch budget surfaces as a floor on $t_{\text{GPU,step}}$ (kernel-launch-bound on the body — common at small $B$ on dense decode).
-- $t_{\text{serving,gross}}(B) > t_{\text{GPU,step}}(B)$: per-sequence host work spills past the GPU window and the excess blocks (typically at very large $B$ for stacks with non-zero $c_{\mathrm{serving}}$).
+- $t_{\text{stage,hw}}(B) \ge t_{\text{stage,kernel}}$ and $t_{\text{step,hw}}(B) \ge t_{\text{serving,gross}}(B)$: both overflow terms are 0, $t_{\text{step,user}}^{\text{sat}}(B) = t_{\text{stage,hw}}(B) + t_{\text{LM,hw}}(B)$ (HW-bound on the body — async dispatch and per-sequence host work both fully hidden by hardware work). This is the typical regime for moderate-to-large $B$ on production stacks.
+- $t_{\text{stage,hw}}(B) < t_{\text{stage,kernel}}$: the kernel-launch budget surfaces as a floor on $t_{\text{step,hw}}$ (kernel-launch-bound on the body — common at small $B$ on dense decode).
+- $t_{\text{serving,gross}}(B) > t_{\text{step,hw}}(B)$: per-sequence host work spills past the hardware window and the excess blocks (typically at very large $B$ for stacks with non-zero $c_{\mathrm{serving}}$).
 - $\rho_{\text{kernel}} = 0$ or $\rho_{\mathrm{serving}} = 0$: no overlap on the corresponding term — it serializes additively after GPU compute. Eager-mode stacks land here.
 
 When $t_{\text{stage,kernel}} = 0$ and $c_{\mathrm{serving}} = 0$ (host-overhead-free roofline) the formula collapses to $t_{\text{stage,hw}}(B) + t_{\text{LM,hw}}(B)$.

@@ -40,7 +40,7 @@ TP, EP, NUM = 4, 1, 4
 DEFAULT_BW_ETA = 0.7
 # 5 µs/seq — Dynamo+TRT stack default (matches dynamo_trt.json and the
 # DSr1 Dynamo+TRT validator). At panel-(a) max B=128, c_serving·B = 0.64 ms
-# vs t_GPU_step ~5-10 ms → fully hidden by the overlap gate (ρ_serving=1),
+# vs t_step_hw ~5-10 ms → fully hidden by the overlap gate (ρ_serving=1),
 # so the value does not affect MAE. Previous value 22 µs was a tuning hack
 # under the old additive (no-overlap) model; with the overlap gate the
 # stack-wide 5 µs default is the consistent choice.

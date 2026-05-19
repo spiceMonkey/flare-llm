@@ -73,7 +73,7 @@ CO_LOCATED_WORKLOADS = [(1024, 1024), (8192, 1024)]
 DEFAULT_BW_ETA = 0.7143
 # 5 µs/seq — stack-realistic floor for Dynamo+TRT under CUDA-Graph replay.
 # Below the panel break-even at every measured operating point: at B=4300
-# (largest panel-(c) measured) c_serving·B = 21.5 ms < t_GPU_step ~25 ms,
+# (largest panel-(c) measured) c_serving·B = 21.5 ms < t_step_hw ~25 ms,
 # so the overlap gate clips the contribution to 0 and the value doesn't
 # affect MAE. Setting >0 makes the t_serving curve visible in the cost-
 # component plot (was previously 0 → suppressed by the plot helper's

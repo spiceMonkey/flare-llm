@@ -49,10 +49,10 @@ class FrameworkSpec:
     # Gross per-step host work:
     #   t_serving_gross = c_serving_per_seq_us * B * 1e-6     [seconds]
     #
-    # Net contribution to t_step_user (after overlap with per-step GPU
-    # time t_GPU_step = γ_pp · t_stage,with_SW + t_LM):
+    # Net contribution to t_step_user (after overlap with the per-step
+    # hardware window t_step_hw = γ_pp · t_stage,with_kernel + t_LM):
     #   t_serving = max(0, t_serving_gross
-    #                     - serving_overlap_factor * t_GPU_step)
+    #                     - serving_overlap_factor * t_step_hw)
     #
     # Stack-dependent ranges for c_serving_per_seq_us (decode.md §7.2):
     # - C++/CUDA-graph + orchestrator (Dynamo+TRT): 5-22 µs/seq
@@ -69,7 +69,7 @@ class FrameworkSpec:
     # exceeds the per-step GPU time. 0.0 = eager-mode serialization,
     # host work always blocks. Caveat: only modulates the *hideable*
     # portion; t_serving_gross remains a hard floor when it exceeds
-    # t_GPU_step regardless of this knob.
+    # t_step_hw regardless of this knob.
     serving_overlap_factor: float = 1.0
 
     # Per-kernel dispatch budget (decode.md §7.1).

@@ -56,7 +56,7 @@ ISL, OSL = 1024, 1024
 DEFAULT_BW_ETA = 1.0
 # 5 µs/seq — stack-realistic floor below the panel break-even at the
 # measured operating points. At B=8192 (largest panel-(d) measured)
-# c_serving·B = 41 ms ≈ t_GPU_step ~30-40 ms, so the overlap gate may
+# c_serving·B = 41 ms ≈ t_step_hw ~30-40 ms, so the overlap gate may
 # contribute a few ms but doesn't dominate. Setting >0 makes the
 # t_serving curve visible in the cost-component plot. Production
 # Dynamo+SGLang under CUDA-Graph replay amortizes host work better
