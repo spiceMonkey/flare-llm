@@ -48,7 +48,7 @@ def framework_spec_from_json_dict(cfg: Dict[str, Any]) -> FrameworkSpec:
           "kernels_per_layer_compute": 10,
           "kernels_per_collective_call": 2,
           "kernels_per_pp_hop": 2,
-          "sw_overlap_factor": 1.0,
+          "kernel_overlap_factor": 1.0,
 
           "moe_a2a_pattern": "scatter",
           "mla_mode": "absorbed",
@@ -117,10 +117,18 @@ def framework_spec_from_json_dict(cfg: Dict[str, Any]) -> FrameworkSpec:
         raise ValueError(
             f"framework configuration: 'comm_overlap_factor' must be in [0, 1], got {overlap}"
         )
-    sw_overlap = float(cfg.get("sw_overlap_factor", _defaults.sw_overlap_factor))
-    if not (0.0 <= sw_overlap <= 1.0):
+    if "sw_overlap_factor" in cfg and "kernel_overlap_factor" not in cfg:
         raise ValueError(
-            f"framework configuration: 'sw_overlap_factor' must be in [0, 1], got {sw_overlap}"
+            "framework configuration: 'sw_overlap_factor' was renamed to "
+            "'kernel_overlap_factor' to reflect that it specifically governs "
+            "the kernel-launch (cudaLaunchKernel / cudaGraphLaunch) dispatch "
+            "term — 'SW overhead' is now the umbrella category covering this "
+            "plus per-sequence serving runtime. Update your JSON."
+        )
+    kernel_overlap = float(cfg.get("kernel_overlap_factor", _defaults.kernel_overlap_factor))
+    if not (0.0 <= kernel_overlap <= 1.0):
+        raise ValueError(
+            f"framework configuration: 'kernel_overlap_factor' must be in [0, 1], got {kernel_overlap}"
         )
 
     serving_overlap = float(cfg.get("serving_overlap_factor", _defaults.serving_overlap_factor))
@@ -137,7 +145,7 @@ def framework_spec_from_json_dict(cfg: Dict[str, Any]) -> FrameworkSpec:
         kernels_per_layer_compute=int(cfg.get("kernels_per_layer_compute", _defaults.kernels_per_layer_compute)),
         kernels_per_collective_call=int(cfg.get("kernels_per_collective_call", _defaults.kernels_per_collective_call)),
         kernels_per_pp_hop=int(cfg.get("kernels_per_pp_hop", _defaults.kernels_per_pp_hop)),
-        sw_overlap_factor=sw_overlap,
+        kernel_overlap_factor=kernel_overlap,
         moe_a2a_pattern=moe_a2a_pattern,
         mla_mode=mla_mode,
         inc_enabled=bool(cfg.get("inc_enabled", _defaults.inc_enabled)),

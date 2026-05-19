@@ -51,7 +51,7 @@ def tuning_spec_from_json_dict(cfg: Dict[str, Any]) -> TuningSpec:
     _moved_to_framework = (
         # Phase B (host overhead + execution mode):
         "kernels_per_layer_compute", "kernels_per_collective_call",
-        "kernels_per_pp_hop", "kernel_launch_us", "sw_overlap_factor",
+        "kernels_per_pp_hop", "kernel_launch_us", "kernel_overlap_factor",
         "moe_a2a_pattern", "mla_mode", "inc_enabled",
         "t_serving_per_seq_us",
         # Phase E (collective dispatch + comm/compute overlap):

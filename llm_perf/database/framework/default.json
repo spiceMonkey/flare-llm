@@ -7,11 +7,10 @@
   "kernels_per_layer_compute": 10,
   "kernels_per_collective_call": 2,
   "kernels_per_pp_hop": 2,
-  "sw_overlap_factor": 1.0,
   "moe_a2a_pattern": "gather",
   "mla_mode": "absorbed",
   "inc_enabled": true,
-  "_comment": "Neutral / no-overhead defaults \u2014 no host-side overhead model, conservative MoE A2A (gather), MLA absorbed. Use this when modeling pure roofline performance (no production framework chosen) or as a starting point for ad-hoc framework specs. Matches FrameworkSpec.default() classmethod and the legacy TuningSpec defaults before the framework split.",
+  "_comment": "Neutral / no-overhead defaults — no host-side overhead model, conservative MoE A2A (gather), MLA absorbed. Use this when modeling pure roofline performance (no production framework chosen) or as a starting point for ad-hoc framework specs. Matches FrameworkSpec.default() classmethod and the legacy TuningSpec defaults before the framework split.",
   "tp_algorithm_decode": "ring",
   "tp_algorithm_prefill": "ring",
   "ep_algorithm_decode": "ring",
@@ -22,5 +21,6 @@
   "n_SP_collectives": 1,
   "comm_overlap_factor": 0.0,
   "attention_mode": "tp",
-  "tp_ep_layout": "orthogonal"
+  "tp_ep_layout": "orthogonal",
+  "kernel_overlap_factor": 1.0
 }

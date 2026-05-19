@@ -11,7 +11,7 @@ lives in `database/framework/dynamo_vllm.json`; this validator passes the
 JSON values through explicitly so the file is self-documenting:
   - c_serving=5 µs/seq, serving_overlap=1.0 (CUDA-Graph absorption)
   - kernel_launch=8 µs (between dynamo_trt's 4 µs and dynamo_sglang's 12 µs)
-  - sw_overlap=1.0, moe_a2a=scatter
+  - kernel_overlap=1.0, moe_a2a=scatter
 
 Two workloads (1K/1K, 8K/1K), 6 + 4 = 10 measured rows. B range 256-4096
 exercises the large-batch regime — KV traffic and comm dominance,
@@ -47,7 +47,7 @@ DEFAULT_BW_ETA = 0.7
 DEFAULT_C_SERVING_US = 5.0
 DEFAULT_KERNEL_LAUNCH_US = 8.0
 DEFAULT_SERVING_OVERLAP = 1.0
-DEFAULT_SW_OVERLAP = 1.0
+DEFAULT_KERNEL_OVERLAP = 1.0
 DEFAULT_COMM_OVERLAP = 0.0
 DEFAULT_MOE_A2A_PATTERN = "scatter"
 
@@ -82,7 +82,7 @@ def _run_workload(args, isl: int, osl: int):
         kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US,
         bytes_per_param=0.5,
         serving_overlap_factor=DEFAULT_SERVING_OVERLAP,
-        sw_overlap_factor=DEFAULT_SW_OVERLAP,
+        kernel_overlap_factor=DEFAULT_KERNEL_OVERLAP,
         comm_overlap_factor=DEFAULT_COMM_OVERLAP,
     )
     rows = []
@@ -98,7 +98,7 @@ def _run_workload(args, isl: int, osl: int):
             kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US,
             bytes_per_param=0.5,
             serving_overlap_factor=DEFAULT_SERVING_OVERLAP,
-            sw_overlap_factor=DEFAULT_SW_OVERLAP,
+            kernel_overlap_factor=DEFAULT_KERNEL_OVERLAP,
             comm_overlap_factor=DEFAULT_COMM_OVERLAP,
         )
         rows.append((f"TP={TP} EP={EP} {isl}/{osl}", m.B, m.tpot_ms, pred))

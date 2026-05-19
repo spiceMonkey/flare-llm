@@ -669,7 +669,7 @@ For $PP = 1$ (no pipeline parallelism), $t_{\text{pipeline,warmup}}(B_{\text{pre
 
 ## 3.4 Hardware Prefill Latency Formula
 
-Combining all three phases, with overlap factor $\rho \in [0, 1]$ capturing the fraction of prefill communication that can be hidden behind compute, an SW dispatch budget $t_{\text{stage,sw}}$ for per-stage CPU kernel-launch overhead, and the once-per-pass LM head roofline $t_{\text{LM,prefill,hw}}$ on stage $PP{-}1$:
+Combining all three phases, with overlap factor $\rho \in [0, 1]$ capturing the fraction of prefill communication that can be hidden behind compute, a kernel-launch dispatch budget $t_{\text{stage,kernel}}$ for per-stage CPU dispatch overhead, and the once-per-pass LM head roofline $t_{\text{LM,prefill,hw}}$ on stage $PP{-}1$:
 
 $$
 t_{\text{prefill}}(B_{\text{prefill}}) = t_{\text{prefill,local}}(B_{\text{prefill}}) + \max\!\bigl(0,\; t_{\text{prefill,comm}}(B_{\text{prefill}}) - \rho\, t_{\text{prefill,local}}(B_{\text{prefill}})\bigr) + t_{\text{pipeline,warmup}}(B_{\text{prefill}}) + t_{\text{LM,prefill,hw}}(B_{\text{prefill}})
@@ -677,7 +677,7 @@ $$
 
 **Interpretation of each term:**
 
-- **$t_{\text{prefill,local}}(B_{\text{prefill}})$** is the roofline local time with three corrections added to the legacy $\max(t_{\text{compute}}, t_{\text{mem}})$ form: a Tensor Core efficiency derate at small effective microbatch, an HBM sustained-bandwidth derate against $\eta_\beta(B_{\text{prefill}})$, and an SW composition for per-stage CPU kernel-launch overhead. All three are detailed below.
+- **$t_{\text{prefill,local}}(B_{\text{prefill}})$** is the roofline local time with three corrections added to the legacy $\max(t_{\text{compute}}, t_{\text{mem}})$ form: a Tensor Core efficiency derate at small effective microbatch, an HBM sustained-bandwidth derate against $\eta_\beta(B_{\text{prefill}})$, and a kernel-launch composition for per-stage CPU dispatch overhead. All three are detailed below.
 - **$\max(0,\, t_{\text{prefill,comm}}(B_{\text{prefill}}) - \rho\, t_{\text{prefill,local}}(B_{\text{prefill}}))$** is residual communication after compute–communication overlap. In the compute-bound prefill regime, $t_{\text{prefill,local}}$ is large, so significant communication hiding ($\rho \approx 0.8$–$1.0$) is achievable.
 - **$t_{\text{pipeline,warmup}}(B_{\text{prefill}})$** is the pipeline fill penalty; grows with $PP$ and with $B_{\text{prefill}} \cdot S_{\text{input}}$ since both $t_{PP}^{\text{prefill}}$ and $t_{\text{prefill,local}}$ scale with the per-step token count.
 - **$t_{\text{LM,prefill,hw}}(B_{\text{prefill}})$** is the once-per-pass LM head roofline on stage $PP{-}1$, defined below. It is added outside the warmup because it fires once at the end of the prefill traversal (after the pipeline is filled), not per stage.
@@ -716,23 +716,23 @@ $$
 
 For prefill the curve is typically inert: prefill is compute-bound at production $S_{\text{input}}$, so $t_{\text{mem}}$ is not on the critical path; and the dominant mechanism behind the curve (concurrent KV reads from many decode sequences) does not arise during prefill (KV is being **written**, not read). The term is included for symmetry with the decode formulation and to handle disaggregated chunked-prefill regimes where prefill chunks share a memory subsystem with concurrent decode traffic.
 
-### SW composition
+### Kernel-launch composition
 
-The per-stage CPU dispatch budget $t_{\text{stage,sw}}$ is applied via the SW-overlap factor $\rho_{\text{SW}}$ in the same base + unhidden-overflow form as decode (`decode.md §7.1` and `§7.3`). Let $t_{\text{prefill,GPU}}(B_{\text{prefill}}) = \max\bigl(t_{\text{compute}}^{\text{eff}}(B_{\text{prefill}}),\, t_{\text{mem}}^{\text{eff}}(B_{\text{prefill}})\bigr)$ denote the GPU-side roofline:
-
-$$
-t_{\text{prefill,local}}(B_{\text{prefill}}) = t_{\text{prefill,GPU}}(B_{\text{prefill}}) + \max\!\bigl(0,\; t_{\text{stage,sw}} - \rho_{\text{SW}} \cdot t_{\text{prefill,GPU}}(B_{\text{prefill}})\bigr)
-$$
-
-$t_{\text{stage,sw}}$ is the same per-stage launch budget as decode (`decode.md §7.1`):
+The per-stage CPU dispatch budget $t_{\text{stage,kernel}}$ is applied via the kernel-launch overlap factor $\rho_{\text{kernel}}$ in the same base + unhidden-overflow form as decode (`decode.md §7.1` and `§7.3`). Let $t_{\text{prefill,GPU}}(B_{\text{prefill}}) = \max\bigl(t_{\text{compute}}^{\text{eff}}(B_{\text{prefill}}),\, t_{\text{mem}}^{\text{eff}}(B_{\text{prefill}})\bigr)$ denote the GPU-side roofline:
 
 $$
-t_{\text{stage,sw}} = \tau_{\text{launch}} \cdot \left[ \frac{L}{PP} \bigl( k_{\text{compute}} + k_{\text{collective}}(n_{TP} + n_{SP}) \bigr) + \frac{L_{\text{moe}}}{PP} \cdot k_{\text{collective}} \cdot n_{EP} + k_{\text{pp\_hop}} \right]
+t_{\text{prefill,local}}(B_{\text{prefill}}) = t_{\text{prefill,GPU}}(B_{\text{prefill}}) + \max\!\bigl(0,\; t_{\text{stage,kernel}} - \rho_{\text{kernel}} \cdot t_{\text{prefill,GPU}}(B_{\text{prefill}})\bigr)
 $$
 
-with the unified $n_{EP} = 2$ for MoE layers (Dispatch + Combine). $t_{\text{stage,sw}}$ is $B_{\text{prefill}}$-independent — kernel launches pay $\tau_{\text{launch}}$ once per launch event regardless of payload. Each prefill forward pass is a single end-to-end sweep with no microbatch round structure (cf. decode's pipelined steady state); the per-stage formula applies once per stage per prefill pass. With `kernel_launch_us = 0` the term vanishes (legacy roofline).
+$t_{\text{stage,kernel}}$ is the same per-stage launch budget as decode (`decode.md §7.1`):
 
-> **Overlap note:** The overlap factor $\rho$ is an original parameterization (this work); see `references.md`. In the compute-bound prefill regime, compute and communication can be overlapped aggressively by pipelining GEMM tiles with collective operations (e.g., using NCCL + CUDA stream concurrency). Practical $\rho$ values are system-dependent but commonly 0.5–0.9. The independent $\rho_{\text{SW}}$ governs CPU-GPU dispatch overlap; default $\rho_{\text{SW}} = 1$ assumes async dispatch keeps the GPU command queue full.
+$$
+t_{\text{stage,kernel}} = \tau_{\text{launch}} \cdot \left[ \frac{L}{PP} \bigl( k_{\text{compute}} + k_{\text{collective}}(n_{TP} + n_{SP}) \bigr) + \frac{L_{\text{moe}}}{PP} \cdot k_{\text{collective}} \cdot n_{EP} + k_{\text{pp\_hop}} \right]
+$$
+
+with the unified $n_{EP} = 2$ for MoE layers (Dispatch + Combine). $t_{\text{stage,kernel}}$ is $B_{\text{prefill}}$-independent — kernel launches pay $\tau_{\text{launch}}$ once per launch event regardless of payload. Each prefill forward pass is a single end-to-end sweep with no microbatch round structure (cf. decode's pipelined steady state); the per-stage formula applies once per stage per prefill pass. With `kernel_launch_us = 0` the term vanishes (legacy roofline).
+
+> **Overlap note:** The overlap factor $\rho$ is an original parameterization (this work); see `references.md`. In the compute-bound prefill regime, compute and communication can be overlapped aggressively by pipelining GEMM tiles with collective operations (e.g., using NCCL + CUDA stream concurrency). Practical $\rho$ values are system-dependent but commonly 0.5–0.9. The independent $\rho_{\text{kernel}}$ governs CPU-GPU dispatch overlap; default $\rho_{\text{kernel}} = 1$ assumes async dispatch keeps the GPU command queue full.
 
 ---
 

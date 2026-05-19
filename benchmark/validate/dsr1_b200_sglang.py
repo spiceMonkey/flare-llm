@@ -41,7 +41,7 @@ WORKLOADS = [(1024, 8192)]
 # heavy: c_serving=40 µs/seq with serving_overlap_factor=0.0 (decode.md
 # §7.2 — Python interpreter wrapping per-seq sampling breaks the CPU-
 # runs-ahead invariant, so host work serializes after GPU compute).
-# Kernel launch ≈ 10 µs/kernel with sw_overlap_factor=0.3 (eager-mode
+# Kernel launch ≈ 10 µs/kernel with kernel_overlap_factor=0.3 (eager-mode
 # floor + interpreter stalls limit dispatch overlap). These knobs live
 # in `database/framework/sglang.json`; the validator passes them through
 # explicitly so this file documents what's calibrated.
@@ -53,7 +53,7 @@ DEFAULT_MOE_A2A_PATTERN = "scatter"
 # kernel-dispatch overlap limited to 0.3 (eager-mode + interpreter stalls),
 # no async comm overlap (ρ_comm=0). All three match database/framework/sglang.json.
 DEFAULT_SERVING_OVERLAP = 0.0
-DEFAULT_SW_OVERLAP = 0.3
+DEFAULT_KERNEL_OVERLAP = 0.3
 DEFAULT_COMM_OVERLAP = 0.0
 
 
@@ -79,7 +79,7 @@ def _run_workload(args, isl: int, osl: int):
         kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US,
         bytes_per_param=0.5,
         serving_overlap_factor=DEFAULT_SERVING_OVERLAP,
-        sw_overlap_factor=DEFAULT_SW_OVERLAP,
+        kernel_overlap_factor=DEFAULT_KERNEL_OVERLAP,
         comm_overlap_factor=DEFAULT_COMM_OVERLAP,
     )
     rows = []
@@ -95,7 +95,7 @@ def _run_workload(args, isl: int, osl: int):
             kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US,
             bytes_per_param=0.5,
             serving_overlap_factor=DEFAULT_SERVING_OVERLAP,
-            sw_overlap_factor=DEFAULT_SW_OVERLAP,
+            kernel_overlap_factor=DEFAULT_KERNEL_OVERLAP,
             comm_overlap_factor=DEFAULT_COMM_OVERLAP,
         )
         rows.append((f"TP={TP} EP={EP} {isl}/{osl}", m.B, m.tpot_ms, pred))

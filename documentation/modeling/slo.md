@@ -125,11 +125,11 @@ The full decode-step time from `decode.md §7.2` is:
 
 $$
 t_{\mathrm{step,user}}(B)
-\;=\; \gamma_{\mathrm{pp}} \cdot \big[t_{\mathrm{stage,hw}}(B) + \max(0, t_{\mathrm{stage,sw}} - \rho_{\mathrm{SW}} \, t_{\mathrm{stage,hw}}(B))\big]
+\;=\; \gamma_{\mathrm{pp}} \cdot \big[t_{\mathrm{stage,hw}}(B) + \max(0, t_{\mathrm{stage,kernel}} - \rho_{\mathrm{kernel}} \, t_{\mathrm{stage,hw}}(B))\big]
 \;+\; t_{\mathrm{LM,hw}}(B)
 $$
 
-where $\gamma_{\mathrm{pp}} = \max(1, PP/B)$ is the pipeline bubble factor, $t_{\mathrm{stage,hw}}(B)$ is the overlap-aware per-stage hardware roofline (`decode.md §6.2`), $t_{\mathrm{stage,sw}}$ is the per-stage CPU/host kernel-launch dispatch budget (`decode.md §7.1`), $\rho_{\mathrm{SW}}$ is the dispatch-overlap factor, and $t_{\mathrm{LM,hw}}(B)$ is the once-per-step LM head $H \to V$ projection on stage $PP{-}1$.
+where $\gamma_{\mathrm{pp}} = \max(1, PP/B)$ is the pipeline bubble factor, $t_{\mathrm{stage,hw}}(B)$ is the overlap-aware per-stage hardware roofline (`decode.md §6.2`), $t_{\mathrm{stage,kernel}}$ is the per-stage CPU/host kernel-launch dispatch budget (`decode.md §7.1`), $\rho_{\mathrm{kernel}}$ is the dispatch-overlap factor, and $t_{\mathrm{LM,hw}}(B)$ is the once-per-step LM head $H \to V$ projection on stage $PP{-}1$.
 
 For batch sizes $B \ge PP$ (the pipeline-full regime, see §4.2 for why this is the operational target), $\gamma_{\mathrm{pp}} = 1$ and the formula simplifies. The hardware stage time itself is a max-of-rooflines:
 

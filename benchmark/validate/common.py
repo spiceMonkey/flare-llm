@@ -262,7 +262,7 @@ class FrameworkPoint:
     t_local_ms: float
     t_comm_ms: float
     t_stage_ms: float
-    t_SW_ms: float
+    t_kernel_ms: float
     t_LM_ms: float
     t_serving_ms: float
 
@@ -287,7 +287,7 @@ def run_framework(
     kernel_launch_us: float | None = None,
     bytes_per_param: float | None = None,
     serving_overlap_factor: float | None = None,
-    sw_overlap_factor: float | None = None,
+    kernel_overlap_factor: float | None = None,
     comm_overlap_factor: float | None = None,
 ) -> list[FrameworkPoint]:
     """Run InferenceCalculator across a B sweep, return per-B latency breakdown.
@@ -310,7 +310,7 @@ def run_framework(
     # Build a FrameworkSpec from the per-driver knobs. Phase H: attention_mode
     # and layout flow here from the driver since they're stack-axis decisions
     # (not sharding-factor decisions). Other framework fields fall to
-    # FrameworkSpec defaults — sw_overlap_factor=1, mla_mode='absorbed',
+    # FrameworkSpec defaults — kernel_overlap_factor=1, mla_mode='absorbed',
     # inc_enabled=True, kernels_per_*=defaults.
     fw_kwargs = dict(
         name="benchmark-driver",
@@ -332,8 +332,8 @@ def run_framework(
         fw_kwargs["kernel_launch_us"] = kernel_launch_us
     if serving_overlap_factor is not None:
         fw_kwargs["serving_overlap_factor"] = serving_overlap_factor
-    if sw_overlap_factor is not None:
-        fw_kwargs["sw_overlap_factor"] = sw_overlap_factor
+    if kernel_overlap_factor is not None:
+        fw_kwargs["kernel_overlap_factor"] = kernel_overlap_factor
     if comm_overlap_factor is not None:
         fw_kwargs["comm_overlap_factor"] = comm_overlap_factor
     framework = FrameworkSpec(**fw_kwargs)
@@ -355,7 +355,7 @@ def run_framework(
             t_local_ms=r.latency.t_local * 1000,
             t_comm_ms=r.latency.t_comm * 1000,
             t_stage_ms=r.latency.t_stage * 1000,
-            t_SW_ms=r.latency.t_SW * 1000,
+            t_kernel_ms=r.latency.t_kernel * 1000,
             t_LM_ms=r.latency.t_LM * 1000,
             t_serving_ms=r.latency.t_serving * 1000,
         ))
@@ -395,7 +395,7 @@ def predict_at(
     kernel_launch_us: float | None = None,
     bytes_per_param: float | None = None,
     serving_overlap_factor: float | None = None,
-    sw_overlap_factor: float | None = None,
+    kernel_overlap_factor: float | None = None,
     comm_overlap_factor: float | None = None,
 ) -> float:
     """Predict TPOT (ms) at a single B — used to align with measured points."""
@@ -410,7 +410,7 @@ def predict_at(
         kernel_launch_us=kernel_launch_us,
         bytes_per_param=bytes_per_param,
         serving_overlap_factor=serving_overlap_factor,
-        sw_overlap_factor=sw_overlap_factor,
+        kernel_overlap_factor=kernel_overlap_factor,
         comm_overlap_factor=comm_overlap_factor,
     )
     if not pts:
@@ -524,7 +524,7 @@ def plot_tpot_vs_B(
     ax.plot(bs, [p.t_local_ms   for p in fx], "-.", c="darkviolet",  lw=1.6*l_scale, alpha=0.95, label="t_local = max(t_compute, t_mem)")
     ax.plot(bs, [p.t_comm_ms    for p in fx], "--", c="forestgreen", lw=1.3*l_scale, alpha=0.85, label="t_comm")
     ax.plot(bs, [p.t_LM_ms      for p in fx], "--", c="darkorange",  lw=1.0*l_scale, alpha=0.7,  label="t_LM (one-shot)")
-    ax.plot(bs, [p.t_SW_ms      for p in fx], "-.", c="goldenrod",   lw=1.6*l_scale, alpha=0.95, label="t_SW (kernel dispatch)")
+    ax.plot(bs, [p.t_kernel_ms      for p in fx], "-.", c="goldenrod",   lw=1.6*l_scale, alpha=0.95, label="t_kernel (launch dispatch)")
     if any(p.t_serving_ms > 0 for p in fx):
         ax.plot(bs, [p.t_serving_ms for p in fx], "--", c="mediumvioletred", lw=1.3*l_scale, alpha=0.85, label="t_serving (per-seq)")
     ax.plot(bs, [p.TPOT_ms      for p in fx], "-",  c="black",       lw=2.5*l_scale,             label="TPOT (composed)")

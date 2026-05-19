@@ -68,7 +68,7 @@ $$
 
 where $t_{\text{KV-transfer}} = 0$ for co-located prefill+decode. The prefill latency $t_{\text{prefill}}$ is derived in full in `prefill.md §3`; framework overhead terms $t_{\text{sched}}$ and $t_{\text{tok}}$ are defined in `framework.md §2`.
 
-> **SW dispatch overhead.** Both $t_{\text{prefill}}$ and $t_{\text{step,user}}$ already incorporate per-stage CPU/host dispatch budget through their respective roofline compositions — see `decode.md §7.1` for the canonical definition of $t_{\text{stage,sw}}$ and `prefill.md §3.4` for how prefill consumes it. The TTFT formula above does not add a separate kernel-launch term to avoid double counting; the legacy per-step `OverheadSpec.t_graph_us` / `t_launch_us` constants are only used when `kernel_launch_us = 0` in the tuner (SW modeling explicitly disabled).
+> **Kernel-launch dispatch overhead.** Both $t_{\text{prefill}}$ and $t_{\text{step,user}}$ already incorporate per-stage CPU/host dispatch budget through their respective roofline compositions — see `decode.md §7.1` for the canonical definition of $t_{\text{stage,kernel}}$ and `prefill.md §3.4` for how prefill consumes it. The TTFT formula above does not add a separate kernel-launch term to avoid double counting; the legacy per-step `OverheadSpec.t_graph_us` / `t_launch_us` constants are only used when `kernel_launch_us = 0` in the tuner (kernel-launch modeling explicitly disabled).
 
 > **LM head.** Both $t_{\text{prefill}}$ and $t_{\text{step,user}}$ also subsume the LM head $H \to V$ projection — a once-per-pass GPU-side roofline term on the last PP stage (`prefill.md §3.4` / `decode.md §6.2 / §7.2`). It is not a separate add-on at the TTFT level. The post-LM-head sampling kernel is folded into the same $t_{\text{LM,hw}}$ surcharge, not into $t_{\text{framework}}$.
 
@@ -81,10 +81,10 @@ where $t_{\text{KV-transfer}} = 0$ for co-located prefill+decode. The prefill la
 **Definition.** $\text{TPOT}$ is the **user-observed inter-token latency** for tokens 2 through $N_{\text{out}}$ of a single response (the decode phase). Each decode step produces exactly one new token per active sequence, so a user's TPOT equals the full step time $t_{\text{step,user}}$ — **not** amortized across the $B$ parallel sequences. The full form from `decode.md §7.2` composes the per-stage HW roofline, the SW dispatch budget, the pipeline bubble multiplier, and the once-per-step LM head surcharge:
 
 $$
-\text{TPOT} = t_{\text{step,user}}(B) = \gamma_{\text{pp}} \cdot \bigl[ t_{\text{stage,hw}}(B) + \max\!\bigl(0,\; t_{\text{stage,sw}} - \rho_{\text{SW}} \cdot t_{\text{stage,hw}}(B)\bigr) \bigr] + t_{\text{LM,hw}}(B)
+\text{TPOT} = t_{\text{step,user}}(B) = \gamma_{\text{pp}} \cdot \bigl[ t_{\text{stage,hw}}(B) + \max\!\bigl(0,\; t_{\text{stage,kernel}} - \rho_{\text{kernel}} \cdot t_{\text{stage,hw}}(B)\bigr) \bigr] + t_{\text{LM,hw}}(B)
 $$
 
-where $B$ is the number of sequences decoded concurrently, $t_{\text{stage,hw}}(B)$ is the overlap-aware per-stage HW step time (`decode.md §6.2`), $t_{\text{stage,sw}}$ is the per-stage CPU/host dispatch budget composed via $\rho_{\text{SW}}$ (`decode.md §7.1`), $\gamma_{\text{pp}} = \max(1, PP/B)$ is the pipeline bubble correction (`decode.md §7.2`) — at $B \ge PP$ the pipeline is kept full and the factor is 1; at $B < PP$ the single microbatch pays full pipeline depth per token — and $t_{\text{LM,hw}}(B)$ is the LM head $H \to V$ projection roofline on stage $PP{-}1$ (added outside $\gamma_{\text{pp}}$ since it fires once per step, not per stage).
+where $B$ is the number of sequences decoded concurrently, $t_{\text{stage,hw}}(B)$ is the overlap-aware per-stage HW step time (`decode.md §6.2`), $t_{\text{stage,kernel}}$ is the per-stage CPU/host dispatch budget composed via $\rho_{\text{kernel}}$ (`decode.md §7.1`), $\gamma_{\text{pp}} = \max(1, PP/B)$ is the pipeline bubble correction (`decode.md §7.2`) — at $B \ge PP$ the pipeline is kept full and the factor is 1; at $B < PP$ the single microbatch pays full pipeline depth per token — and $t_{\text{LM,hw}}(B)$ is the LM head $H \to V$ projection roofline on stage $PP{-}1$ (added outside $\gamma_{\text{pp}}$ since it fires once per step, not per stage).
 
 **Key property.** TPOT is the *streaming rate* perceived by the user. A TPOT of 50 ms means one new token appears every 50 ms — a rate of 20 tokens/s. Human reading comprehension speed is approximately 5–15 tokens/s; TPOT below 100 ms (>10 tokens/s) is a common production SLA threshold.
 
@@ -169,7 +169,7 @@ For a single request on a **co-located** prefill+decode cluster (no disaggregati
 4. **$t_{\text{step,user}}$** — First decode step: one forward pass of the decode kernel, generating token 1. From `decode.md §7.2`:
 
    $$
-   t_{\text{step,user}} = \gamma_{\text{pp}} \cdot \bigl[ t_{\text{stage,hw}} + \max\!\bigl(0,\; t_{\text{stage,sw}} - \rho_{\text{SW}} \cdot t_{\text{stage,hw}}\bigr) \bigr] + t_{\text{LM,hw}}
+   t_{\text{step,user}} = \gamma_{\text{pp}} \cdot \bigl[ t_{\text{stage,hw}} + \max\!\bigl(0,\; t_{\text{stage,kernel}} - \rho_{\text{kernel}} \cdot t_{\text{stage,hw}}\bigr) \bigr] + t_{\text{LM,hw}}
    $$
 
    This is the same formula as the steady-state TPOT (§1.2) — the first decode step is just the first invocation of the per-step decode kernel.
@@ -329,10 +329,10 @@ t_{\text{local}}(B) =
 \right)
 $$
 
-Composing with the per-stage SW dispatch budget $t_{\text{stage,sw}}$ (`decode.md §7.1`), applying the pipeline bubble correction $\gamma_{\text{pp}} = \max(1, PP/B)$, and adding the once-per-step LM head $t_{\text{LM,hw}}(B)$ on stage $PP{-}1$ (`decode.md §6.2 / §7.2`) gives the user-observed step time:
+Composing with the per-stage kernel-launch dispatch budget $t_{\text{stage,kernel}}$ (`decode.md §7.1`), applying the pipeline bubble correction $\gamma_{\text{pp}} = \max(1, PP/B)$, and adding the once-per-step LM head $t_{\text{LM,hw}}(B)$ on stage $PP{-}1$ (`decode.md §6.2 / §7.2`) gives the user-observed step time:
 
 $$
-t_{\text{step,user}}(B) = \gamma_{\text{pp}} \cdot \bigl[ t_{\text{stage,hw}}(B) + \max\!\bigl(0,\; t_{\text{stage,sw}} - \rho_{\text{SW}} \cdot t_{\text{stage,hw}}(B)\bigr) \bigr] + t_{\text{LM,hw}}(B)
+t_{\text{step,user}}(B) = \gamma_{\text{pp}} \cdot \bigl[ t_{\text{stage,hw}}(B) + \max\!\bigl(0,\; t_{\text{stage,kernel}} - \rho_{\text{kernel}} \cdot t_{\text{stage,hw}}(B)\bigr) \bigr] + t_{\text{LM,hw}}(B)
 $$
 
 ### TPOT definition
@@ -701,10 +701,10 @@ The following existing symbols from `notation.md` are used extensively; they are
 | $t_{\text{LM,prefill,hw}}$ | `prefill.md §3.4` | LM head one-shot roofline on stage $PP{-}1$ during prefill |
 | $t_{\text{step,user}}$ | `notation.md §9` | User-observed per-step decode time (HW + SW + bubble + LM head) |
 | $t_{\text{stage,hw}}$ | `decode.md §6.2` | Per-stage HW step time (compute + comm + overlap) |
-| $t_{\text{stage,sw}}$ | `decode.md §7.1` | Per-stage CPU/host kernel-launch dispatch budget |
+| $t_{\text{stage,kernel}}$ | `decode.md §7.1` | Per-stage CPU/host kernel-launch dispatch budget |
 | $t_{\text{LM,hw}}$ | `decode.md §6.2` | LM head one-shot roofline on stage $PP{-}1$ during decode |
 | $\gamma_{\text{pp}}$ | `decode.md §7.2` | Pipeline bubble factor $\max(1, PP/B)$ |
-| $\rho_{\text{SW}}$ | `decode.md §7.1` | CPU/GPU dispatch overlap factor |
+| $\rho_{\text{kernel}}$ | `decode.md §7.1` | Kernel-launch (CPU/GPU dispatch) overlap factor |
 | $TPS_{\text{single}}$ | `notation.md §9` | Single-replica decode throughput (tokens/s) |
 | $TTPS$ | `notation.md §9` | Global decode throughput (tokens/s) |
 | $t_{\text{sched}}$ | `notation.md §13` | Request scheduling / batch assembly latency |

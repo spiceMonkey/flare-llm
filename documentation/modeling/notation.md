@@ -257,14 +257,14 @@ _(→ decode.md)_
 - $\tau_{\mathrm{launch}}$ — Per-kernel CPU dispatch latency (typical: ~1.5 μs with CUDA Graphs, ~7 μs without).
 - $k$ — Kernel launches per layer per microbatch: $k = k_{\mathrm{compute}} + k_{\mathrm{collective}} \cdot (n_{\mathrm{TP}}^{\mathrm{calls}} + n_{\mathrm{EP}}^{\mathrm{calls}} + n_{\mathrm{SP}}^{\mathrm{calls}})$. Per-axis NCCL API call counts (zero when that parallelism axis is 1): $n_{\mathrm{TP}}^{\mathrm{calls}} = n_{\mathrm{TP\_collectives}}$; $n_{\mathrm{SP}}^{\mathrm{calls}} = n_{\mathrm{SP\_collectives}}$; **$n_{\mathrm{EP}}^{\mathrm{calls}} = 2 \cdot n_{\mathrm{EP\_collectives}}$** because the cost-model treats one MoE A2A as a single round-trip (with the 2× wrapped inside `_cost("moe_a2a")`), but the launch counter must expand to 2 actual NCCL calls (dispatch + combine).
 - $k_{\mathrm{pp\_hop}}$ — Kernels per PP boundary per microbatch on each device: typically 2 (1 recv + 1 send); 1 if `ncclSendRecv` or a custom kernel fuses the pair.
-- $t_{\mathrm{SW}}$ — Per-round CPU dispatch budget on each device: $t_{\mathrm{SW}} = L \cdot k \cdot \tau_{\mathrm{launch}} + PP \cdot k_{\mathrm{pp\_hop}} \cdot \tau_{\mathrm{launch}}$. The second term counts inter-stage P2P launches ($k_{\mathrm{pp\_hop}}$ per microbatch × $PP$ microbatches per round); inert when $PP = 1$ (kernel_launch_overhead.md §5).
-- $\rho_{\mathrm{SW}}$ — SW-overlap factor $\in [0, 1]$: fraction of $t_{\mathrm{stage}}$ that hides $t_{\mathrm{SW}}$ via async kernel dispatch. Default 1 (full overlap — upper-end case, accurate for CUDA-Graphs-replayed production stacks where the CPU has 1000× slack). Empirical production typically measures ~0.85–0.95 with CUDA Graphs; eager-mode Python serving sits at ~0.3–0.6. The 1.0 default matches the roofline philosophy; see `decode.md §7.1` for the canonical definition and operational caveats.
+- $t_{\mathrm{stage,kernel}}$ — Per-round CPU dispatch budget on each device: $t_{\mathrm{stage,kernel}} = L \cdot k \cdot \tau_{\mathrm{launch}} + PP \cdot k_{\mathrm{pp\_hop}} \cdot \tau_{\mathrm{launch}}$. The second term counts inter-stage P2P launches ($k_{\mathrm{pp\_hop}}$ per microbatch × $PP$ microbatches per round); inert when $PP = 1$ (kernel_launch_overhead.md §5).
+- $\rho_{\mathrm{kernel}}$ — Kernel-launch overlap factor $\in [0, 1]$: fraction of $t_{\mathrm{stage}}$ that hides $t_{\mathrm{stage,kernel}}$ via async kernel dispatch. Default 1 (full overlap — upper-end case, accurate for CUDA-Graphs-replayed production stacks where the CPU has 1000× slack). Empirical production typically measures ~0.85–0.95 with CUDA Graphs; eager-mode Python serving sits at ~0.3–0.6. The 1.0 default matches the roofline philosophy; see `decode.md §7.1` for the canonical definition and operational caveats.
 - $\gamma_{\text{pp}}$ — Pipeline-bubble multiplier:
   $$\gamma_{\text{pp}} = \max\left(1,\; \frac{PP}{B}\right)$$
   Equal to 1 when the pipeline is kept full ($B \ge PP$); greater than 1 when a single microbatch must traverse all PP stages sequentially ($B < PP$).
 - $t_{\text{step,user}}$ — User-observed per-step decode time:
-  $$t_{\text{step,user}} = \max\!\bigl(t_{\text{stage}},\ \rho_{\mathrm{SW}} \cdot t_{\text{stage}} + (1 - \rho_{\mathrm{SW}}) \cdot (t_{\text{stage}} + t_{\mathrm{SW}}),\ t_{\mathrm{SW}}\bigr) \cdot \gamma_{\text{pp}}$$
-  Reduces to $t_{\text{stage}} \cdot \gamma_{\text{pp}}$ when $t_{\mathrm{SW}} = 0$ (SW disabled).
+  $$t_{\text{step,user}} = \max\!\bigl(t_{\text{stage}},\ \rho_{\mathrm{kernel}} \cdot t_{\text{stage}} + (1 - \rho_{\mathrm{kernel}}) \cdot (t_{\text{stage}} + t_{\mathrm{stage,kernel}}),\ t_{\mathrm{stage,kernel}}\bigr) \cdot \gamma_{\text{pp}}$$
+  Reduces to $t_{\text{stage}} \cdot \gamma_{\text{pp}}$ when $t_{\mathrm{stage,kernel}} = 0$ (kernel-launch term disabled).
 - $\rho$ — Compute-comm overlap factor $\in [0,1]$: fraction of $t_{\text{local}}$ that hides $t_{\text{comm}}$.
 - $TPS_{\text{single}}$ — Per-DP-replica decode throughput: $B / t_{\text{step,user}}$ (tokens/s).
 - $TTPS$ — Global decode throughput across all DP replicas: $DP \cdot B / t_{\text{step,user}}$ (tokens/s).
@@ -376,7 +376,7 @@ Per-request (once):
 Per-step (each decode iteration):
 - $t_{\text{detok}}$ — Response streaming / detokenization latency per output token.
 
-_(Kernel-launch / CUDA-Graph dispatch overheads $t_{\text{stage,sw}}$ are HW-side and live in decode.md §7.1, not in framework.md. The LM head GEMM and post-LM-head sampling kernel are absorbed into $t_{\text{LM,hw}}$ on the GPU side; see decode.md §6.2 / §7.2.)_
+_(Kernel-launch / CUDA-Graph dispatch overheads $t_{\text{stage,kernel}}$ are HW-side and live in decode.md §7.1, not in framework.md. The LM head GEMM and post-LM-head sampling kernel are absorbed into $t_{\text{LM,hw}}$ on the GPU side; see decode.md §6.2 / §7.2.)_
 
 Request scope:
 - $T_{\text{out}}$ — Number of output tokens per request.
@@ -519,7 +519,7 @@ Speculative decoding breaks the 1:1 token-per-step mapping of vanilla decode by 
 ## 19. Per-Sequence Serving Runtime Overhead
 _(→ decode.md §7.2)_
 
-Captures host-side per-step work that scales with the active-sequence count $B$ — PagedAttention block-table gather, continuous-batching scheduler decisions, per-sequence sampling glue, token-append bookkeeping. Distinct from the kernel-launch dispatch budget $t_{\mathrm{stage,sw}}$ (per microbatch, near-constant in $B$; `decode.md §7.1`) and from the per-request scheduler latency $t_{\mathrm{sched}}$ of §13 above (once per request, not once per step). Symbols introduced in `decode.md §7.2`.
+Captures host-side per-step work that scales with the active-sequence count $B$ — PagedAttention block-table gather, continuous-batching scheduler decisions, per-sequence sampling glue, token-append bookkeeping. Distinct from the kernel-launch dispatch budget $t_{\mathrm{stage,kernel}}$ (per microbatch, near-constant in $B$; `decode.md §7.1`) and from the per-request scheduler latency $t_{\mathrm{sched}}$ of §13 above (once per request, not once per step). Symbols introduced in `decode.md §7.2`.
 
 - $c_{\mathrm{serving}}$ — Per-sequence per-step CPU serving runtime constant (seconds/seq/step). Stack-dependent calibration knob: ≈10 µs/seq for aggressively fused C++ stacks, ≈20–30 µs/seq for production CUDA-Graph stacks (TensorRT-LLM, NVIDIA Dynamo), ≈30–60 µs/seq for Python-heavy stacks (vLLM, SGLang in eager mode) (`decode.md §7.2`).
 - $t_{\mathrm{serving}}(B) = c_{\mathrm{serving}} \cdot B$ — Per-step serving runtime overhead. Additive to $t_{\mathrm{step,user}}(B)$, not overlapped with GPU work; sits outside the pipeline-bubble multiplier $\gamma_{\mathrm{pp}}$ since it fires once per step regardless of bubble depth (`decode.md §7.2`, used in `decode.md §7.3`).
