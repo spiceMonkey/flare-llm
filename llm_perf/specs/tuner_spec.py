@@ -55,7 +55,7 @@ class TuningSpec:
     # ── Framework-axis fields moved to FrameworkSpec ───────────────────
     # The following fields used to live here; they are now on FrameworkSpec:
     #   Phase B (mla(stage 5/framework-spec phase B)):
-    #     - c_serving_per_seq_us (renamed from t_serving_per_seq_us)
+    #     - c_seq_us (renamed from t_serving_per_seq_us)
     #     - kernel_launch_us, kernels_per_layer_compute,
     #       kernels_per_collective_call, kernels_per_pp_hop
     #     - kernel_overlap_factor

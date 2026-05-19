@@ -1,8 +1,6 @@
 {
   "schema": "llm_perf.framework",
   "name": "default",
-  "c_serving_per_seq_us": 0.0,
-  "serving_overlap_factor": 1.0,
   "kernel_launch_us": 1.5,
   "kernels_per_layer_compute": 10,
   "kernels_per_collective_call": 2,
@@ -22,5 +20,7 @@
   "comm_overlap_factor": 0.0,
   "attention_mode": "tp",
   "tp_ep_layout": "orthogonal",
-  "kernel_overlap_factor": 1.0
+  "kernel_overlap_factor": 1.0,
+  "c_seq_us": 0.0,
+  "seq_overlap_factor": 1.0
 }

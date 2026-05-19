@@ -1,8 +1,6 @@
 {
   "schema": "llm_perf.framework",
   "name": "dynamo-vllm",
-  "c_serving_per_seq_us": 5.0,
-  "serving_overlap_factor": 1.0,
   "kernel_launch_us": 8.0,
   "kernels_per_layer_compute": 10,
   "kernels_per_collective_call": 2,
@@ -10,8 +8,8 @@
   "moe_a2a_pattern": "scatter",
   "mla_mode": "absorbed",
   "inc_enabled": true,
-  "_comment_overall": "Dynamo+vLLM — Dynamo orchestrator wrapping the vLLM runtime. Same per-seq host absorption as dynamo_trt and dynamo_sglang (c_serving=5, ρ_serving=1.0). Kernel-dispatch absorption (kernel_launch_us=8) sits between dynamo_trt (4 µs, C++ runtime fully absorbed) and dynamo_sglang (12 µs, SGLang Python-paths survive the wrap). vLLM's CUDA-Graph coverage is broader than SGLang's (more decode paths captured by the graph) but its sampling, attention metadata prep, and MoE routing paths retain enough Python that Dynamo cannot fully collapse per-kernel dispatch. The 8 µs anchor is a hypothesis pending empirical fit on the Kimi-K2.5 / GB200 / Dynamo+vLLM panel — adjust toward 4 (TRT-like) if vLLM CUDA-Graph absorbs more, toward 12 (SGLang-like) if Python paths dominate.",
-  "_comment_c_serving": "5 µs/seq with serving_overlap_factor=1.0 — matches dynamo_trt and dynamo_sglang. Dynamo's per-sequence host absorption is runtime-agnostic; the 5 µs floor is the irreducible orchestrator cost (block-table gather, sampling glue, scheduler bookkeeping).",
+  "_comment_overall": "Dynamo+vLLM — Dynamo orchestrator wrapping the vLLM runtime. Same per-seq host absorption as dynamo_trt and dynamo_sglang (c_seq=5, ρ_seq=1.0). Kernel-dispatch absorption (kernel_launch_us=8) sits between dynamo_trt (4 µs, C++ runtime fully absorbed) and dynamo_sglang (12 µs, SGLang Python-paths survive the wrap). vLLM's CUDA-Graph coverage is broader than SGLang's (more decode paths captured by the graph) but its sampling, attention metadata prep, and MoE routing paths retain enough Python that Dynamo cannot fully collapse per-kernel dispatch. The 8 µs anchor is a hypothesis pending empirical fit on the Kimi-K2.5 / GB200 / Dynamo+vLLM panel — adjust toward 4 (TRT-like) if vLLM CUDA-Graph absorbs more, toward 12 (SGLang-like) if Python paths dominate.",
+  "_comment_c_seq": "5 µs/seq with seq_overlap_factor=1.0 — matches dynamo_trt and dynamo_sglang. Dynamo's per-sequence host absorption is runtime-agnostic; the 5 µs floor is the irreducible orchestrator cost (block-table gather, sampling glue, scheduler bookkeeping).",
   "_comment_kernel_launch": "8 µs — hypothesis between dynamo_trt's 4 µs (full C++ absorption) and dynamo_sglang's 12 µs (Python-paths survive). vLLM's CUDA-Graph captures more decode kernels than SGLang's (broader graph instantiation, better fused-kernel coverage in v0.6+), so Dynamo wrap is more effective; but vLLM's per-sampler and MoE routing paths retain Python wrapping that the graph misses. Empirically validate against the Kimi-K2.5 / GB200 / Dynamo+vLLM TP=16 EP=16 DP-attn panel and adjust if MAE motivates.",
   "_comment_moe_a2a_pattern": "scatter — vLLM's DeepEP-style MoE A2A under DP-attention follows the same scatter-direct pattern as TRT-LLM and SGLang (decode.md §5.2).",
   "tp_algorithm_decode": "auto",
@@ -25,5 +23,7 @@
   "comm_overlap_factor": 0.0,
   "attention_mode": "dp",
   "tp_ep_layout": "co_located",
-  "kernel_overlap_factor": 1.0
+  "kernel_overlap_factor": 1.0,
+  "c_seq_us": 5.0,
+  "seq_overlap_factor": 1.0
 }

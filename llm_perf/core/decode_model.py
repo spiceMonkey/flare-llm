@@ -240,13 +240,13 @@ class LatencyResults:
     t_step_user_verify: float = 0.0
     TPOT_spec: float = 0.0
     # Per-sequence serving runtime overhead (decode.md §7.2). GROSS per-step
-    # host cost: c_serving_per_seq_us * B * 1e-6. Parallel to t_kernel which also
+    # host cost: c_seq_us * B * 1e-6. Parallel to t_kernel which also
     # stores the gross dispatch budget — both are diagnostic surfaces. The
     # actual contribution to t_step_user is the OVERLAP-GATED form
-    # max(0, t_serving - serving_overlap_factor * t_step_hw), applied
-    # internally; readers comparing the t_serving curve against t_step,user
+    # max(0, t_step_seq - seq_overlap_factor * t_step_base), applied
+    # internally; readers comparing the t_step_seq curve against t_step,user
     # in plots see the overlap gate's hidden portion as the gap.
-    t_serving: float = 0.0
+    t_step_seq: float = 0.0
 
 
 # ────────────────────────────────────────────────────────────
@@ -562,20 +562,20 @@ def compute_latency(
     The per-stage roofline gives the cost of one pipeline stage processing
     the current batch. For a user observing inter-token latency we apply a
     pipeline-bubble correction when B < PP:
-        t_step_hw = max(t_stage_GPU, t_kernel) · max(1, PP / B) + t_LM
-        t_step_user = t_step_hw + max(0, t_serving_gross
-                                          - ρ_serving · t_step_hw)
+        t_step_base = max(t_stage_GPU, t_kernel) · max(1, PP / B) + t_LM
+        t_step_user = t_step_base + max(0, t_step_seq_gross
+                                          - ρ_seq · t_step_base)
 
     `t_stage_GPU` is the GPU-side compute + comm time (with optional Tensor
     Core efficiency derate at small microbatch). `t_kernel` is the per-round
     CPU dispatch budget (kernel_launch_overhead.md §5). The two are
     composed via `kernel_overlap_factor` ρ_kernel: ρ_kernel=1 means SW is fully hidden
     by GPU work (just `max`), ρ_kernel=0 means strict serialization.
-    `t_serving` is the per-sequence serving runtime overhead (decode.md §7.2).
-    Gross host work is `t_serving_gross = c_serving_per_seq_us · B · 1e-6`;
-    composition via `serving_overlap_factor` ρ_serving uses the same physics
-    as ρ_kernel — under CUDA-Graph replay (ρ_serving = 1, default) the CPU runs
-    ahead and host work hides behind GPU compute until it exceeds `t_step_hw`.
+    `t_step_seq` is the per-sequence serving runtime overhead (decode.md §7.2).
+    Gross host work is `t_step_seq_gross = c_seq_us · B · 1e-6`;
+    composition via `seq_overlap_factor` ρ_seq uses the same physics
+    as ρ_kernel — under CUDA-Graph replay (ρ_seq = 1, default) the CPU runs
+    ahead and host work hides behind GPU compute until it exceeds `t_step_base`.
     """
     B = tuner.B_decode
     PP = partition.PP
@@ -667,27 +667,27 @@ def compute_latency(
 
     # Per-sequence serving runtime overhead (decode.md §7.2): host-side work
     # that scales linearly with active-sequence count B (block-table gather,
-    # sampling, scheduler). **Composed with GPU work via serving_overlap_factor
-    # ρ_serving** — under CUDA-Graph replay the CPU runs ahead and host work
+    # sampling, scheduler). **Composed with GPU work via seq_overlap_factor
+    # ρ_seq** — under CUDA-Graph replay the CPU runs ahead and host work
     # hides behind GPU compute until it exceeds the per-step GPU time. Only the
     # *excess* over the per-step GPU window contributes to t_step_user.
-    #   ρ_serving = 1 → max(0, t_serving_gross - t_step_hw)  (full overlap;
+    #   ρ_seq = 1 → max(0, t_step_seq_gross - t_step_base)  (full overlap;
     #                   host work hides while CPU has GPU compute to amortize against)
-    #   ρ_serving = 0 → t_serving_gross  (eager-mode; host work always blocks)
-    t_serving_gross = framework.c_serving_per_seq_us * max(1, B) * 1e-6
-    rho_serving = framework.serving_overlap_factor
-    t_step_hw = t_stage_with_kernel * pp_bubble_factor + t_LM
-    t_serving_excess = max(0.0, t_serving_gross - rho_serving * t_step_hw)
+    #   ρ_seq = 0 → t_step_seq_gross  (eager-mode; host work always blocks)
+    t_step_seq_gross = framework.c_seq_us * max(1, B) * 1e-6
+    rho_seq = framework.seq_overlap_factor
+    t_step_base = t_stage_with_kernel * pp_bubble_factor + t_LM
+    t_step_seq_excess = max(0.0, t_step_seq_gross - rho_seq * t_step_base)
 
-    t_step_user = t_step_hw + t_serving_excess
+    t_step_user = t_step_base + t_step_seq_excess
     TPOT = t_step_user
     # Diagnostic surface (parallel to t_kernel): expose the GROSS per-step host
     # cost in LatencyResults so plots and breakdown tables show the per-
     # sequence work as it scales with B, even when the overlap gate clips
     # its contribution to t_step_user to zero. The gated contribution lives
-    # in t_step_user; readers see the gap between the t_serving curve and
+    # in t_step_user; readers see the gap between the t_step_seq curve and
     # t_step,user as the amount the overlap gate has hidden.
-    t_serving = t_serving_gross
+    t_step_seq = t_step_seq_gross
 
     TPS_single = B / t_step_user if t_step_user > 0 else 0.0
 
@@ -743,11 +743,11 @@ def compute_latency(
         # often stays memory-bound through small B even under speculation.
         t_lm_compute_verify = t_lm_compute * n_tok_verify
         t_LM_verify = max(t_lm_compute_verify, t_lm_mem)
-        # t_serving fires once per verify step too; apply the same overlap
+        # t_step_seq fires once per verify step too; apply the same overlap
         # gate against the verify-step GPU window.
-        t_step_hw_verify = t_stage_with_kernel_verify * pp_bubble_factor + t_LM_verify
-        t_serving_verify = max(0.0, t_serving_gross - rho_serving * t_step_hw_verify)
-        t_step_user_verify = t_step_hw_verify + t_serving_verify
+        t_step_base_verify = t_stage_with_kernel_verify * pp_bubble_factor + t_LM_verify
+        t_step_seq_verify = max(0.0, t_step_seq_gross - rho_seq * t_step_base_verify)
+        t_step_user_verify = t_step_base_verify + t_step_seq_verify
         TPOT_spec = t_step_user_verify / N_tok_per_step
     else:
         t_step_user_verify = t_step_user
@@ -773,5 +773,5 @@ def compute_latency(
         N_tok_per_step=N_tok_per_step,
         t_step_user_verify=t_step_user_verify,
         TPOT_spec=TPOT_spec,
-        t_serving=t_serving,
+        t_step_seq=t_step_seq,
     )
