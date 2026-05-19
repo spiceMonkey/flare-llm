@@ -43,7 +43,7 @@ ISL, OSL = 1024, 1024
 # Per-stack calibration. Production DSv3 on Dynamo+TRT-LLM uses
 # scatter-direct MoE A2A (decode.md §5.2) under co-located DP-attention;
 # the ORTHO cut uses TP-attention so scatter is inert, but the
-# kernel_launch / c_serving / bw_eta knobs still apply. Fits to ~18% MAE
+# kernel_launch / c_seq / bw_eta knobs still apply. Fits to ~18% MAE
 # overall (ortho=20%, colo=15%). Notable: bw_eta = 1.0 fits best —
 # Blackwell Ultra HBM3e under TRT-LLM appears to sustain very close to
 # nameplate peak, in contrast to gb200/dynamo-trt where bw_eta ≈ 0.7
@@ -52,13 +52,13 @@ ISL, OSL = 1024, 1024
 # Recalibrated post-MLA-migration (mla(stage 1-3): real MLASpec on
 # deepseek_r1_0528). Previous (1.0, 5.0) gave 42.1% overall MAE with a
 # 111% outlier at TP=EP=16 B=4301; new (1.0, 0.0) gives 20.3% / max
-# 35.5%. Same root cause as the GB200 driver: the c_serving=5 µs/seq
+# 35.5%. Same root cause as the GB200 driver: the c_seq=5 µs/seq
 # term over-counts host overhead for Dynamo+TRT, especially at the
 # large-B co-located cells (TP=EP=16, 32 at B≥4000). bw_eta is unchanged
 # because gb300 / dynamo-trt is structurally insensitive to it across
 # the cells in this dataset.
 DEFAULT_BW_ETA = 1.1111
-DEFAULT_C_SERVING_US = 0.0
+DEFAULT_C_SEQ_US = 0.0
 DEFAULT_KERNEL_LAUNCH_US = 7.0
 DEFAULT_MOE_A2A_PATTERN = "scatter"
 
@@ -85,7 +85,7 @@ def run_ortho(args) -> tuple[list[tuple], int]:
         num_devices=32, S_decode=ISL + OSL // 2,
         B_sweep=log_spaced_B(2048),
         flops_eta=args.flops_eta, bw_eta=args.bw_eta,
-        c_serving_us=args.c_serving_us,
+        c_seq_us=args.c_seq_us,
         moe_a2a_pattern=DEFAULT_MOE_A2A_PATTERN,
         kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US,
         bytes_per_param=0.5,
@@ -97,20 +97,20 @@ def run_ortho(args) -> tuple[list[tuple], int]:
             attention_mode="tp", tp_ep_layout="orthogonal",
             num_devices=32, S_decode=ISL + OSL // 2, B=m.B,
             flops_eta=args.flops_eta, bw_eta=args.bw_eta,
-            c_serving_us=args.c_serving_us,
+            c_seq_us=args.c_seq_us,
             moe_a2a_pattern=DEFAULT_MOE_A2A_PATTERN,
             kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US,
             bytes_per_param=0.5,
         )
         rows.append(("TP=8 EP=8 dec=32 ortho", m.B, m.tpot_ms, pred))
 
-    out = args.out_dir / f"dsr1_gb300_dynamo_trt_ortho_tp8ep8_dec32{eta_filename_tag(args.flops_eta, args.bw_eta, args.c_serving_us)}.png"
+    out = args.out_dir / f"dsr1_gb300_dynamo_trt_ortho_tp8ep8_dec32{eta_filename_tag(args.flops_eta, args.bw_eta, args.c_seq_us)}.png"
     plot_tpot_vs_B(
         framework=framework, measured=measured,
         title="DSR1 / GB300 / Dynamo-TRT — ORTHO TP=8 EP=8 dec=32 (4 replicas, TP-attn)",
         subtitle=f"PP=1 TP=8 EP=8 attention_mode=tp tp_ep_layout=orthogonal | "
                  f"ISL={ISL} OSL={OSL} FP4 | "
-                 f"sys={SYSTEM} | {topology_tag(SYSTEM)} | {eta_subtitle(args.flops_eta, args.bw_eta, args.c_serving_us)}",
+                 f"sys={SYSTEM} | {topology_tag(SYSTEM)} | {eta_subtitle(args.flops_eta, args.bw_eta, args.c_seq_us)}",
         out_path=out,
     )
     print(f"  saved: {out.relative_to(args.out_dir.parent.parent)}")
@@ -142,7 +142,7 @@ def run_colocated(args) -> tuple[list[tuple], int]:
             num_devices=tp_ep, S_decode=ISL + OSL // 2,
             B_sweep=log_spaced_B(8192),
             flops_eta=args.flops_eta, bw_eta=args.bw_eta,
-            c_serving_us=args.c_serving_us,
+            c_seq_us=args.c_seq_us,
             moe_a2a_pattern=DEFAULT_MOE_A2A_PATTERN,
             kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US,
             bytes_per_param=0.5,
@@ -154,19 +154,19 @@ def run_colocated(args) -> tuple[list[tuple], int]:
                 attention_mode="dp", tp_ep_layout="co_located",
                 num_devices=tp_ep, S_decode=ISL + OSL // 2, B=m.B,
                 flops_eta=args.flops_eta, bw_eta=args.bw_eta,
-                c_serving_us=args.c_serving_us,
+                c_seq_us=args.c_seq_us,
                 moe_a2a_pattern=DEFAULT_MOE_A2A_PATTERN,
                 kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US,
                 bytes_per_param=0.5,
             )
             rows.append((f"TP=EP={tp_ep}", m.B, m.tpot_ms, pred))
 
-        out = args.out_dir / f"dsr1_gb300_dynamo_trt_colocated_tp{tp_ep}ep{tp_ep}{eta_filename_tag(args.flops_eta, args.bw_eta, args.c_serving_us)}.png"
+        out = args.out_dir / f"dsr1_gb300_dynamo_trt_colocated_tp{tp_ep}ep{tp_ep}{eta_filename_tag(args.flops_eta, args.bw_eta, args.c_seq_us)}.png"
         plot_tpot_vs_B(
             framework=framework, measured=measured,
             title=f"DSR1 / GB300 / Dynamo-TRT — CO-LOCATED TP=EP={tp_ep} on {tp_ep}-GPU replica",
             subtitle=f"tp_ep_layout=co_located attention_mode=dp PP=1 TP={tp_ep} EP={tp_ep} SP=1 | "
-                     f"ISL={ISL} OSL={OSL} FP4 | sys={SYSTEM} | {topology_tag(SYSTEM)} | {eta_subtitle(args.flops_eta, args.bw_eta, args.c_serving_us)}",
+                     f"ISL={ISL} OSL={OSL} FP4 | sys={SYSTEM} | {topology_tag(SYSTEM)} | {eta_subtitle(args.flops_eta, args.bw_eta, args.c_seq_us)}",
             out_path=out,
         )
         print(f"  saved: {out.relative_to(args.out_dir.parent.parent)}")
@@ -176,7 +176,7 @@ def run_colocated(args) -> tuple[list[tuple], int]:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
     ap.add_argument("--cut", choices=["ortho", "colocated", "all"], default="all")
-    add_common_cli(ap, default_bw_eta=DEFAULT_BW_ETA, default_c_serving_us=DEFAULT_C_SERVING_US)
+    add_common_cli(ap, default_bw_eta=DEFAULT_BW_ETA, default_c_seq_us=DEFAULT_C_SEQ_US)
     args = ap.parse_args()
 
     all_rows: list[tuple] = []

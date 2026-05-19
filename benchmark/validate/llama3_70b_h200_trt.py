@@ -12,7 +12,7 @@ shapes.
 
 Usage:
     python benchmark/validate/llama3_70b_h200_trt.py
-    python benchmark/validate/llama3_70b_h200_trt.py --bw-eta 0.55 --c-serving-us 75
+    python benchmark/validate/llama3_70b_h200_trt.py --bw-eta 0.55 --c-seq-us 75
 """
 import argparse
 import sys
@@ -30,19 +30,19 @@ ISL, OSL = 1024, 1024
 TP_SHAPES = (1, 2, 4, 8)
 
 # Per-stack calibration. Raw TRT-LLM on Hopper fits to a remarkable ~2% MAE
-# at (bw_eta=0.55, c_serving=75 µs/seq) on TP=4 — the cleanest fit in the
+# at (bw_eta=0.55, c_seq=75 µs/seq) on TP=4 — the cleanest fit in the
 # entire validator suite, suggesting Hopper's mature stack is well-modeled
 # by the framework once these two knobs are dialed in. Hopper HBM3 sustains
 # ~55% of peak (lower than HBM3e on Blackwell because of older controllers).
 DEFAULT_BW_ETA = 0.7857
-DEFAULT_C_SERVING_US = 75.0
+DEFAULT_C_SEQ_US = 75.0
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
     ap.add_argument("--tp", type=int, choices=TP_SHAPES, default=None,
                     help="Run only this TP shape (default: all four)")
-    add_common_cli(ap, default_bw_eta=DEFAULT_BW_ETA, default_c_serving_us=DEFAULT_C_SERVING_US)
+    add_common_cli(ap, default_bw_eta=DEFAULT_BW_ETA, default_c_seq_us=DEFAULT_C_SEQ_US)
     args = ap.parse_args()
 
     targets = (args.tp,) if args.tp else TP_SHAPES
@@ -65,7 +65,7 @@ def main() -> int:
             num_devices=tp, S_decode=ISL + OSL // 2,
             B_sweep=log_spaced_B(512),
             flops_eta=args.flops_eta, bw_eta=args.bw_eta,
-            c_serving_us=args.c_serving_us,
+            c_seq_us=args.c_seq_us,
             bytes_per_param=1,  # FP8
         )
         for m in measured:
@@ -75,16 +75,16 @@ def main() -> int:
                 attention_mode="tp", tp_ep_layout="orthogonal",
                 num_devices=tp, S_decode=ISL + OSL // 2, B=m.B,
                 flops_eta=args.flops_eta, bw_eta=args.bw_eta,
-                c_serving_us=args.c_serving_us, bytes_per_param=1,
+                c_seq_us=args.c_seq_us, bytes_per_param=1,
             )
             all_rows.append((f"TP={tp}", m.B, m.tpot_ms, pred))
 
-        out = args.out_dir / f"llama3_70b_h200_trt_tp{tp}{eta_filename_tag(args.flops_eta, args.bw_eta, args.c_serving_us)}.png"
+        out = args.out_dir / f"llama3_70b_h200_trt_tp{tp}{eta_filename_tag(args.flops_eta, args.bw_eta, args.c_seq_us)}.png"
         plot_tpot_vs_B(
             framework=framework, measured=measured,
             title=f"Llama-3.3-70B-FP8 / H200 / TRT-LLM — TP={tp} on {tp}-GPU server",
             subtitle=f"PP=1 TP={tp} EP=1 attention_mode=tp | ISL={ISL} OSL={OSL} FP8 | "
-                     f"sys={SYSTEM} | {topology_tag(SYSTEM)} | {eta_subtitle(args.flops_eta, args.bw_eta, args.c_serving_us)}",
+                     f"sys={SYSTEM} | {topology_tag(SYSTEM)} | {eta_subtitle(args.flops_eta, args.bw_eta, args.c_seq_us)}",
             out_path=out,
         )
         print(f"  saved: {out.relative_to(args.out_dir.parent.parent)}")

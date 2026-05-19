@@ -521,10 +521,10 @@ _(→ decode.md §7.3)_
 
 Captures host-side per-step work that scales with the active-sequence count $B$ — PagedAttention block-table gather, continuous-batching scheduler decisions, per-sequence sampling glue, token-append bookkeeping. Distinct from the kernel-launch dispatch budget $t_{\mathrm{stage,kernel}}$ (per microbatch, near-constant in $B$; `decode.md §7.1`) and from the per-request scheduler latency $t_{\mathrm{sched}}$ of §13 above (once per request, not once per step). Symbols introduced in `decode.md §7.3`.
 
-- $c_{\mathrm{serving}}$ — Per-sequence per-step CPU serving runtime constant (seconds/seq/step). Stack-dependent calibration knob: ≈10 µs/seq for aggressively fused C++ stacks, ≈20–30 µs/seq for production CUDA-Graph stacks (TensorRT-LLM, NVIDIA Dynamo), ≈30–60 µs/seq for Python-heavy stacks (vLLM, SGLang in eager mode) (`decode.md §7.2`).
-- $t_{\mathrm{serving}}(B) = c_{\mathrm{serving}} \cdot B$ — Per-step serving runtime overhead. Additive to $t_{\mathrm{step,user}}(B)$, not overlapped with GPU work; sits outside the pipeline-bubble multiplier $\gamma_{\mathrm{pp}}$ since it fires once per step regardless of bubble depth (`decode.md §7.2`, used in `decode.md §7.3`).
+- $c_{\mathrm{seq}}$ — Per-sequence per-step CPU serving runtime constant (seconds/seq/step). Stack-dependent calibration knob: ≈10 µs/seq for aggressively fused C++ stacks, ≈20–30 µs/seq for production CUDA-Graph stacks (TensorRT-LLM, NVIDIA Dynamo), ≈30–60 µs/seq for Python-heavy stacks (vLLM, SGLang in eager mode) (`decode.md §7.2`).
+- $t_{\mathrm{step,seq}}(B) = c_{\mathrm{seq}} \cdot B$ — Per-step serving runtime overhead. Additive to $t_{\mathrm{step,user}}(B)$, not overlapped with GPU work; sits outside the pipeline-bubble multiplier $\gamma_{\mathrm{pp}}$ since it fires once per step regardless of bubble depth (`decode.md §7.2`, used in `decode.md §7.3`).
 
-When $c_{\mathrm{serving}} = 0$ (the default), $t_{\mathrm{serving}}(B) = 0$ and the §7.3 user-observed step time formula is recovered exactly — the term is opt-in.
+When $c_{\mathrm{seq}} = 0$ (the default), $t_{\mathrm{step,seq}}(B) = 0$ and the §7.3 user-observed step time formula is recovered exactly — the term is opt-in.
 
 ---
 

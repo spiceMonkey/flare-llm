@@ -42,35 +42,35 @@ class FrameworkSpec:
     # Per-sequence per-step host work (decode.md §7.2):
     # PagedAttention block-table gather, continuous-batching scheduler,
     # per-sequence sampling glue, token-append + KV bookkeeping. Linear
-    # in B. **Composed with GPU work via `serving_overlap_factor`** —
+    # in B. **Composed with GPU work via `seq_overlap_factor`** —
     # under CUDA-Graph replay the CPU runs ahead and host work hides
     # behind GPU compute until it exceeds the per-step GPU time.
     #
     # Gross per-step host work:
-    #   t_serving_gross = c_serving_per_seq_us * B * 1e-6     [seconds]
+    #   t_step_seq_gross = c_seq_us * B * 1e-6     [seconds]
     #
     # Net contribution to t_step_user (after overlap with the per-step
-    # hardware window t_step_hw = γ_pp · t_stage,with_kernel + t_LM):
-    #   t_serving = max(0, t_serving_gross
-    #                     - serving_overlap_factor * t_step_hw)
+    # hardware window t_step_base = γ_pp · t_stage,with_kernel + t_LM):
+    #   t_step_seq = max(0, t_step_seq_gross
+    #                     - seq_overlap_factor * t_step_base)
     #
-    # Stack-dependent ranges for c_serving_per_seq_us (decode.md §7.2):
+    # Stack-dependent ranges for c_seq_us (decode.md §7.2):
     # - C++/CUDA-graph + orchestrator (Dynamo+TRT): 5-22 µs/seq
     # - Mixed orchestrator + Python (Dynamo+SGLang): 25-50 µs/seq
     # - Raw C++ runtime (raw TRT-LLM): 50-100 µs/seq
     # - Aggressively fused C++: ~10 µs/seq lower bound
     # - Python-heavy (vLLM, SGLang eager): 30-60 µs/seq
-    c_serving_per_seq_us: float = 0.0
+    c_seq_us: float = 0.0
 
-    # Fraction of t_serving_gross hidden behind GPU compute. Same physics
+    # Fraction of t_step_seq_gross hidden behind GPU compute. Same physics
     # as kernel_overlap_factor (below) but applied to host-side per-sequence
     # work rather than per-kernel dispatch. 1.0 (default) = full CUDA-
     # Graph-replay overlap — CPU runs ahead, host work hides until it
     # exceeds the per-step GPU time. 0.0 = eager-mode serialization,
     # host work always blocks. Caveat: only modulates the *hideable*
-    # portion; t_serving_gross remains a hard floor when it exceeds
-    # t_step_hw regardless of this knob.
-    serving_overlap_factor: float = 1.0
+    # portion; t_step_seq_gross remains a hard floor when it exceeds
+    # t_step_base regardless of this knob.
+    seq_overlap_factor: float = 1.0
 
     # Per-kernel dispatch budget (decode.md §7.1).
     #   t_stage_kernel = tau_launch * (k_compute + k_collective + k_pp_hop)
@@ -95,7 +95,7 @@ class FrameworkSpec:
     # the *hideable* portion; t_stage_kernel remains a hard floor when it
     # exceeds t_stage_GPU regardless of this knob. The "kernel" in the
     # name distinguishes this from the other host-side overlap factors
-    # (serving_overlap_factor for per-sequence host work, and a future
+    # (seq_overlap_factor for per-sequence host work, and a future
     # per-step host floor); together they form the "SW overhead" umbrella.
     kernel_overlap_factor: float = 1.0
 

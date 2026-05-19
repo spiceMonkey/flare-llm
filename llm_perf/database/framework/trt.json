@@ -1,8 +1,6 @@
 {
   "schema": "llm_perf.framework",
   "name": "trt",
-  "c_serving_per_seq_us": 75.0,
-  "serving_overlap_factor": 1.0,
   "kernel_launch_us": 1.5,
   "kernels_per_layer_compute": 10,
   "kernels_per_collective_call": 2,
@@ -10,7 +8,7 @@
   "moe_a2a_pattern": "gather",
   "mla_mode": "absorbed",
   "inc_enabled": true,
-  "_comment_c_serving": "75 µs/seq with serving_overlap_factor=1.0 — raw TRT-LLM (no Dynamo orchestrator). Midpoint of decode.md §7.2's 50-100 µs raw-C++ range. The C++ runtime is fast per-kernel but exposes more individual kernel launches per step than Dynamo, and the per-seq host loop runs on the CPU between forward passes without orchestrator absorption. ρ_serving=1.0 because raw TRT-LLM still uses CUDA Graphs (CPU does run ahead during graph execution), but the larger gross host cost means the overlap gate hides less of it at typical operating points compared to dynamo_trt. Aliased to trt-llm and trtllm in the InferenceX dataset.",
+  "_comment_c_seq": "75 µs/seq with seq_overlap_factor=1.0 — raw TRT-LLM (no Dynamo orchestrator). Midpoint of decode.md §7.2's 50-100 µs raw-C++ range. The C++ runtime is fast per-kernel but exposes more individual kernel launches per step than Dynamo, and the per-seq host loop runs on the CPU between forward passes without orchestrator absorption. ρ_seq=1.0 because raw TRT-LLM still uses CUDA Graphs (CPU does run ahead during graph execution), but the larger gross host cost means the overlap gate hides less of it at typical operating points compared to dynamo_trt. Aliased to trt-llm and trtllm in the InferenceX dataset.",
   "_comment_kernel_launch": "1.5 µs — typical CUDA-graph replay launch budget for raw TRT-LLM.",
   "_comment_moe_a2a_pattern": "gather — raw TRT-LLM doesn't expose DeepEP-style scatter; defaults to gather-then-dispatch.",
   "tp_algorithm_decode": "auto",
@@ -24,5 +22,7 @@
   "comm_overlap_factor": 0.0,
   "attention_mode": "tp",
   "tp_ep_layout": "orthogonal",
-  "kernel_overlap_factor": 1.0
+  "kernel_overlap_factor": 1.0,
+  "c_seq_us": 75.0,
+  "seq_overlap_factor": 1.0
 }

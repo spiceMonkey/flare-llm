@@ -15,7 +15,7 @@ This driver covers the densest orthogonal cut: TP=8 EP=1 dec=8.
 
 Usage:
     python benchmark/validate/dsr1_b200_trt.py
-    python benchmark/validate/dsr1_b200_trt.py --bw-eta 0.7 --c-serving-us 25
+    python benchmark/validate/dsr1_b200_trt.py --bw-eta 0.7 --c-seq-us 25
 """
 import argparse
 import sys
@@ -35,16 +35,16 @@ TP, EP, NUM = 8, 1, 8
 # Per-stack calibration. Raw TRT-LLM has substantially higher per-sequence
 # host overhead than Dynamo+TRT (no Dynamo Python orchestrator absorbing
 # the bookkeeping into a single CUDA-Graph launch); fits to ~17% MAE at
-# (bw_eta=0.7, c_serving=100 µs/seq). The 100 µs is at the high end of
+# (bw_eta=0.7, c_seq=100 µs/seq). The 100 µs is at the high end of
 # §7.2's 30–60 µs Python-heavy stack range — note raw TRT-LLM's per-step
 # loop is C++ but exposes more individual kernel launches than Dynamo.
 DEFAULT_BW_ETA = 1.0
-DEFAULT_C_SERVING_US = 100.0
+DEFAULT_C_SEQ_US = 100.0
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
-    add_common_cli(ap, default_bw_eta=DEFAULT_BW_ETA, default_c_serving_us=DEFAULT_C_SERVING_US)
+    add_common_cli(ap, default_bw_eta=DEFAULT_BW_ETA, default_c_seq_us=DEFAULT_C_SEQ_US)
     args = ap.parse_args()
 
     measured = load_measured(
@@ -66,7 +66,7 @@ def main() -> int:
         num_devices=NUM, S_decode=ISL + OSL // 2,
         B_sweep=log_spaced_B(8192),
         flops_eta=args.flops_eta, bw_eta=args.bw_eta,
-        c_serving_us=args.c_serving_us,
+        c_seq_us=args.c_seq_us,
         bytes_per_param=0.5,  # FP4
     )
     rows = []
@@ -77,16 +77,16 @@ def main() -> int:
             attention_mode="tp", tp_ep_layout="orthogonal",
             num_devices=NUM, S_decode=ISL + OSL // 2, B=m.B,
             flops_eta=args.flops_eta, bw_eta=args.bw_eta,
-            c_serving_us=args.c_serving_us, bytes_per_param=0.5,
+            c_seq_us=args.c_seq_us, bytes_per_param=0.5,
         )
         rows.append((f"TP={TP} EP={EP}", m.B, m.tpot_ms, pred))
 
-    out = args.out_dir / f"dsr1_b200_trt_tp{TP}_ep{EP}_dec{NUM}{eta_filename_tag(args.flops_eta, args.bw_eta, args.c_serving_us)}.png"
+    out = args.out_dir / f"dsr1_b200_trt_tp{TP}_ep{EP}_dec{NUM}{eta_filename_tag(args.flops_eta, args.bw_eta, args.c_seq_us)}.png"
     plot_tpot_vs_B(
         framework=framework, measured=measured,
         title=f"DSR1 / B200 / TRT-LLM — TP={TP} EP={EP} dec={NUM}",
         subtitle=f"PP=1 TP={TP} EP={EP} attention_mode=tp | ISL={ISL} OSL={OSL} FP4 | "
-                 f"sys={SYSTEM} | {topology_tag(SYSTEM)} | {eta_subtitle(args.flops_eta, args.bw_eta, args.c_serving_us)}",
+                 f"sys={SYSTEM} | {topology_tag(SYSTEM)} | {eta_subtitle(args.flops_eta, args.bw_eta, args.c_seq_us)}",
         out_path=out,
     )
     print(f"  saved: {out.relative_to(args.out_dir.parent.parent)}\n")

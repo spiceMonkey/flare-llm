@@ -13,7 +13,7 @@ and overrides bytes_per_param=1 (FP8).
 
 Usage:
     python benchmark/validate/llama3_70b_b200_trt.py
-    python benchmark/validate/llama3_70b_b200_trt.py --bw-eta 0.55 --c-serving-us 75
+    python benchmark/validate/llama3_70b_b200_trt.py --bw-eta 0.55 --c-seq-us 75
 """
 import argparse
 import sys
@@ -33,20 +33,20 @@ TP_SHAPES = (1, 2, 4, 8)
 # Per-stack calibration. Raw TRT-LLM on dense Llama hits a much harder BW
 # derate than MoE models on the same stack (dense GEMMs sustain less of
 # peak HBM than MoE expert hopping — counter-intuitive, but matches B200
-# production reports). Best-fit (bw_eta=0.4, c_serving=50 µs/seq) gives
-# ~7% MAE on TP=4. Note c_serving lower than dsr1_b200_trt or
+# production reports). Best-fit (bw_eta=0.4, c_seq=50 µs/seq) gives
+# ~7% MAE on TP=4. Note c_seq lower than dsr1_b200_trt or
 # gpt_oss_120b_h200_trt — at small B (typical for Llama on B200/TRT) the
 # host loop is in the under-amortized regime where per-sequence cost is
 # closer to floor.
 DEFAULT_BW_ETA = 0.5714
-DEFAULT_C_SERVING_US = 50.0
+DEFAULT_C_SEQ_US = 50.0
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
     ap.add_argument("--tp", type=int, choices=TP_SHAPES, default=None,
                     help="Run only this TP shape (default: all four)")
-    add_common_cli(ap, default_bw_eta=DEFAULT_BW_ETA, default_c_serving_us=DEFAULT_C_SERVING_US)
+    add_common_cli(ap, default_bw_eta=DEFAULT_BW_ETA, default_c_seq_us=DEFAULT_C_SEQ_US)
     args = ap.parse_args()
 
     targets = (args.tp,) if args.tp else TP_SHAPES
@@ -69,7 +69,7 @@ def main() -> int:
             num_devices=tp, S_decode=ISL + OSL // 2,
             B_sweep=log_spaced_B(512),
             flops_eta=args.flops_eta, bw_eta=args.bw_eta,
-            c_serving_us=args.c_serving_us,
+            c_seq_us=args.c_seq_us,
             bytes_per_param=1,  # FP8
         )
         rows = []
@@ -80,17 +80,17 @@ def main() -> int:
                 attention_mode="tp", tp_ep_layout="orthogonal",
                 num_devices=tp, S_decode=ISL + OSL // 2, B=m.B,
                 flops_eta=args.flops_eta, bw_eta=args.bw_eta,
-                c_serving_us=args.c_serving_us, bytes_per_param=1,
+                c_seq_us=args.c_seq_us, bytes_per_param=1,
             )
             rows.append((f"TP={tp}", m.B, m.tpot_ms, pred))
             all_rows.append((f"TP={tp}", m.B, m.tpot_ms, pred))
 
-        out = args.out_dir / f"llama3_70b_b200_trt_tp{tp}{eta_filename_tag(args.flops_eta, args.bw_eta, args.c_serving_us)}.png"
+        out = args.out_dir / f"llama3_70b_b200_trt_tp{tp}{eta_filename_tag(args.flops_eta, args.bw_eta, args.c_seq_us)}.png"
         plot_tpot_vs_B(
             framework=framework, measured=measured,
             title=f"Llama-3.3-70B-FP8 / B200 / TRT-LLM — TP={tp} on {tp}-GPU server",
             subtitle=f"PP=1 TP={tp} EP=1 attention_mode=tp | ISL={ISL} OSL={OSL} FP8 | "
-                     f"sys={SYSTEM} | {topology_tag(SYSTEM)} | {eta_subtitle(args.flops_eta, args.bw_eta, args.c_serving_us)}",
+                     f"sys={SYSTEM} | {topology_tag(SYSTEM)} | {eta_subtitle(args.flops_eta, args.bw_eta, args.c_seq_us)}",
             out_path=out,
         )
         print(f"  saved: {out.relative_to(args.out_dir.parent.parent)}")

@@ -38,7 +38,7 @@ ISL, OSL = 1024, 1024
 # operates on per-rank attention-sharded tokens of size B/G_TP rather
 # than gathering full B to every rank. The framework models this via
 # moe_a2a_pattern="scatter" on the tuner. Combined with realistic per-
-# step host overhead (c_serving ≈ 1 µs/seq, kernel_launch ≈ 12 µs) and
+# step host overhead (c_seq ≈ 1 µs/seq, kernel_launch ≈ 12 µs) and
 # bw_eta ≈ 0.9 for HBM3e on Blackwell Ultra, the colocated cut fits to
 # ~9% MAE across TP=EP={32,48} and B ∈ {512..8192}. The EXACT cut
 # (TP=4 EP=1, EP-inert) is harder to fit at small B (kernel-launch floor
@@ -48,7 +48,7 @@ ISL, OSL = 1024, 1024
 # Recalibrated post-MLA-migration (mla(stage 1-3): real MLASpec on
 # deepseek_r1_0528). Previous (0.9, 1.0) gave 70.4% overall MAE; new
 # (0.9, 0.0) gives 57.7% / max 242.5%. Same root cause as the other
-# Dynamo drivers: c_serving 1→0 since Dynamo+SGLang absorbs per-seq
+# Dynamo drivers: c_seq 1→0 since Dynamo+SGLang absorbs per-seq
 # work into the orchestrator. Note this driver still has high residual
 # MAE — the colocated TP=EP=32, 48 cells at B≥4000 are structurally
 # over-predicted (likely a shared-MoE / DeepEP hot-path the framework
@@ -56,16 +56,16 @@ ISL, OSL = 1024, 1024
 DEFAULT_BW_ETA = 1.0
 # 5 µs/seq — stack-realistic floor below the panel break-even at the
 # measured operating points. At B=8192 (largest panel-(d) measured)
-# c_serving·B = 41 ms ≈ t_step_hw ~30-40 ms, so the overlap gate may
+# c_seq·B = 41 ms ≈ t_step_base ~30-40 ms, so the overlap gate may
 # contribute a few ms but doesn't dominate. Setting >0 makes the
-# t_serving curve visible in the cost-component plot. Production
+# t_step_seq curve visible in the cost-component plot. Production
 # Dynamo+SGLang under CUDA-Graph replay amortizes host work better
 # than the docstring's 25-50 µs Python-heavy range would predict,
 # hence the calibrated low value here (the JSON sglang.json keeps
 # the 40 µs Python-heavy default for general-purpose users).
-DEFAULT_C_SERVING_US = 5.0
+DEFAULT_C_SEQ_US = 5.0
 # 12 µs — matches dynamo_sglang.json's canonical anchor. The Dynamo
-# orchestrator absorbs SGLang's per-sequence host work (c_serving, ρ_serving)
+# orchestrator absorbs SGLang's per-sequence host work (c_seq, ρ_seq)
 # but does NOT collapse SGLang's per-kernel Python wrapping — many SGLang-
 # side kernels (custom scatter-direct A2A, MLA-specific kernels) fall
 # outside the Dynamo CUDA Graph and retain Python interpreter overhead.
@@ -101,7 +101,7 @@ def run_exact(args) -> tuple[list[tuple], int]:
             num_devices=dec, S_decode=ISL + OSL // 2,
             B_sweep=log_spaced_B(2048),
             flops_eta=args.flops_eta, bw_eta=args.bw_eta,
-            c_serving_us=args.c_serving_us,
+            c_seq_us=args.c_seq_us,
             moe_a2a_pattern=DEFAULT_MOE_A2A_PATTERN,
             kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US,
             bytes_per_param=0.5,
@@ -113,19 +113,19 @@ def run_exact(args) -> tuple[list[tuple], int]:
                 attention_mode="tp", tp_ep_layout="orthogonal",
                 num_devices=dec, S_decode=ISL + OSL // 2, B=m.B,
                 flops_eta=args.flops_eta, bw_eta=args.bw_eta,
-                c_serving_us=args.c_serving_us,
+                c_seq_us=args.c_seq_us,
                 moe_a2a_pattern=DEFAULT_MOE_A2A_PATTERN,
                 kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US,
                 bytes_per_param=0.5,
             )
             rows.append((f"TP=4 EP=1 dec={dec}", m.B, m.tpot_ms, pred))
 
-        out = args.out_dir / f"dsr1_gb300_dynamo_sglang_exact_tp4_ep1_dec{dec}{eta_filename_tag(args.flops_eta, args.bw_eta, args.c_serving_us)}.png"
+        out = args.out_dir / f"dsr1_gb300_dynamo_sglang_exact_tp4_ep1_dec{dec}{eta_filename_tag(args.flops_eta, args.bw_eta, args.c_seq_us)}.png"
         plot_tpot_vs_B(
             framework=framework, measured=measured,
             title=f"DSR1 / GB300 / Dynamo+SGLang — EXACT bucket: TP=4 EP=1 dec={dec}",
             subtitle=f"PP=1 TP=4 EP=1 attention_mode=tp | ISL={ISL} OSL={OSL} FP4 | "
-                     f"sys={SYSTEM} | {topology_tag(SYSTEM)} | {eta_subtitle(args.flops_eta, args.bw_eta, args.c_serving_us)}",
+                     f"sys={SYSTEM} | {topology_tag(SYSTEM)} | {eta_subtitle(args.flops_eta, args.bw_eta, args.c_seq_us)}",
             out_path=out,
         )
         print(f"  saved: {out.relative_to(args.out_dir.parent.parent)}")
@@ -157,7 +157,7 @@ def run_colocated(args) -> tuple[list[tuple], int]:
             num_devices=tp_ep, S_decode=ISL + OSL // 2,
             B_sweep=log_spaced_B(8192),
             flops_eta=args.flops_eta, bw_eta=args.bw_eta,
-            c_serving_us=args.c_serving_us,
+            c_seq_us=args.c_seq_us,
             moe_a2a_pattern=DEFAULT_MOE_A2A_PATTERN,
             kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US,
             bytes_per_param=0.5,
@@ -169,19 +169,19 @@ def run_colocated(args) -> tuple[list[tuple], int]:
                 attention_mode="dp", tp_ep_layout="co_located",
                 num_devices=tp_ep, S_decode=ISL + OSL // 2, B=m.B,
                 flops_eta=args.flops_eta, bw_eta=args.bw_eta,
-                c_serving_us=args.c_serving_us,
+                c_seq_us=args.c_seq_us,
                 moe_a2a_pattern=DEFAULT_MOE_A2A_PATTERN,
                 kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US,
                 bytes_per_param=0.5,
             )
             rows.append((f"TP=EP={tp_ep}", m.B, m.tpot_ms, pred))
 
-        out = args.out_dir / f"dsr1_gb300_dynamo_sglang_colocated_tp{tp_ep}ep{tp_ep}{eta_filename_tag(args.flops_eta, args.bw_eta, args.c_serving_us)}.png"
+        out = args.out_dir / f"dsr1_gb300_dynamo_sglang_colocated_tp{tp_ep}ep{tp_ep}{eta_filename_tag(args.flops_eta, args.bw_eta, args.c_seq_us)}.png"
         plot_tpot_vs_B(
             framework=framework, measured=measured,
             title=f"DSR1 / GB300 / Dynamo+SGLang — CO-LOCATED TP=EP={tp_ep} on {tp_ep}-GPU replica",
             subtitle=f"tp_ep_layout=co_located attention_mode=dp PP=1 TP={tp_ep} EP={tp_ep} SP=1 | "
-                     f"ISL={ISL} OSL={OSL} FP4 | sys={SYSTEM} | {topology_tag(SYSTEM)} | {eta_subtitle(args.flops_eta, args.bw_eta, args.c_serving_us)}",
+                     f"ISL={ISL} OSL={OSL} FP4 | sys={SYSTEM} | {topology_tag(SYSTEM)} | {eta_subtitle(args.flops_eta, args.bw_eta, args.c_seq_us)}",
             out_path=out,
         )
         print(f"  saved: {out.relative_to(args.out_dir.parent.parent)}")
@@ -191,7 +191,7 @@ def run_colocated(args) -> tuple[list[tuple], int]:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
     ap.add_argument("--cut", choices=["exact", "colocated", "all"], default="all")
-    add_common_cli(ap, default_bw_eta=DEFAULT_BW_ETA, default_c_serving_us=DEFAULT_C_SERVING_US)
+    add_common_cli(ap, default_bw_eta=DEFAULT_BW_ETA, default_c_seq_us=DEFAULT_C_SEQ_US)
     args = ap.parse_args()
 
     all_rows: list[tuple] = []

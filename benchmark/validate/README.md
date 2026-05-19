@@ -37,7 +37,7 @@ python benchmark/validate/gpt_oss_120b_gb200_dynamo_trt.py
 python benchmark/validate/llama3_70b_b200_trt.py
 
 # Apply tuning knobs (uniform across drivers via add_common_cli):
-python benchmark/validate/llama3_70b_b200_trt.py --bw-eta 0.55 --c-serving-us 75
+python benchmark/validate/llama3_70b_b200_trt.py --bw-eta 0.55 --c-seq-us 75
 
 # Pick a single sub-cut:
 python benchmark/validate/dsr1_gb200_dynamo_trt.py --cut colocated
@@ -56,16 +56,16 @@ python benchmark/validate/llama3_70b_b200_trt.py --out-dir /tmp/plots
 |---|---|---|
 | `--flops-eta` | per-driver | Multiply `device.peak_flops_TF` by this factor (sustained / nameplate) |
 | `--bw-eta` | per-driver | Multiply every memory tier's `bandwidth_GBps` by this factor |
-| `--c-serving-us` | per-driver | Per-sequence serving runtime overhead, µs/seq (decode.md §7.2) |
+| `--c-seq-us` | per-driver | Per-sequence serving runtime overhead, µs/seq (decode.md §7.2) |
 | `--out-dir` | `benchmark/results/` | Where to write plots |
 | `--check MAE_PCT` | None | If set, exit non-zero when overall MAE exceeds this |
 
-The three calibration knobs (`--flops-eta`, `--bw-eta`, `--c-serving-us`)
+The three calibration knobs (`--flops-eta`, `--bw-eta`, `--c-seq-us`)
 default to **per-driver** values — each script ships with `DEFAULT_BW_ETA`
-/ `DEFAULT_C_SERVING_US` constants tuned to its specific (model, hardware,
+/ `DEFAULT_C_SEQ_US` constants tuned to its specific (model, hardware,
 framework) cut so out-of-box runs land within reasonable MAE without users
 having to know the magic numbers. Override on the command line for sweeps;
-`--bw-eta 1.0 --c-serving-us 0` reverts to the peak roofline.
+`--bw-eta 1.0 --c-seq-us 0` reverts to the peak roofline.
 
 Each driver may also expose its own filters (`--cut`, `--tp`, etc.) — see
 `--help`.
@@ -76,13 +76,13 @@ The two calibration knobs sit on different axes:
 
 | Knob | Primary axis | Why |
 |---|---|---|
-| `c_serving` | **framework** (Dynamo+TRT, raw TRT, dynamo+sglang, vllm, …) | Host-side per-sequence work — block-table gather, sampling glue, scheduler — runs on the CPU between forward passes. The dominant variable is the serving stack (Python heaviness, CUDA-Graph use, fused vs Python sampling), with weak HW dependence through CPU class and PCIe. |
+| `c_seq` | **framework** (Dynamo+TRT, raw TRT, dynamo+sglang, vllm, …) | Host-side per-sequence work — block-table gather, sampling glue, scheduler — runs on the CPU between forward passes. The dominant variable is the serving stack (Python heaviness, CUDA-Graph use, fused vs Python sampling), with weak HW dependence through CPU class and PCIe. |
 | `bw_eta` | **HW × framework** | Sustained HBM BW depends on chip generation (HBM3 vs HBM3e) and on access pattern (dense GEMM vs paged-KV vs MoE expert hopping). Different frameworks are kinder or harder on the controllers. |
 | `flops_eta` | HW (sparse vs dense ratios), model | Less commonly needed — most miscalibration shows up on `bw_eta`. |
 
 Empirical anchors observed across the validator suite:
 
-| Framework | Typical c_serving | Notes |
+| Framework | Typical c_seq | Notes |
 |---|---|---|
 | `dynamo-trt` | 5–22 µs/seq | Aggressive C++/CUDA-Graph. The 22 µs anchor in `decode.md §7.2` matches gpt-oss/Dynamo+TRT exactly. |
 | `dynamo-sglang` | 25–50 µs/seq | Dynamo wrapper over Python-heavier SGLang internals. |
@@ -101,7 +101,7 @@ Empirical anchors observed across the validator suite:
 ### Re-tuning the defaults
 
 `_calibrate.py` runs a small grid sweep across all drivers and prints the
-best-fit `(bw_eta, c_serving)` per cut. Re-run after `fetch.py` pulls new
+best-fit `(bw_eta, c_seq)` per cut. Re-run after `fetch.py` pulls new
 InferenceX rows; copy the values into the per-driver `DEFAULT_*` constants
 and update the docstring comment with the resulting MAE.
 

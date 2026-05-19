@@ -264,7 +264,7 @@ class FrameworkPoint:
     t_stage_ms: float
     t_kernel_ms: float
     t_LM_ms: float
-    t_serving_ms: float
+    t_step_seq_ms: float
 
 
 def run_framework(
@@ -282,11 +282,11 @@ def run_framework(
     B_sweep: Sequence[int],
     flops_eta: float = 1.0,
     bw_eta: float = 1.0,
-    c_serving_us: float = 0.0,
+    c_seq_us: float = 0.0,
     moe_a2a_pattern: str = "gather",
     kernel_launch_us: float | None = None,
     bytes_per_param: float | None = None,
-    serving_overlap_factor: float | None = None,
+    seq_overlap_factor: float | None = None,
     kernel_overlap_factor: float | None = None,
     comm_overlap_factor: float | None = None,
 ) -> list[FrameworkPoint]:
@@ -316,7 +316,7 @@ def run_framework(
         name="benchmark-driver",
         attention_mode=attention_mode,
         tp_ep_layout=tp_ep_layout,
-        c_serving_per_seq_us=c_serving_us,
+        c_seq_us=c_seq_us,
         moe_a2a_pattern=moe_a2a_pattern,
         # InferenceX measurements were not captured with SHARP-class INC
         # engaged; opt out explicitly so the cost model picks SW even when
@@ -330,8 +330,8 @@ def run_framework(
     )
     if kernel_launch_us is not None:
         fw_kwargs["kernel_launch_us"] = kernel_launch_us
-    if serving_overlap_factor is not None:
-        fw_kwargs["serving_overlap_factor"] = serving_overlap_factor
+    if seq_overlap_factor is not None:
+        fw_kwargs["seq_overlap_factor"] = seq_overlap_factor
     if kernel_overlap_factor is not None:
         fw_kwargs["kernel_overlap_factor"] = kernel_overlap_factor
     if comm_overlap_factor is not None:
@@ -357,7 +357,7 @@ def run_framework(
             t_stage_ms=r.latency.t_stage * 1000,
             t_kernel_ms=r.latency.t_kernel * 1000,
             t_LM_ms=r.latency.t_LM * 1000,
-            t_serving_ms=r.latency.t_serving * 1000,
+            t_step_seq_ms=r.latency.t_step_seq * 1000,
         ))
     return out
 
@@ -390,11 +390,11 @@ def predict_at(
     B: int,
     flops_eta: float = 1.0,
     bw_eta: float = 1.0,
-    c_serving_us: float = 0.0,
+    c_seq_us: float = 0.0,
     moe_a2a_pattern: str = "gather",
     kernel_launch_us: float | None = None,
     bytes_per_param: float | None = None,
-    serving_overlap_factor: float | None = None,
+    seq_overlap_factor: float | None = None,
     kernel_overlap_factor: float | None = None,
     comm_overlap_factor: float | None = None,
 ) -> float:
@@ -405,11 +405,11 @@ def predict_at(
         attention_mode=attention_mode, tp_ep_layout=tp_ep_layout,
         num_devices=num_devices, S_decode=S_decode,
         B_sweep=[B],
-        flops_eta=flops_eta, bw_eta=bw_eta, c_serving_us=c_serving_us,
+        flops_eta=flops_eta, bw_eta=bw_eta, c_seq_us=c_seq_us,
         moe_a2a_pattern=moe_a2a_pattern,
         kernel_launch_us=kernel_launch_us,
         bytes_per_param=bytes_per_param,
-        serving_overlap_factor=serving_overlap_factor,
+        seq_overlap_factor=seq_overlap_factor,
         kernel_overlap_factor=kernel_overlap_factor,
         comm_overlap_factor=comm_overlap_factor,
     )
@@ -525,8 +525,8 @@ def plot_tpot_vs_B(
     ax.plot(bs, [p.t_comm_ms    for p in fx], "--", c="forestgreen", lw=1.3*l_scale, alpha=0.85, label="t_comm")
     ax.plot(bs, [p.t_LM_ms      for p in fx], "--", c="darkorange",  lw=1.0*l_scale, alpha=0.7,  label="t_LM (one-shot)")
     ax.plot(bs, [p.t_kernel_ms      for p in fx], "-.", c="goldenrod",   lw=1.6*l_scale, alpha=0.95, label="t_kernel (launch dispatch)")
-    if any(p.t_serving_ms > 0 for p in fx):
-        ax.plot(bs, [p.t_serving_ms for p in fx], "--", c="mediumvioletred", lw=1.3*l_scale, alpha=0.85, label="t_serving (per-seq)")
+    if any(p.t_step_seq_ms > 0 for p in fx):
+        ax.plot(bs, [p.t_step_seq_ms for p in fx], "--", c="mediumvioletred", lw=1.3*l_scale, alpha=0.85, label="t_step_seq (per-seq)")
     ax.plot(bs, [p.TPOT_ms      for p in fx], "-",  c="black",       lw=2.5*l_scale,             label="TPOT (composed)")
 
     if measured:
@@ -603,7 +603,7 @@ def add_common_cli(
     *,
     default_flops_eta: float = 1.0,
     default_bw_eta: float = 1.0,
-    default_c_serving_us: float = 0.0,
+    default_c_seq_us: float = 0.0,
 ) -> None:
     """Register the standard CLI args every driver should support.
 
@@ -612,10 +612,10 @@ def add_common_cli(
     by overriding on the command line (e.g. `--bw-eta 1.0` to disable a
     baked-in derate). The defaults reflect the per-(model, hardware,
     framework) calibration that lands within reasonable MAE; running with
-    `--flops-eta 1.0 --bw-eta 1.0 --c-serving-us 0` reverts to the peak
+    `--flops-eta 1.0 --bw-eta 1.0 --c-seq-us 0` reverts to the peak
     roofline.
 
-    The c_serving knob is primarily framework-bound (serving stack: Python
+    The c_seq knob is primarily framework-bound (serving stack: Python
     interpreter weight, CUDA-Graph replay, fused vs Python sampling); see
     `validate/README.md` for the framework × HW knob structure.
     """
@@ -625,9 +625,9 @@ def add_common_cli(
     ap.add_argument("--bw-eta", type=float, default=default_bw_eta,
                     help=f"Discount factor on every memory tier's bandwidth_GBps. "
                          f"Driver default: {default_bw_eta}.")
-    ap.add_argument("--c-serving-us", type=float, default=default_c_serving_us,
-                    help=f"Per-sequence serving runtime overhead c_serving (µs/seq). "
-                         f"Driver default: {default_c_serving_us}.")
+    ap.add_argument("--c-seq-us", type=float, default=default_c_seq_us,
+                    help=f"Per-sequence serving runtime overhead c_seq (µs/seq). "
+                         f"Driver default: {default_c_seq_us}.")
     ap.add_argument("--out-dir", type=Path, default=DEFAULT_RESULTS_DIR,
                     help="Where to write plots (default: benchmark/results/).")
     ap.add_argument("--check", type=float, default=None, metavar="MAE_PCT",
@@ -635,19 +635,19 @@ def add_common_cli(
                          "Use for CI smoke tests.")
 
 
-def eta_subtitle(flops_eta: float, bw_eta: float, c_serving_us: float) -> str:
+def eta_subtitle(flops_eta: float, bw_eta: float, c_seq_us: float) -> str:
     bits = []
     bits.append("peak FLOPs+BW" if (flops_eta == 1.0 and bw_eta == 1.0)
                 else f"flops_eta={flops_eta:.2f}, bw_eta={bw_eta:.2f}")
-    bits.append(f"c_serving={c_serving_us:.0f} µs/seq" if c_serving_us > 0
-                else "c_serving=0 (off)")
+    bits.append(f"c_seq={c_seq_us:.0f} µs/seq" if c_seq_us > 0
+                else "c_seq=0 (off)")
     return " | ".join(bits)
 
 
-def eta_filename_tag(flops_eta: float, bw_eta: float, c_serving_us: float) -> str:
+def eta_filename_tag(flops_eta: float, bw_eta: float, c_seq_us: float) -> str:
     parts = []
     if flops_eta != 1.0 or bw_eta != 1.0:
         parts.append(f"flops{flops_eta:.2f}_bw{bw_eta:.2f}")
-    if c_serving_us > 0:
-        parts.append(f"serv{c_serving_us:.0f}us")
+    if c_seq_us > 0:
+        parts.append(f"serv{c_seq_us:.0f}us")
     return ("_" + "_".join(parts).replace(".", "p")) if parts else ""

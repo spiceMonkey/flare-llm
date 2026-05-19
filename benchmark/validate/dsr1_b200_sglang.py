@@ -38,7 +38,7 @@ TP, EP, NUM = 4, 4, 16
 WORKLOADS = [(1024, 8192)]
 
 # Per-stack calibration. Pure SGLang (no Dynamo orchestrator) is Python-
-# heavy: c_serving=40 µs/seq with serving_overlap_factor=0.0 (decode.md
+# heavy: c_seq=40 µs/seq with seq_overlap_factor=0.0 (decode.md
 # §7.2 — Python interpreter wrapping per-seq sampling breaks the CPU-
 # runs-ahead invariant, so host work serializes after GPU compute).
 # Kernel launch ≈ 10 µs/kernel with kernel_overlap_factor=0.3 (eager-mode
@@ -46,13 +46,13 @@ WORKLOADS = [(1024, 8192)]
 # in `database/framework/sglang.json`; the validator passes them through
 # explicitly so this file documents what's calibrated.
 DEFAULT_BW_ETA = 0.7
-DEFAULT_C_SERVING_US = 40.0
+DEFAULT_C_SEQ_US = 40.0
 DEFAULT_KERNEL_LAUNCH_US = 10.0
 DEFAULT_MOE_A2A_PATTERN = "scatter"
-# Python-heavy SGLang stack: serving cost fully serializes (ρ_serving=0),
+# Python-heavy SGLang stack: serving cost fully serializes (ρ_seq=0),
 # kernel-dispatch overlap limited to 0.3 (eager-mode + interpreter stalls),
 # no async comm overlap (ρ_comm=0). All three match database/framework/sglang.json.
-DEFAULT_SERVING_OVERLAP = 0.0
+DEFAULT_SEQ_OVERLAP = 0.0
 DEFAULT_KERNEL_OVERLAP = 0.3
 DEFAULT_COMM_OVERLAP = 0.0
 
@@ -74,11 +74,11 @@ def _run_workload(args, isl: int, osl: int):
         num_devices=NUM, S_decode=S_decode,
         B_sweep=log_spaced_B(512),
         flops_eta=args.flops_eta, bw_eta=args.bw_eta,
-        c_serving_us=args.c_serving_us,
+        c_seq_us=args.c_seq_us,
         moe_a2a_pattern=DEFAULT_MOE_A2A_PATTERN,
         kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US,
         bytes_per_param=0.5,
-        serving_overlap_factor=DEFAULT_SERVING_OVERLAP,
+        seq_overlap_factor=DEFAULT_SEQ_OVERLAP,
         kernel_overlap_factor=DEFAULT_KERNEL_OVERLAP,
         comm_overlap_factor=DEFAULT_COMM_OVERLAP,
     )
@@ -90,11 +90,11 @@ def _run_workload(args, isl: int, osl: int):
             attention_mode="tp", tp_ep_layout="orthogonal",
             num_devices=NUM, S_decode=S_decode, B=m.B,
             flops_eta=args.flops_eta, bw_eta=args.bw_eta,
-            c_serving_us=args.c_serving_us,
+            c_seq_us=args.c_seq_us,
             moe_a2a_pattern=DEFAULT_MOE_A2A_PATTERN,
             kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US,
             bytes_per_param=0.5,
-            serving_overlap_factor=DEFAULT_SERVING_OVERLAP,
+            seq_overlap_factor=DEFAULT_SEQ_OVERLAP,
             kernel_overlap_factor=DEFAULT_KERNEL_OVERLAP,
             comm_overlap_factor=DEFAULT_COMM_OVERLAP,
         )
@@ -105,7 +105,7 @@ def _run_workload(args, isl: int, osl: int):
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
     add_common_cli(ap, default_bw_eta=DEFAULT_BW_ETA,
-                   default_c_serving_us=DEFAULT_C_SERVING_US)
+                   default_c_seq_us=DEFAULT_C_SEQ_US)
     args = ap.parse_args()
 
     cuts = [_run_workload(args, isl, osl) for (isl, osl) in WORKLOADS]
@@ -120,7 +120,7 @@ def main() -> int:
 
     out = (
         args.out_dir
-        / f"dsr1_b200_sglang_tp{TP}_ep{EP}_g{NUM}{eta_filename_tag(args.flops_eta, args.bw_eta, args.c_serving_us)}.png"
+        / f"dsr1_b200_sglang_tp{TP}_ep{EP}_g{NUM}{eta_filename_tag(args.flops_eta, args.bw_eta, args.c_seq_us)}.png"
     )
     plot_tpot_vs_B(
         framework=fw_prim, measured=meas_prim,
@@ -128,7 +128,7 @@ def main() -> int:
         subtitle=f"PP=1 TP={TP} EP={EP} attention_mode=tp tp_ep_layout=orthogonal | "
                  f"ISL={WORKLOADS[0][0]} OSL={WORKLOADS[0][1]} long-gen | FP4 | "
                  f"sys={SYSTEM} | {topology_tag(SYSTEM)} | "
-                 f"{eta_subtitle(args.flops_eta, args.bw_eta, args.c_serving_us)}",
+                 f"{eta_subtitle(args.flops_eta, args.bw_eta, args.c_seq_us)}",
         out_path=out,
         primary_label=prim_lbl,
     )

@@ -38,7 +38,7 @@ PRECISION = "fp4"
 ISL, OSL = 1024, 1024
 # CO-LOCATED panel loads two workloads per shape: short-context (1K/1K,
 # compute/weight-bound) and long-context (8K/1K, KV-traffic-bound). Same
-# calibration must fit both — validates that bw_eta / c_serving /
+# calibration must fit both — validates that bw_eta / c_seq /
 # kernel_launch_us are hardware/stack properties, not workload knobs.
 CO_LOCATED_WORKLOADS = [(1024, 1024), (8192, 1024)]
 
@@ -47,7 +47,7 @@ CO_LOCATED_WORKLOADS = [(1024, 1024), (8192, 1024)]
 # operates on per-rank attention-sharded tokens of size B/G_TP rather
 # than gathering full B to every rank. The framework models this via
 # moe_a2a_pattern="scatter" on the tuner. Combined with a moderate
-# Dynamo-stack host overhead (c_serving ≈ 5 µs/seq, kernel_launch ≈ 7
+# Dynamo-stack host overhead (c_seq ≈ 5 µs/seq, kernel_launch ≈ 7
 # µs) and bw_eta ≈ 0.6 for HBM3e on Blackwell, fits to ~21% MAE
 # overall across all three cuts (n=34 measurement points).
 # Per-cut breakdown:
@@ -66,20 +66,20 @@ CO_LOCATED_WORKLOADS = [(1024, 1024), (8192, 1024)]
 # deepseek_r1_0528 added ~5 GB to per-rank M_theta and shifted attention
 # compute to absorbed-mode latent-space score/value). Previous (0.6, 5.0)
 # gave 25.1% overall MAE with a 116% outlier at TP=EP=16 B=4301; new
-# (0.5, 0.0) gives 22.7% / max 53.8%. The c_serving 5→0 shift carries
+# (0.5, 0.0) gives 22.7% / max 53.8%. The c_seq 5→0 shift carries
 # the bulk of the improvement: Dynamo+TRT absorbs per-seq host work into
 # the CUDA-graph launch, so the framework's per-seq overhead term
 # over-counts at large B (the offending TP=EP=16,32 cells run at B≥4000).
 DEFAULT_BW_ETA = 0.7143
 # 5 µs/seq — stack-realistic floor for Dynamo+TRT under CUDA-Graph replay.
 # Below the panel break-even at every measured operating point: at B=4300
-# (largest panel-(c) measured) c_serving·B = 21.5 ms < t_step_hw ~25 ms,
+# (largest panel-(c) measured) c_seq·B = 21.5 ms < t_step_base ~25 ms,
 # so the overlap gate clips the contribution to 0 and the value doesn't
-# affect MAE. Setting >0 makes the t_serving curve visible in the cost-
+# affect MAE. Setting >0 makes the t_step_seq curve visible in the cost-
 # component plot (was previously 0 → suppressed by the plot helper's
-# any(t_serving_ms > 0) guard). Sits at the lower end of decode.md §7.2's
+# any(t_step_seq_ms > 0) guard). Sits at the lower end of decode.md §7.2's
 # 5-22 µs C++/CUDA-graph + orchestrator range.
-DEFAULT_C_SERVING_US = 5.0
+DEFAULT_C_SEQ_US = 5.0
 # kernel_launch_us: 4.0 µs — calibrated Dynamo-orchestrator effective per-
 # kernel cost on H100/H200. Sits between the CUDA-Graph optimum (1.5 µs)
 # and TaxBreak's measured eager-mode floor (4.5-4.7 µs on H100/H200, arxiv
@@ -116,7 +116,7 @@ def run_exact(args) -> tuple[list[tuple], int]:
         num_devices=bucket[2], S_decode=ISL + OSL // 2,
         B_sweep=log_spaced_B(2048),
         flops_eta=args.flops_eta, bw_eta=args.bw_eta,
-        c_serving_us=args.c_serving_us,
+        c_seq_us=args.c_seq_us,
         moe_a2a_pattern=DEFAULT_MOE_A2A_PATTERN,
         kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US,
         bytes_per_param=0.5,
@@ -130,19 +130,19 @@ def run_exact(args) -> tuple[list[tuple], int]:
             attention_mode="tp", tp_ep_layout="orthogonal",
             num_devices=bucket[2], S_decode=ISL + OSL // 2, B=m.B,
             flops_eta=args.flops_eta, bw_eta=args.bw_eta,
-            c_serving_us=args.c_serving_us,
+            c_seq_us=args.c_seq_us,
             moe_a2a_pattern=DEFAULT_MOE_A2A_PATTERN,
             kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US,
             bytes_per_param=0.5,
         )
         rows.append((f"TP={bucket[0]} EP=1", m.B, m.tpot_ms, pred))
 
-    out = args.out_dir / f"dsr1_dynamo_trt_exact_tp{bucket[0]}_ep1_dec{bucket[2]}{eta_filename_tag(args.flops_eta, args.bw_eta, args.c_serving_us)}.png"
+    out = args.out_dir / f"dsr1_dynamo_trt_exact_tp{bucket[0]}_ep1_dec{bucket[2]}{eta_filename_tag(args.flops_eta, args.bw_eta, args.c_seq_us)}.png"
     plot_tpot_vs_B(
         framework=framework, measured=measured,
         title=f"DSR1 / GB200 / Dynamo-TRT — EXACT bucket: TP={bucket[0]} EP=1 dec={bucket[2]}",
         subtitle=f"PP=1 TP={bucket[0]} EP=1 attention_mode=tp | ISL={ISL} OSL={OSL} FP4 | "
-                 f"sys={SYSTEM} | {topology_tag(SYSTEM)} | {eta_subtitle(args.flops_eta, args.bw_eta, args.c_serving_us)}",
+                 f"sys={SYSTEM} | {topology_tag(SYSTEM)} | {eta_subtitle(args.flops_eta, args.bw_eta, args.c_seq_us)}",
         out_path=out,
     )
     print(f"  saved: {out.relative_to(args.out_dir.parent.parent)}")
@@ -166,7 +166,7 @@ def _run_colocated_workload(args, tp_ep: int, isl: int, osl: int):
         num_devices=tp_ep, S_decode=S_decode,
         B_sweep=log_spaced_B(8192),
         flops_eta=args.flops_eta, bw_eta=args.bw_eta,
-        c_serving_us=args.c_serving_us,
+        c_seq_us=args.c_seq_us,
         moe_a2a_pattern=DEFAULT_MOE_A2A_PATTERN,
         kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US,
         bytes_per_param=0.5,
@@ -179,7 +179,7 @@ def _run_colocated_workload(args, tp_ep: int, isl: int, osl: int):
             attention_mode="dp", tp_ep_layout="co_located",
             num_devices=tp_ep, S_decode=S_decode, B=m.B,
             flops_eta=args.flops_eta, bw_eta=args.bw_eta,
-            c_serving_us=args.c_serving_us,
+            c_seq_us=args.c_seq_us,
             moe_a2a_pattern=DEFAULT_MOE_A2A_PATTERN,
             kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US,
             bytes_per_param=0.5,
@@ -194,7 +194,7 @@ def run_colocated(args) -> tuple[list[tuple], int]:
     Two workloads overlaid per shape — short-context (1K/1K, compute/weight-
     bound) and long-context (8K/1K, KV-traffic-bound). Same calibration must
     fit both regimes; the panel directly visualizes whether bw_eta /
-    c_serving / kernel_launch_us hold across bottleneck regimes.
+    c_seq / kernel_launch_us hold across bottleneck regimes.
     """
     all_rows = []
     n_total = 0
@@ -213,12 +213,12 @@ def run_colocated(args) -> tuple[list[tuple], int]:
 
         prim_lbl = f"ISL={wl_primary[0]} OSL={wl_primary[1]}"
         sec_lbl  = f"ISL={wl_secondary[0]} OSL={wl_secondary[1]}"
-        out = args.out_dir / f"dsr1_dynamo_trt_colocated_tp{tp_ep}ep{tp_ep}{eta_filename_tag(args.flops_eta, args.bw_eta, args.c_serving_us)}.png"
+        out = args.out_dir / f"dsr1_dynamo_trt_colocated_tp{tp_ep}ep{tp_ep}{eta_filename_tag(args.flops_eta, args.bw_eta, args.c_seq_us)}.png"
         plot_tpot_vs_B(
             framework=fw_prim, measured=meas_prim,
             title=f"DSR1 / GB200 / Dynamo-TRT — CO-LOCATED TP=EP={tp_ep} on {tp_ep}-GPU replica",
             subtitle=f"tp_ep_layout=co_located attention_mode=dp PP=1 TP={tp_ep} EP={tp_ep} SP=1 | "
-                     f"{prim_lbl} + {sec_lbl} FP4 | sys={SYSTEM} | {topology_tag(SYSTEM)} | {eta_subtitle(args.flops_eta, args.bw_eta, args.c_serving_us)}",
+                     f"{prim_lbl} + {sec_lbl} FP4 | sys={SYSTEM} | {topology_tag(SYSTEM)} | {eta_subtitle(args.flops_eta, args.bw_eta, args.c_seq_us)}",
             out_path=out,
             primary_label=prim_lbl,
             secondary=(sec_lbl, fw_sec, meas_sec),
@@ -257,7 +257,7 @@ def run_colo_tp_attn(args) -> tuple[list[tuple], int]:
         num_devices=32, S_decode=ISL + OSL // 2,
         B_sweep=log_spaced_B(2048),
         flops_eta=args.flops_eta, bw_eta=args.bw_eta,
-        c_serving_us=args.c_serving_us,
+        c_seq_us=args.c_seq_us,
         moe_a2a_pattern=DEFAULT_MOE_A2A_PATTERN,
         kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US,
         bytes_per_param=0.5,
@@ -269,20 +269,20 @@ def run_colo_tp_attn(args) -> tuple[list[tuple], int]:
             attention_mode="tp", tp_ep_layout="co_located",
             num_devices=32, S_decode=ISL + OSL // 2, B=m.B,
             flops_eta=args.flops_eta, bw_eta=args.bw_eta,
-            c_serving_us=args.c_serving_us,
+            c_seq_us=args.c_seq_us,
             moe_a2a_pattern=DEFAULT_MOE_A2A_PATTERN,
             kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US,
             bytes_per_param=0.5,
         )
         rows.append(("TP=EP=8 dec=32 colo TP-attn", m.B, m.tpot_ms, pred))
 
-    out = args.out_dir / f"dsr1_dynamo_trt_colo_tp_attn_tp8ep8_dec32{eta_filename_tag(args.flops_eta, args.bw_eta, args.c_serving_us)}.png"
+    out = args.out_dir / f"dsr1_dynamo_trt_colo_tp_attn_tp8ep8_dec32{eta_filename_tag(args.flops_eta, args.bw_eta, args.c_seq_us)}.png"
     plot_tpot_vs_B(
         framework=framework, measured=measured,
         title="DSR1 / GB200 / Dynamo-TRT — CO-LOCATED TP-attn TP=EP=8 dec=32 (4 replicas)",
         subtitle=f"PP=1 TP=EP=8 attention_mode=tp tp_ep_layout=co_located | "
                  f"ISL={ISL} OSL={OSL} FP4 | "
-                 f"sys={SYSTEM} | {topology_tag(SYSTEM)} | {eta_subtitle(args.flops_eta, args.bw_eta, args.c_serving_us)}",
+                 f"sys={SYSTEM} | {topology_tag(SYSTEM)} | {eta_subtitle(args.flops_eta, args.bw_eta, args.c_seq_us)}",
         out_path=out,
     )
     print(f"  saved: {out.relative_to(args.out_dir.parent.parent)}")
@@ -292,7 +292,7 @@ def run_colo_tp_attn(args) -> tuple[list[tuple], int]:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
     ap.add_argument("--cut", choices=["exact", "colocated", "colo_tp_attn", "all"], default="all")
-    add_common_cli(ap, default_bw_eta=DEFAULT_BW_ETA, default_c_serving_us=DEFAULT_C_SERVING_US)
+    add_common_cli(ap, default_bw_eta=DEFAULT_BW_ETA, default_c_seq_us=DEFAULT_C_SEQ_US)
     args = ap.parse_args()
 
     all_rows: list[tuple] = []

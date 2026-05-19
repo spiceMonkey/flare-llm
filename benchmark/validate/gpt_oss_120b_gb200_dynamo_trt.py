@@ -3,12 +3,12 @@
 
 Single cut: TP=4 EP=1 on 4 GPUs (the densest "exact-modelable" bucket in
 the dataset, no co-located complications). Calibration anchor for the
-Dynamo-TRT-LLM serving stack — best-fit `c_serving ≈ 22 µs/seq` per
+Dynamo-TRT-LLM serving stack — best-fit `c_seq ≈ 22 µs/seq` per
 `decode.md §7.2` calibration table.
 
 Usage:
     python benchmark/validate/gpt_oss_120b_gb200_dynamo_trt.py
-    python benchmark/validate/gpt_oss_120b_gb200_dynamo_trt.py --c-serving-us 22
+    python benchmark/validate/gpt_oss_120b_gb200_dynamo_trt.py --c-seq-us 22
 """
 import argparse
 import sys
@@ -39,12 +39,12 @@ TP, EP, NUM = 4, 1, 4
 # §5 Limitation.
 DEFAULT_BW_ETA = 0.7
 # 5 µs/seq — Dynamo+TRT stack default (matches dynamo_trt.json and the
-# DSr1 Dynamo+TRT validator). At panel-(a) max B=128, c_serving·B = 0.64 ms
-# vs t_step_hw ~5-10 ms → fully hidden by the overlap gate (ρ_serving=1),
+# DSr1 Dynamo+TRT validator). At panel-(a) max B=128, c_seq·B = 0.64 ms
+# vs t_step_base ~5-10 ms → fully hidden by the overlap gate (ρ_seq=1),
 # so the value does not affect MAE. Previous value 22 µs was a tuning hack
 # under the old additive (no-overlap) model; with the overlap gate the
 # stack-wide 5 µs default is the consistent choice.
-DEFAULT_C_SERVING_US = 5.0
+DEFAULT_C_SEQ_US = 5.0
 # 4.0 µs — Dynamo-orchestrator calibrated effective per-kernel cost (same
 # as the DSr1 Dynamo+TRT validator). Sits between CUDA-Graph optimum
 # (1.5 µs) and TaxBreak's eager-mode floor (4.5-4.7 µs); the spread
@@ -56,7 +56,7 @@ DEFAULT_KERNEL_LAUNCH_US = 4.0
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
-    add_common_cli(ap, default_bw_eta=DEFAULT_BW_ETA, default_c_serving_us=DEFAULT_C_SERVING_US)
+    add_common_cli(ap, default_bw_eta=DEFAULT_BW_ETA, default_c_seq_us=DEFAULT_C_SEQ_US)
     args = ap.parse_args()
 
     measured = load_measured(
@@ -78,7 +78,7 @@ def main() -> int:
         num_devices=NUM, S_decode=ISL + OSL // 2,
         B_sweep=log_spaced_B(512),
         flops_eta=args.flops_eta, bw_eta=args.bw_eta,
-        c_serving_us=args.c_serving_us,
+        c_seq_us=args.c_seq_us,
         kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US,
     )
     rows = []
@@ -89,17 +89,17 @@ def main() -> int:
             attention_mode="tp", tp_ep_layout="orthogonal",
             num_devices=NUM, S_decode=ISL + OSL // 2, B=m.B,
             flops_eta=args.flops_eta, bw_eta=args.bw_eta,
-            c_serving_us=args.c_serving_us,
+            c_seq_us=args.c_seq_us,
             kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US,
         )
         rows.append((f"TP={TP} EP={EP}", m.B, m.tpot_ms, pred))
 
-    out = args.out_dir / f"gpt_oss_120b_dynamo_trt_tp{TP}_ep{EP}_dec{NUM}{eta_filename_tag(args.flops_eta, args.bw_eta, args.c_serving_us)}.png"
+    out = args.out_dir / f"gpt_oss_120b_dynamo_trt_tp{TP}_ep{EP}_dec{NUM}{eta_filename_tag(args.flops_eta, args.bw_eta, args.c_seq_us)}.png"
     plot_tpot_vs_B(
         framework=framework, measured=measured,
         title=f"gpt-oss-120b / GB200 / Dynamo-TRT — TP={TP} EP={EP} dec={NUM}",
         subtitle=f"PP=1 TP={TP} EP={EP} attention_mode=tp | ISL={ISL} OSL={OSL} FP4 | "
-                 f"sys={SYSTEM} | {topology_tag(SYSTEM)} | {eta_subtitle(args.flops_eta, args.bw_eta, args.c_serving_us)}",
+                 f"sys={SYSTEM} | {topology_tag(SYSTEM)} | {eta_subtitle(args.flops_eta, args.bw_eta, args.c_seq_us)}",
         out_path=out,
     )
     print(f"  saved: {out.relative_to(args.out_dir.parent.parent)}\n")

@@ -9,7 +9,7 @@ the same NVLink group. Single replica (DP=1).
 Stack: Dynamo orchestrator wrapping vLLM runtime. Per-stack calibration
 lives in `database/framework/dynamo_vllm.json`; this validator passes the
 JSON values through explicitly so the file is self-documenting:
-  - c_serving=5 µs/seq, serving_overlap=1.0 (CUDA-Graph absorption)
+  - c_seq=5 µs/seq, seq_overlap=1.0 (CUDA-Graph absorption)
   - kernel_launch=8 µs (between dynamo_trt's 4 µs and dynamo_sglang's 12 µs)
   - kernel_overlap=1.0, moe_a2a=scatter
 
@@ -44,9 +44,9 @@ WORKLOADS = [(1024, 1024)]
 
 # Per-stack calibration — mirrors database/framework/dynamo_vllm.json.
 DEFAULT_BW_ETA = 0.7
-DEFAULT_C_SERVING_US = 5.0
+DEFAULT_C_SEQ_US = 5.0
 DEFAULT_KERNEL_LAUNCH_US = 8.0
-DEFAULT_SERVING_OVERLAP = 1.0
+DEFAULT_SEQ_OVERLAP = 1.0
 DEFAULT_KERNEL_OVERLAP = 1.0
 DEFAULT_COMM_OVERLAP = 0.0
 DEFAULT_MOE_A2A_PATTERN = "scatter"
@@ -77,11 +77,11 @@ def _run_workload(args, isl: int, osl: int):
         num_devices=NUM, S_decode=S_decode,
         B_sweep=log_spaced_B(B_PLOT_MAX, B_min=B_PLOT_MIN),
         flops_eta=args.flops_eta, bw_eta=args.bw_eta,
-        c_serving_us=args.c_serving_us,
+        c_seq_us=args.c_seq_us,
         moe_a2a_pattern=DEFAULT_MOE_A2A_PATTERN,
         kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US,
         bytes_per_param=0.5,
-        serving_overlap_factor=DEFAULT_SERVING_OVERLAP,
+        seq_overlap_factor=DEFAULT_SEQ_OVERLAP,
         kernel_overlap_factor=DEFAULT_KERNEL_OVERLAP,
         comm_overlap_factor=DEFAULT_COMM_OVERLAP,
     )
@@ -93,11 +93,11 @@ def _run_workload(args, isl: int, osl: int):
             attention_mode="dp", tp_ep_layout="co_located",
             num_devices=NUM, S_decode=S_decode, B=m.B,
             flops_eta=args.flops_eta, bw_eta=args.bw_eta,
-            c_serving_us=args.c_serving_us,
+            c_seq_us=args.c_seq_us,
             moe_a2a_pattern=DEFAULT_MOE_A2A_PATTERN,
             kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US,
             bytes_per_param=0.5,
-            serving_overlap_factor=DEFAULT_SERVING_OVERLAP,
+            seq_overlap_factor=DEFAULT_SEQ_OVERLAP,
             kernel_overlap_factor=DEFAULT_KERNEL_OVERLAP,
             comm_overlap_factor=DEFAULT_COMM_OVERLAP,
         )
@@ -108,7 +108,7 @@ def _run_workload(args, isl: int, osl: int):
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
     add_common_cli(ap, default_bw_eta=DEFAULT_BW_ETA,
-                   default_c_serving_us=DEFAULT_C_SERVING_US)
+                   default_c_seq_us=DEFAULT_C_SEQ_US)
     args = ap.parse_args()
 
     cuts = [_run_workload(args, isl, osl) for (isl, osl) in WORKLOADS]
@@ -123,7 +123,7 @@ def main() -> int:
 
     out = (
         args.out_dir
-        / f"kimi_gb200_dynamo_vllm_tp{TP}_ep{EP}_g{NUM}{eta_filename_tag(args.flops_eta, args.bw_eta, args.c_serving_us)}.png"
+        / f"kimi_gb200_dynamo_vllm_tp{TP}_ep{EP}_g{NUM}{eta_filename_tag(args.flops_eta, args.bw_eta, args.c_seq_us)}.png"
     )
     plot_tpot_vs_B(
         framework=fw_prim, measured=meas_prim,
@@ -131,7 +131,7 @@ def main() -> int:
         subtitle=f"PP=1 TP={TP} EP={EP} attention_mode=dp tp_ep_layout=co_located | "
                  f"ISL={WORKLOADS[0][0]} OSL={WORKLOADS[0][1]} short-ctx | FP4 | "
                  f"sys={SYSTEM} | {topology_tag(SYSTEM)} | "
-                 f"{eta_subtitle(args.flops_eta, args.bw_eta, args.c_serving_us)}",
+                 f"{eta_subtitle(args.flops_eta, args.bw_eta, args.c_seq_us)}",
         out_path=out,
         primary_label=prim_lbl,
         xlim=(B_PLOT_MIN, B_PLOT_MAX),

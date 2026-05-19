@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""One-shot helper to find best-fit (bw_eta, c_serving) for each driver.
+"""One-shot helper to find best-fit (bw_eta, c_seq) for each driver.
 
 Imports each driver's MODEL/SYSTEM/PRECISION/ISL/OSL constants (and the
 load_measured filters) and runs a small grid sweep. Used to populate the
-DEFAULT_BW_ETA / DEFAULT_C_SERVING_US constants at the top of each driver.
+DEFAULT_BW_ETA / DEFAULT_C_SEQ_US constants at the top of each driver.
 
 Run periodically (e.g. when refresh fetch.py pulls new InferenceX rows) to
 re-tune. Not part of the regular validator workflow.
@@ -35,7 +35,7 @@ def calibrate(
     measured_loader,  # callable returning list of MeasuredPoint
     S_decode_fn,      # callable (m: MeasuredPoint) -> S_decode for that row
 ):
-    """Sweep (bw_eta, c_serving) and return the best-fit tuple."""
+    """Sweep (bw_eta, c_seq) and return the best-fit tuple."""
     measured = measured_loader()
     if not measured:
         return None
@@ -52,7 +52,7 @@ def calibrate(
                                     num_devices=num_devices, bw_eta=bw)
                 p = PartitionSpec(PP=PP, TP=TP, EP=EP, SP=SP)
                 t = TuningSpec(S_decode=S_decode_fn(row), B_decode=row.B)
-                fw = FrameworkSpec(name="calibrate", c_serving_per_seq_us=cs,
+                fw = FrameworkSpec(name="calibrate", c_seq_us=cs,
                                    attention_mode=attention_mode, tp_ep_layout=tp_ep_layout)
                 r = InferenceCalculator(m, s, p, t, fw).run()
                 errs.append((r.latency.TPOT * 1000 - row.tpot_ms) / row.tpot_ms * 100)

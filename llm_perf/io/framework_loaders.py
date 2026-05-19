@@ -43,7 +43,7 @@ def framework_spec_from_json_dict(cfg: Dict[str, Any]) -> FrameworkSpec:
           "schema": "llm_perf.framework",
           "name": "dynamo-trt",
 
-          "c_serving_per_seq_us": 0.0,
+          "c_seq_us": 0.0,
           "kernel_launch_us": 7.0,
           "kernels_per_layer_compute": 10,
           "kernels_per_collective_call": 2,
@@ -131,16 +131,28 @@ def framework_spec_from_json_dict(cfg: Dict[str, Any]) -> FrameworkSpec:
             f"framework configuration: 'kernel_overlap_factor' must be in [0, 1], got {kernel_overlap}"
         )
 
-    serving_overlap = float(cfg.get("serving_overlap_factor", _defaults.serving_overlap_factor))
-    if not (0.0 <= serving_overlap <= 1.0):
+    if "serving_overlap_factor" in cfg and "seq_overlap_factor" not in cfg:
         raise ValueError(
-            f"framework configuration: 'serving_overlap_factor' must be in [0, 1], got {serving_overlap}"
+            "framework configuration: 'serving_overlap_factor' was renamed to "
+            "'seq_overlap_factor' to match the t_step,seq symbol convention in "
+            "decode.md §7.3. Update your JSON."
+        )
+    if "c_serving_per_seq_us" in cfg and "c_seq_us" not in cfg:
+        raise ValueError(
+            "framework configuration: 'c_serving_per_seq_us' was renamed to "
+            "'c_seq_us' (parallels kernel_launch_us as the per-unit µs constant). "
+            "Update your JSON."
+        )
+    seq_overlap = float(cfg.get("seq_overlap_factor", _defaults.seq_overlap_factor))
+    if not (0.0 <= seq_overlap <= 1.0):
+        raise ValueError(
+            f"framework configuration: 'seq_overlap_factor' must be in [0, 1], got {seq_overlap}"
         )
 
     return FrameworkSpec(
         name=str(cfg.get("name", "unnamed_framework")),
-        c_serving_per_seq_us=float(cfg.get("c_serving_per_seq_us", _defaults.c_serving_per_seq_us)),
-        serving_overlap_factor=serving_overlap,
+        c_seq_us=float(cfg.get("c_seq_us", _defaults.c_seq_us)),
+        seq_overlap_factor=seq_overlap,
         kernel_launch_us=float(cfg.get("kernel_launch_us", _defaults.kernel_launch_us)),
         kernels_per_layer_compute=int(cfg.get("kernels_per_layer_compute", _defaults.kernels_per_layer_compute)),
         kernels_per_collective_call=int(cfg.get("kernels_per_collective_call", _defaults.kernels_per_collective_call)),

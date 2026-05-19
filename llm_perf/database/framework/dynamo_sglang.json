@@ -1,8 +1,6 @@
 {
   "schema": "llm_perf.framework",
   "name": "dynamo-sglang",
-  "c_serving_per_seq_us": 5.0,
-  "serving_overlap_factor": 1.0,
   "kernel_launch_us": 12.0,
   "kernels_per_layer_compute": 10,
   "kernels_per_collective_call": 2,
@@ -10,9 +8,9 @@
   "moe_a2a_pattern": "scatter",
   "mla_mode": "absorbed",
   "inc_enabled": true,
-  "_comment_overall": "Dynamo+SGLang — Dynamo orchestrator wrapping the SGLang runtime. The orchestrator absorbs per-sequence host work effectively (c_serving=5, ρ_serving=1.0, matching dynamo_trt.json), but does NOT absorb per-kernel dispatch as well as it does for TRT-LLM (kernel_launch_us=12 vs dynamo_trt's 4). The per-kernel asymmetry reflects SGLang's Python-paths that survive the Dynamo wrap — many SGLang-side kernels fall outside the CUDA Graph (custom scatter-direct A2A, MLA-specific kernels, sampling glue), so their dispatch retains the Python interpreter overhead. The 12 µs anchor matches both the empirical fit on the DSr1 / GB300 / Dynamo+SGLang panel-(d) cut and the pure-SGLang Python-paths anchor in the FrameworkSpec docstring. Distinguished from sglang.json (pure eager-mode SGLang at c_serving=40, kernel_launch=10, ρ_serving=0) which models SGLang without any orchestrator wrapping — the Dynamo wrap helps c_serving and ρ_serving but not kernel_launch.",
-  "_comment_c_serving": "5 µs/seq with serving_overlap_factor=1.0 — same value as dynamo_trt.json. The Dynamo orchestrator's CUDA-Graph absorption applies regardless of which runtime it wraps; the 5 µs floor is the irreducible per-seq cost the orchestrator can't absorb (a portion of block-table gather, sampling glue, scheduler bookkeeping). Validates against the panel-(d) DSr1 / GB300 / Dynamo+SGLang cut at TP=EP=32, B up to 8192.",
-  "_comment_kernel_launch": "12 µs — Dynamo+SGLang empirical anchor, sitting at the pure-SGLang Python-paths value rather than dynamo_trt's 4 µs. Dynamo's CUDA-Graph absorption helps c_serving and ρ_serving (per-sequence host work pipelines into the GPU window) but does NOT collapse SGLang's per-kernel Python wrapping the way it does TRT-LLM's C++ kernels — many SGLang-side kernels (custom scatter-direct A2A, MLA-specific kernels, sampling glue) fall outside the Graph and retain Python interpreter overhead per launch. Matches the FrameworkSpec docstring's SGLang Python-paths anchor (12 µs) and the panel-(d) DSr1 / GB300 / Dynamo+SGLang validator empirical fit. The asymmetry vs dynamo_trt (4 µs) is the load-bearing observation: Dynamo's per-step-host absorption and per-kernel-dispatch absorption are independent capabilities, and the underlying runtime determines how much of the latter is achievable.",
+  "_comment_overall": "Dynamo+SGLang — Dynamo orchestrator wrapping the SGLang runtime. The orchestrator absorbs per-sequence host work effectively (c_seq=5, ρ_seq=1.0, matching dynamo_trt.json), but does NOT absorb per-kernel dispatch as well as it does for TRT-LLM (kernel_launch_us=12 vs dynamo_trt's 4). The per-kernel asymmetry reflects SGLang's Python-paths that survive the Dynamo wrap — many SGLang-side kernels fall outside the CUDA Graph (custom scatter-direct A2A, MLA-specific kernels, sampling glue), so their dispatch retains the Python interpreter overhead. The 12 µs anchor matches both the empirical fit on the DSr1 / GB300 / Dynamo+SGLang panel-(d) cut and the pure-SGLang Python-paths anchor in the FrameworkSpec docstring. Distinguished from sglang.json (pure eager-mode SGLang at c_seq=40, kernel_launch=10, ρ_seq=0) which models SGLang without any orchestrator wrapping — the Dynamo wrap helps c_seq and ρ_seq but not kernel_launch.",
+  "_comment_c_seq": "5 µs/seq with seq_overlap_factor=1.0 — same value as dynamo_trt.json. The Dynamo orchestrator's CUDA-Graph absorption applies regardless of which runtime it wraps; the 5 µs floor is the irreducible per-seq cost the orchestrator can't absorb (a portion of block-table gather, sampling glue, scheduler bookkeeping). Validates against the panel-(d) DSr1 / GB300 / Dynamo+SGLang cut at TP=EP=32, B up to 8192.",
+  "_comment_kernel_launch": "12 µs — Dynamo+SGLang empirical anchor, sitting at the pure-SGLang Python-paths value rather than dynamo_trt's 4 µs. Dynamo's CUDA-Graph absorption helps c_seq and ρ_seq (per-sequence host work pipelines into the GPU window) but does NOT collapse SGLang's per-kernel Python wrapping the way it does TRT-LLM's C++ kernels — many SGLang-side kernels (custom scatter-direct A2A, MLA-specific kernels, sampling glue) fall outside the Graph and retain Python interpreter overhead per launch. Matches the FrameworkSpec docstring's SGLang Python-paths anchor (12 µs) and the panel-(d) DSr1 / GB300 / Dynamo+SGLang validator empirical fit. The asymmetry vs dynamo_trt (4 µs) is the load-bearing observation: Dynamo's per-step-host absorption and per-kernel-dispatch absorption are independent capabilities, and the underlying runtime determines how much of the latter is achievable.",
   "_comment_moe_a2a_pattern": "scatter — Dynamo+SGLang exposes DeepEP-style scatter-direct dispatch under DP-attention (decode.md §5.2).",
   "tp_algorithm_decode": "auto",
   "tp_algorithm_prefill": "auto",
@@ -25,5 +23,7 @@
   "comm_overlap_factor": 0.0,
   "attention_mode": "dp",
   "tp_ep_layout": "co_located",
-  "kernel_overlap_factor": 1.0
+  "kernel_overlap_factor": 1.0,
+  "c_seq_us": 5.0,
+  "seq_overlap_factor": 1.0
 }
