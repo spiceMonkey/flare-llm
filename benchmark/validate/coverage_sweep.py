@@ -130,7 +130,7 @@ CALIBRATED = {
 }
 
 # Stack-class fallbacks used when (hw, fw) isn't in CALIBRATED. Roughly
-# matches `decode.md §7.2` per-stack c_seq table; bw_eta picks per
+# matches `decode.md §7.3` per-stack c_seq table; bw_eta picks per
 # chip class from `decode.md §6.2`. Updated post-MLA-migration: the
 # Dynamo-orchestrator stacks absorb per-seq host work into the CUDA-graph
 # launch, so c_seq for the dynamo-* family is set to 0 (the prior

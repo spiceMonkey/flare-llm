@@ -39,7 +39,7 @@ class FrameworkSpec:
     name: str
 
     # ── Host-side overhead model (decode.md §7.1, §7.2) ────────────────
-    # Per-sequence per-step host work (decode.md §7.2):
+    # Per-sequence per-step host work (decode.md §7.3):
     # PagedAttention block-table gather, continuous-batching scheduler,
     # per-sequence sampling glue, token-append + KV bookkeeping. Linear
     # in B. **Composed with GPU work via `seq_overlap_factor`** —
@@ -54,7 +54,7 @@ class FrameworkSpec:
     #   t_step_seq = max(0, t_step_seq
     #                     - seq_overlap_factor * t_step_base)
     #
-    # Stack-dependent ranges for c_seq_us (decode.md §7.2):
+    # Stack-dependent ranges for c_seq_us (decode.md §7.3):
     # - C++/CUDA-graph + orchestrator (Dynamo+TRT): 5-22 µs/seq
     # - Mixed orchestrator + Python (Dynamo+SGLang): 25-50 µs/seq
     # - Raw C++ runtime (raw TRT-LLM): 50-100 µs/seq
