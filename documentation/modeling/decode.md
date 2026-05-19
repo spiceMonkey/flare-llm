@@ -1896,18 +1896,22 @@ When the serving runtime contributes no per-sequence host work ($c_{\mathrm{seq}
 - **Per-sequence sampling glue.** Greedy / top-$k$ / top-$p$ / multinomial sampling runs one decision per sequence per step. The logits-softmax-then-sample kernel itself is GPU-side and is absorbed into $t_{\text{LM,hw}}(B)$, but the host wraps each sampling decision in per-sequence Python / C++ glue (penalty application, stop-token checks, output-token append, end-of-sequence (EOS) / stop-string detection) that is genuinely $O(B)$ on the CPU.
 - **Token-append and KV-write bookkeeping.** Append the newly sampled token to the per-sequence output buffer, advance the per-sequence position counter, allocate a new block on overflow, write the block-table update — one bookkeeping pass per active sequence per step.
 
-This per-sequence work is distinct from two other overheads tracked elsewhere:
+Alongside these four per-sequence components, every decode step incurs a **B-independent orchestration floor** that fires once per step regardless of how many sequences are active:
 
-- The kernel-launch dispatch budget $t_{\text{stage,kernel}}$ from §7.1 is **per microbatch per stage** and is essentially independent of $B$. Each NCCL or `cudaLaunchKernel` event fires once per layer regardless of the per-call payload; the per-event cost models GPU-command-processor latency or eager-mode CPU API time, not host-side per-sequence work.
+- **Per-step orchestration**. CUDA-Graph launch decision logic, scheduler tick (active-set advance, time-budget accounting), output framing (response-stream multiplexing for streaming responses), KV block-table refresh metadata, and any Python sampler / scheduler glue that runs *between* graph replays rather than per-sequence. These costs survive CUDA-Graph absorption — the graph captures the GPU kernel sequence but not the host-side decisions that fire between graph launches. Empirically the dominant source of the residual under-prediction in DP-attention large-B regimes (§5 validation panel d).
+
+This per-step host work is distinct from two other overheads tracked elsewhere:
+
+- The kernel-launch dispatch budget $t_{\text{stage,kernel}}$ from §7.1 is **per microbatch per stage** and is essentially independent of $B$. Each NCCL or `cudaLaunchKernel` event fires once per layer regardless of the per-call payload; the per-event cost models GPU-command-processor latency or eager-mode CPU API time, not host-side per-step orchestration.
 - The per-request scheduler latency $t_{\text{sched}}$ tracked in framework.md §1 fires **once per request** when the request enters the system, not on every decode step. The bookkeeping captured here is the recurring delta on top of $t_{\text{sched}}$ that fires every step the request remains active.
 
-Because the four components above are each per-sequence inner loops on the CPU, the aggregate gross cost is modeled as linear in $B$ with a single per-sequence calibration constant $c_{\mathrm{seq}}$:
+The aggregate per-step gross host cost combines the B-independent orchestration floor $c_{\mathrm{orch}}$ with the per-sequence linear term $c_{\mathrm{seq}} \cdot B$:
 
 $$
-t_{\text{step,seq}}(B) = c_{\mathrm{seq}} \cdot B
+t_{\text{step,seq}}(B) = c_{\mathrm{orch}} + c_{\mathrm{seq}} \cdot B
 $$
 
-with units of seconds per sequence per step (the framework parameterizes $c_{\mathrm{seq}}$ in microseconds for ergonomics). A more elaborate non-linear form (piecewise-linear in $B$ to capture cache-line effects in the block-table gather, $B \log B$ from per-step sorting) is possible but unnecessary for the typical 1 ≤ $B$ ≤ 1024 operating range; the linear fit captures the dominant scaling for all four components.
+with units of seconds per step (the framework parameterizes both knobs in microseconds for ergonomics). $c_{\mathrm{orch}}$ captures the once-per-step orchestration work; $c_{\mathrm{seq}}$ captures the per-sequence inner loops. A more elaborate non-linear form (piecewise-linear in $B$ to capture cache-line effects in the block-table gather, $B \log B$ from per-step sorting) is possible but unnecessary for the typical 1 ≤ $B$ ≤ 1024 operating range; the affine `c_orch + c_seq · B` fit captures the dominant scaling for all components. Default $c_{\mathrm{orch}} = 0$ in the framework gives the legacy `c_seq · B`-only roofline.
 
 **Composition with the hardware window.** Like $t_{\text{stage,kernel}}$ (§7.1), the per-sequence serving work admits a CUDA-Graph-replay overlap: under graph replay the CPU launches the per-step graph in $\sim$1.5 µs and is then free for the duration of the hardware step window $t_{\text{step,base}}(B)$ (§7.2), which it uses for exactly this per-sequence work (block-table assembly for the *next* step, sampling glue for the *previous* step's outputs, scheduler bookkeeping). The host work hides behind the hardware window until $t_{\text{step,seq}}(B)$ exceeds $t_{\text{step,base}}(B)$, at which point only the excess blocks. The composition is parameterized by an overlap factor $\rho_{\mathrm{seq}} \in [0, 1]$, applied to the per-step hardware window from §7.2:
 

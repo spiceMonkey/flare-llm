@@ -43,6 +43,7 @@ def framework_spec_from_json_dict(cfg: Dict[str, Any]) -> FrameworkSpec:
           "schema": "llm_perf.framework",
           "name": "dynamo-trt",
 
+          "c_orch_us": 0.0,
           "c_seq_us": 0.0,
           "kernel_launch_us": 7.0,
           "kernels_per_layer_compute": 10,
@@ -151,6 +152,7 @@ def framework_spec_from_json_dict(cfg: Dict[str, Any]) -> FrameworkSpec:
 
     return FrameworkSpec(
         name=str(cfg.get("name", "unnamed_framework")),
+        c_orch_us=float(cfg.get("c_orch_us", _defaults.c_orch_us)),
         c_seq_us=float(cfg.get("c_seq_us", _defaults.c_seq_us)),
         seq_overlap_factor=seq_overlap,
         kernel_launch_us=float(cfg.get("kernel_launch_us", _defaults.kernel_launch_us)),
