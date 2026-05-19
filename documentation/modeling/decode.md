@@ -49,8 +49,8 @@ LLM inference, Transformer, parallelism, tensor parallelism, expert parallelism,
 
 - [7. Host-Side Overheads and Throughput](#7-host-side-overheads-and-throughput)
   - [7.1 Kernel-launch overhead](#71-kernel-launch-overhead)
-  - [7.2 Per-sequence serving runtime overhead](#72-per-sequence-serving-runtime-overhead)
-  - [7.3 User-observed step time and throughput](#73-user-observed-step-time-and-throughput)
+  - [7.2 Per-step hardware window](#72-per-step-hardware-window)
+  - [7.3 Per-sequence serving runtime overhead and throughput](#73-per-sequence-serving-runtime-overhead-and-throughput)
 
 - [8. Speculative Decoding (MTP / EAGLE / Medusa)](#8-speculative-decoding-mtp--eagle--medusa)
   - [8.1 Verify-step setup](#81-verify-step-setup)
@@ -639,6 +639,7 @@ $$
 $$
 
 Asymptotics:
+
 - $B \to 0$: $\mathbb{E}[N_{\text{exp,touched}}^{\text{rank}}] \to t_{\text{tokens/rank}}$ (linear in $B$); traffic dominated by attention + a small expert slice.
 - $B k_{\text{active}} \gg N_{\text{exp}}$: $\mathbb{E}[N_{\text{exp,touched}}^{\text{rank}}] \to N_{\text{exp/rank}}$; expression recovers the full-footprint form $3 H I_{\text{moe}} N_{\text{exp}} / D_{\text{exp}}$.
 
@@ -1724,7 +1725,7 @@ t_{\text{local}}(B)
 \max\bigl(0,\; t_{\text{comm}}(B) - \rho \cdot t_{\text{local}}(B)\bigr)
 $$
 
-This is the GPU-side wall-clock cost of one pipeline stage processing one decode step's worth of $B$ sequences — purely **hardware-intrinsic** (compute + memory + interconnect, after collective overlap), no scheduling or host-side overhead. §7 introduces the per-stage kernel-launch dispatch budget $t_{\text{stage,kernel}}$ (§7.1) and the pipeline bubble (§7.2) on top to produce the user-observed step time $t_{\text{step,user}}$ (§7.2).
+This is the GPU-side wall-clock cost of one pipeline stage processing one decode step's worth of $B$ sequences — purely **hardware-intrinsic** (compute + memory + interconnect, after collective overlap), no scheduling or host-side overhead. §7 introduces the per-stage kernel-launch dispatch budget $t_{\text{stage,kernel}}$ (§7.1), assembles the per-step hardware window with pipeline-bubble correction (§7.2), and adds the per-sequence serving overhead plus throughput (§7.3) to produce the user-observed step time $t_{\text{step,user}}$.
 
 **Regimes:**
 
@@ -1812,10 +1813,10 @@ In short: co-location is the right choice when the workload is MoE-dominated, at
 A real serving step does not run at this lower bound. Three additional costs accrue on every token generation step on top of $t_{\text{stage,hw}}(B)$ — the first two are **host-side overheads** (CPU work and command-processor dispatch sitting outside the GPU pipeline), the third is a scheduling inefficiency:
 
 1. **Kernel-launch overhead** (per microbatch, ~constant in $B$) — the host-side dispatch budget for the layer + collective + PP-hop kernels that fire each microbatch. Each kernel launch pays a fixed $\tau_{\text{launch}}$ regardless of payload size, so the term scales with kernel count, not with $B$. Whether it is hidden by GPU work or surfaces as a hard floor depends on async dispatch overlap. §7.1 derives this as $t_{\text{stage,kernel}}$ in the same per-step per-stage units as $t_{\text{stage,hw}}$.
-2. **Per-sequence serving runtime overhead** (per sequence, linear in $B$) — host-side bookkeeping the runtime must perform once per active sequence per step: PagedAttention block-table assembly, continuous-batching scheduler decisions, sampling glue, token-append. The term scales as $O(B)$ and sits on the critical path of every step (it cannot overlap with GPU work). §7.2 derives this as $t_{\text{serving}}(B)$.
-3. **Pipeline bubble** when the pipeline is underfilled — a scheduling-driven inefficiency that scales with $PP/B$ when $B < PP$. The bubble factor $\gamma_{\text{pp}}$ is a **global multiplier** on whatever per-stage body cost dominates the round, so it sits *outside* the per-axis composition rather than as a per-axis correction.
+2. **Pipeline bubble** when the pipeline is underfilled — a scheduling-driven inefficiency that scales with $PP/B$ when $B < PP$. The bubble factor $\gamma_{\text{pp}}$ is a **global multiplier** on whatever per-stage body cost dominates the round, so it sits *outside* the per-axis composition rather than as a per-axis correction.
+3. **Per-sequence serving runtime overhead** (per sequence, linear in $B$) — host-side bookkeeping the runtime must perform once per active sequence per step: PagedAttention block-table assembly, continuous-batching scheduler decisions, sampling glue, token-append. The term scales as $O(B)$ and sits on the critical path of every step (it cannot overlap with GPU work in eager mode; under CUDA-Graph replay it hides behind the per-step GPU window until it overflows). §7.3 derives this as $t_{\text{serving}}(B)$ and assembles the full $t_{\text{step,user}}(B)$ on top of §7.2's per-step hardware window.
 
-The two host-side overheads are distinct in three ways: scaling with $B$ (constant vs linear), where the cost is paid (per microbatch dispatch vs once-per-step head-node bookkeeping), and whether they can overlap with GPU work (yes, partially, for kernel-launch via CUDA Graphs / async pipelining; no, not for serving runtime work since it sits between consecutive forward passes). §7.3 assembles $t_{\text{stage,hw}}(B)$, $t_{\text{stage,kernel}}$, $t_{\text{serving}}(B)$, and $\gamma_{\text{pp}}$ into the user-observed step time $t_{\text{step,user}}(B)$ and the throughput metrics TPS / TTPS.
+The two host-side overheads are distinct in three ways: scaling with $B$ (constant vs linear), where the cost is paid (per microbatch dispatch vs once-per-step head-node bookkeeping), and whether they can overlap with GPU work (yes, partially, for kernel-launch via CUDA Graphs / async pipelining; partially under CUDA-Graph replay for serving runtime, zero overlap in eager-mode stacks). §7.2 assembles $t_{\text{stage,hw}}(B)$, $t_{\text{stage,kernel}}$, $\gamma_{\text{pp}}$, and $t_{\text{LM,hw}}(B)$ into the per-step hardware window $t_{\text{step,hw}}(B)$; §7.3 adds $t_{\text{serving}}(B)$ on top to recover the user-observed step time $t_{\text{step,user}}(B)$ and derives the throughput metrics TPS / TTPS.
 
 ## 7.1 Kernel-launch overhead
 
@@ -1837,9 +1838,58 @@ $t_{\text{stage,kernel}}$ is composed with the GPU-side $t_{\text{stage,hw}}$ vi
 
 A separate Tensor Core efficiency term $\eta_{\text{TC}}(\text{mb})$ derates the compute roofline at small microbatch; with the default $\eta_{\text{TC}} = 1$ (no curve set in the tuner) this term is a no-op.
 
-## 7.2 Per-sequence serving runtime overhead
+## 7.2 Per-step hardware window
 
-The kernel-launch budget of §7.1 captures the cost of getting one microbatch's worth of GPU kernels dispatched. A separate class of host-side overhead is **per active sequence** rather than per microbatch: work the runtime must perform once for each of the $B$ in-flight sequences on every decode step, regardless of payload size. Production inference serving stacks (vLLM, TensorRT-LLM, SGLang, NVIDIA Dynamo) all incur this overhead [VLLM, ORCA, DYNAMO]; four components dominate it:
+Building on the kernel-launch dispatch budget $t_{\text{stage,kernel}}$ from §7.1 and the per-stage hardware body $t_{\text{stage,hw}}(B)$ from §6.2, we assemble the **per-step hardware window** $t_{\text{step,hw}}(B)$ — the full hardware-side budget for one decode step on the bottleneck stage, including pipeline-bubble inflation and the LM head surcharge on stage $PP{-}1$. When the serving runtime adds no host-side per-sequence work (the host-overhead-free roofline), the user-observed step time equals $t_{\text{step,hw}}(B)$. §7.3 then adds the per-sequence serving overhead on top of $t_{\text{step,hw}}(B)$ to recover the full $t_{\text{step,user}}(B)$ and derives throughput from it.
+
+### Saturated step time (no bubble)
+
+When the pipeline is **fully saturated** ($B \ge PP$), every stage holds a different microbatch on every step and all $PP$ stages run in parallel. The per-step hardware window collapses to the slowest per-stage cost — the assembled HW + kernel-launch cost on the bottleneck stage, plus the LM head surcharge on stage $PP{-}1$, with no bubble penalty.
+
+Composing $t_{\text{stage,hw}}(B)$ (§6.2) and $t_{\text{stage,kernel}}$ (§7.1) follows the same overlap pattern as the compute/comm overlap in §6.2: hardware work runs as the base, host dispatch overlaps for a fraction $\rho_{\text{kernel}}$ of it, and any unhidden remainder serializes after. The LM head term $t_{\text{LM,hw}}(B)$ from §6.2 then adds on top (it fires once per step on the bottleneck stage, outside the per-stage composition):
+
+$$
+t_{\text{step,hw}}^{\text{sat}}(B) \;=\; t_{\text{stage,hw}}(B) + \max(0,\; t_{\text{stage,kernel}} - \rho_{\text{kernel}} \cdot t_{\text{stage,hw}}(B)) + t_{\text{LM,hw}}(B)
+$$
+
+Under the uniform-stage assumption (all $PP$ stages have identical body cost), the bottleneck stage is $PP{-}1$ and the additive $t_{\text{LM,hw}}(B)$ exactly captures its extra workload. For $PP = 1$, this collapses to "single-stage body + LM head".
+
+**Regimes (assuming $\rho_{\text{kernel}} = 1$, the production CUDA-Graph default):**
+
+- $t_{\text{stage,hw}}(B) \ge t_{\text{stage,kernel}}$: the overflow term is 0, $t_{\text{step,hw}}^{\text{sat}}(B) = t_{\text{stage,hw}}(B) + t_{\text{LM,hw}}(B)$ (HW-bound on the body — async dispatch fully hidden by hardware work). This is the typical regime for moderate-to-large $B$ on production stacks.
+- $t_{\text{stage,hw}}(B) < t_{\text{stage,kernel}}$: the kernel-launch budget surfaces as a floor on $t_{\text{step,hw}}$ (kernel-launch-bound on the body — common at small $B$ on dense decode).
+- $\rho_{\text{kernel}} = 0$: no overlap — kernel-launch dispatch serializes additively after GPU compute. Eager-mode stacks land here.
+
+When $t_{\text{stage,kernel}} = 0$ (kernel-launch modeling disabled) the formula collapses to $t_{\text{stage,hw}}(B) + t_{\text{LM,hw}}(B)$ — the pure GPU-side roofline.
+
+### Pipeline bubble correction
+
+The saturated form above assumes the pipeline is full. When it is not, the bubble factor inflates the step time. **How the PP pipeline works:** pipeline parallelism splits the model's $L$ layers into $PP$ contiguous stages, each owned by a different device (or device group). A token cannot skip stages — it is transformed by stage 0, then forwarded to stage 1, and so on through stage $PP{-}1$ before its logits are produced. To keep all stages busy in parallel, the batch of $B$ active sequences is split into microbatches that flow through the pipeline back-to-back: while stage 0 processes microbatch $i{+}1$, stage 1 is processing microbatch $i$, stage 2 is processing microbatch $i{-}1$, etc. This is the standard PP execution pattern from [MEGATRON3].
+
+Two regimes follow from this picture, depending on whether there are enough microbatches in flight to keep every stage busy. The same scheduling logic applies to both HW and kernel-launch per-stage costs — the bubble doesn't care whether a stage is GPU- or dispatch-bound:
+
+- **Pipeline full ($B \ge PP$).** Every stage runs a different microbatch in parallel; the saturated formula above holds. The full traversal cost $\sum_j t_{\text{stage,hw},j}(B)$ is paid only by the *first* token (TTFT), not by each subsequent decode step.
+- **Pipeline underfilled ($B < PP$).** With fewer microbatches than stages, parallelism collapses: a single microbatch must walk all $PP$ stages in series before the user sees the next token, so both HW and kernel-launch step costs grow toward their traversal sums (with uniform stages and $B = 1$, these become $PP \cdot t_{\text{stage,hw}}(1)$ and $PP \cdot t_{\text{stage,kernel}}$).
+
+A first-order bubble correction captures both regimes with a single multiplier:
+
+$$
+\gamma_{\text{pp}} = \max\left(1,\; \frac{PP}{B}\right)
+$$
+
+At $B \ge PP$, $\gamma_{\text{pp}} = 1$ and the bubble vanishes. At $B = 1, PP > 1$ it equals $PP$. At $B = 1, PP = 1$ it also reduces to unity, recovering the non-pipelined decode model. Because $\gamma_{\text{pp}}$ scales the per-stage body costs (HW and kernel-launch) identically, it multiplies the body composition only; the LM head fires once per step on stage $PP{-}1$ regardless of bubble depth and is added outside $\gamma_{\text{pp}}$:
+
+$$
+t_{\text{step,hw}}(B) \;=\; \gamma_{\text{pp}} \cdot \bigl[t_{\text{stage,hw}}(B) + \max(0,\; t_{\text{stage,kernel}} - \rho_{\text{kernel}} \cdot t_{\text{stage,hw}}(B))\bigr] \;+\; t_{\text{LM,hw}}(B)
+$$
+
+This is the full **per-step hardware window** — the time the host can use to hide per-sequence serving work behind GPU compute. At $B = 1, PP = 1$ with $t_{\text{stage,kernel}} = 0$, it reduces to $t_{\text{stage,hw}}(1) + t_{\text{LM,hw}}(1)$ — single-stage body plus LM head, the non-pipelined decode model with a vocab projection at the end.
+
+When the serving runtime contributes no per-sequence host work ($c_{\mathrm{serving}} = 0$, see §7.3), the user-observed step time equals the hardware window: $t_{\text{step,user}}(B) = t_{\text{step,hw}}(B)$. The general case adds the per-sequence serving overhead on top — derived in §7.3.
+
+## 7.3 Per-sequence serving runtime overhead and throughput
+
+§7.1 captured the per-microbatch kernel-launch dispatch budget, and §7.2 assembled the per-step hardware window $t_{\text{step,hw}}(B)$ from it. A separate class of host-side overhead is **per active sequence** rather than per microbatch: work the runtime must perform once for each of the $B$ in-flight sequences on every decode step, regardless of payload size. Production inference serving stacks (vLLM, TensorRT-LLM, SGLang, NVIDIA Dynamo) all incur this overhead [VLLM, ORCA, DYNAMO]; four components dominate it:
 
 - **Block-table gather and metadata marshaling.** PagedAttention stores each sequence's key-value (KV) cache as a list of fixed-size blocks; on every step the runtime assembles the per-sequence block table (one indirection per active sequence) and ships it to the attention kernel as a metadata buffer. The per-sequence cost is small but unavoidable, and the total scales as $O(B)$.
 - **Continuous-batching scheduler decisions.** Iteration-level scheduling (the ORCA / vLLM design [ORCA]) re-evaluates the active set on every step: admit any newly arrived request that fits, evict any sequence that just finished, decide whether prefills can piggyback this step. The decision logic is per-sequence and runs on the CPU between two consecutive forward passes.
@@ -1859,20 +1909,22 @@ $$
 
 with units of seconds per sequence per step (the framework parameterizes $c_{\mathrm{serving}}$ in microseconds for ergonomics). A more elaborate non-linear form (piecewise-linear in $B$ to capture cache-line effects in the block-table gather, $B \log B$ from per-step sorting) is possible but unnecessary for the typical 1 ≤ $B$ ≤ 1024 operating range; the linear fit captures the dominant scaling for all four components.
 
-**Composition with hardware work.** Like $t_{\text{stage,kernel}}$ (§7.1), the per-sequence serving work admits a CUDA-Graph-replay overlap: under graph replay the CPU launches the per-step graph in $\sim$1.5 µs and is then free for the duration of the hardware step window, which it uses for exactly this per-sequence work (block-table assembly for the *next* step, sampling glue for the *previous* step's outputs, scheduler bookkeeping). The host work hides behind the per-step hardware window until $t_{\text{serving,gross}}(B)$ exceeds $t_{\text{step,hw}}$ (the per-step HW budget — GPU compute, memory, interconnect, plus any unhidden kernel-launch dispatch — defined fully in §7.3), at which point only the excess blocks. The composition is therefore parameterized by an overlap factor $\rho_{\mathrm{serving}} \in [0, 1]$:
+**Composition with the hardware window.** Like $t_{\text{stage,kernel}}$ (§7.1), the per-sequence serving work admits a CUDA-Graph-replay overlap: under graph replay the CPU launches the per-step graph in $\sim$1.5 µs and is then free for the duration of the hardware step window $t_{\text{step,hw}}(B)$ (§7.2), which it uses for exactly this per-sequence work (block-table assembly for the *next* step, sampling glue for the *previous* step's outputs, scheduler bookkeeping). The host work hides behind the hardware window until $t_{\text{serving,gross}}(B)$ exceeds $t_{\text{step,hw}}(B)$, at which point only the excess blocks. The composition is parameterized by an overlap factor $\rho_{\mathrm{serving}} \in [0, 1]$, applied to the per-step hardware window from §7.2:
 
 $$
-t_{\text{serving}}(B) = \max\!\left(0,\; t_{\text{serving,gross}}(B) - \rho_{\mathrm{serving}} \cdot t_{\text{step,hw}}\right)
+t_{\text{step,user}}(B) \;=\; t_{\text{step,hw}}(B) + \max\!\bigl(0,\; t_{\text{serving,gross}}(B) - \rho_{\mathrm{serving}} \cdot t_{\text{step,hw}}(B)\bigr)
 $$
 
 with $\rho_{\mathrm{serving}} = 1$ for CUDA-Graph-replay stacks (full overlap; default), $\rho_{\mathrm{serving}} = 0$ for eager-mode stacks where Python interpreter stalls between graph launches break the CPU-runs-ahead invariant (host work always blocks). The two regimes are:
 
-- **CUDA-Graph regime** ($\rho_{\mathrm{serving}} = 1$). When $t_{\text{serving,gross}}(B) \le t_{\text{step,hw}}$, $t_{\text{serving}}(B) = 0$ — host work is fully hidden. When $t_{\text{serving,gross}}(B) > t_{\text{step,hw}}$, only the excess blocks the next step's hardware window.
-- **Eager regime** ($\rho_{\mathrm{serving}} = 0$). $t_{\text{serving}}(B) = t_{\text{serving,gross}}(B)$ always — the Python interpreter cannot use the GPU compute window for the next step's setup, so host work serializes after GPU compute.
+- **CUDA-Graph regime** ($\rho_{\mathrm{serving}} = 1$). When $t_{\text{serving,gross}}(B) \le t_{\text{step,hw}}(B)$, the overflow is 0 and $t_{\text{step,user}}(B) = t_{\text{step,hw}}(B)$ — host work is fully hidden. When $t_{\text{serving,gross}}(B) > t_{\text{step,hw}}(B)$, only the excess blocks the next step's hardware window.
+- **Eager regime** ($\rho_{\mathrm{serving}} = 0$). The overflow becomes the full $t_{\text{serving,gross}}(B)$ — the Python interpreter cannot use the GPU compute window for the next step's setup, so host work serializes after GPU compute.
 
-The term sits **outside** the pipeline-bubble multiplier $\gamma_{\text{pp}}$ since it fires once per step on the head node regardless of how the body is pipelined across stages. This composition is identical in form to $t_{\text{stage,kernel}}$'s composition via $\rho_{\mathrm{kernel}}$ (§7.1); the two terms model different host-side work (per-microbatch dispatch vs per-sequence runtime) but admit the same overlap physics.
+The serving term sits **outside** the pipeline-bubble multiplier $\gamma_{\text{pp}}$ since it fires once per step on the head node regardless of how the body is pipelined across stages — the bubble factor is already absorbed inside $t_{\text{step,hw}}(B)$ from §7.2. This composition is identical in form to $t_{\text{stage,kernel}}$'s composition via $\rho_{\mathrm{kernel}}$ (§7.1); the two terms model different host-side work (per-microbatch dispatch vs per-sequence runtime) but admit the same overlap physics.
 
-$c_{\mathrm{serving}}$ is a **stack-dependent** calibration constant — it captures the constant factor in the per-sequence inner loop, which differs across serving frameworks (Python-heavy vs C++/CUDA-Graph-heavy), runtime configurations (eager mode vs CUDA Graphs, Python sampling vs fused-CUDA sampling), and paged-attention block sizes. Reported empirical ranges:
+When $c_{\mathrm{serving}} = 0$, $t_{\text{step,user}}(B) = t_{\text{step,hw}}(B)$ — the user-observed step time collapses to the hardware-only roofline derived in §7.2. When $t_{\text{stage,kernel}} = 0$ as well (host-overhead-free), the formula reduces all the way to $t_{\text{stage,hw}}(B) + t_{\text{LM,hw}}(B)$ at $\gamma_{\text{pp}} = 1$.
+
+**Stack-dependent calibration.** $c_{\mathrm{serving}}$ captures the constant factor in the per-sequence inner loop, which differs across serving frameworks (Python-heavy vs C++/CUDA-Graph-heavy), runtime configurations (eager mode vs CUDA Graphs, Python sampling vs fused-CUDA sampling), and paged-attention block sizes. Reported empirical ranges:
 
 | Stack | $c_{\mathrm{serving}}$ range | Notes |
 |---|---|---|
@@ -1883,56 +1935,6 @@ $c_{\mathrm{serving}}$ is a **stack-dependent** calibration constant — it capt
 | **Python-heavy stacks** (eager-mode interpreters, e.g. vLLM, SGLang in eager mode) | 30–60 µs/seq | Dominated by the Python interpreter wrapping the per-sequence sampling decision; CUDA-Graph replay does not help because the CPU work is **between** graph launches. |
 
 The software-stack axis dominates the chip axis: the same chip + same model under different stacks differs by 4–5× in $c_{\mathrm{serving}}$, while the same stack on different chips differs by less than 2×. The host CPU class and PCIe topology contribute weakly through how much of the bookkeeping the GPU command processor (vs the host CPU) absorbs.
-
-When $c_{\mathrm{serving}} \to 0$, $t_{\text{serving}}(B) \to 0$ and the §7.3 user-observed step time recovers the GPU-only roofline.
-
-## 7.3 User-observed step time and throughput
-
-### Saturated step time (no bubble)
-
-When the pipeline is **fully saturated** ($B \ge PP$), every stage holds a different microbatch on every step and all $PP$ stages run in parallel. The user-observed step time then collapses to the slowest per-stage cost — the assembled HW + kernel-launch cost on the bottleneck stage, plus the LM head surcharge on stage $PP{-}1$ and the per-sequence serving overhead on the head node, with no bubble penalty.
-
-Composing $t_{\text{stage,hw}}(B)$ (§6.2) and $t_{\text{stage,kernel}}$ (§7.1) follows the same overlap pattern as the compute/comm overlap in §6.2: hardware work runs as the base, host dispatch overlaps for a fraction $\rho_{\text{kernel}}$ of it, and any unhidden remainder serializes after. The pipeline-bubble multiplier $\gamma_{\text{pp}}$ from §7.2 then scales the per-stage body by traversal depth, and the LM head term $t_{\text{LM,hw}}(B)$ from §6.2 adds on top (it fires once per step on the bottleneck stage, outside $\gamma_{\text{pp}}$). The per-sequence serving overhead from §7.2 composes against the resulting per-step hardware window
-$$t_{\text{step,hw}}(B) \;=\; \gamma_{\text{pp}} \cdot \bigl[t_{\text{stage,hw}}(B) + \max(0,\; t_{\text{stage,kernel}} - \rho_{\text{kernel}} t_{\text{stage,hw}}(B))\bigr] \;+\; t_{\text{LM,hw}}(B)$$
-via $\rho_{\mathrm{serving}}$, the same overlap physics applied to host-side per-sequence work:
-
-$$
-t_{\text{step,user}}^{\text{sat}}(B) = t_{\text{step,hw}}(B) + \max\!\bigl(0,\; t_{\text{serving,gross}}(B) - \rho_{\mathrm{serving}} \cdot t_{\text{step,hw}}(B)\bigr)
-$$
-
-Under the uniform-stage assumption (all $PP$ stages have identical body cost), the bottleneck stage is $PP{-}1$ and the additive $t_{\text{LM,hw}}(B)$ exactly captures its extra workload. For $PP = 1$, this also collapses to "single-stage body + LM head + serving overhead".
-
-**Regimes (assuming $\rho_{\text{kernel}} = \rho_{\mathrm{serving}} = 1$, the production CUDA-Graph defaults):**
-
-- $t_{\text{stage,hw}}(B) \ge t_{\text{stage,kernel}}$ and $t_{\text{step,hw}}(B) \ge t_{\text{serving,gross}}(B)$: both overflow terms are 0, $t_{\text{step,user}}^{\text{sat}}(B) = t_{\text{stage,hw}}(B) + t_{\text{LM,hw}}(B)$ (HW-bound on the body — async dispatch and per-sequence host work both fully hidden by hardware work). This is the typical regime for moderate-to-large $B$ on production stacks.
-- $t_{\text{stage,hw}}(B) < t_{\text{stage,kernel}}$: the kernel-launch budget surfaces as a floor on $t_{\text{step,hw}}$ (kernel-launch-bound on the body — common at small $B$ on dense decode).
-- $t_{\text{serving,gross}}(B) > t_{\text{step,hw}}(B)$: per-sequence host work spills past the hardware window and the excess blocks (typically at very large $B$ for stacks with non-zero $c_{\mathrm{serving}}$).
-- $\rho_{\text{kernel}} = 0$ or $\rho_{\mathrm{serving}} = 0$: no overlap on the corresponding term — it serializes additively after GPU compute. Eager-mode stacks land here.
-
-When $t_{\text{stage,kernel}} = 0$ and $c_{\mathrm{serving}} = 0$ (host-overhead-free roofline) the formula collapses to $t_{\text{stage,hw}}(B) + t_{\text{LM,hw}}(B)$.
-
-### Pipeline bubble correction
-
-The saturated form above assumes the pipeline is full. When it is not, the bubble factor inflates the step time. **How the PP pipeline works:** pipeline parallelism splits the model's $L$ layers into $PP$ contiguous stages, each owned by a different device (or device group). A token cannot skip stages — it is transformed by stage 0, then forwarded to stage 1, and so on through stage $PP{-}1$ before its logits are produced. To keep all stages busy in parallel, the batch of $B$ active sequences is split into microbatches that flow through the pipeline back-to-back: while stage 0 processes microbatch $i{+}1$, stage 1 is processing microbatch $i$, stage 2 is processing microbatch $i{-}1$, etc. This is the standard PP execution pattern from [MEGATRON3].
-
-Two regimes follow from this picture, depending on whether there are enough microbatches in flight to keep every stage busy. The same scheduling logic applies to both HW and SW per-stage costs — the bubble doesn't care whether a stage is GPU- or SW-bound:
-
-- **Pipeline full ($B \ge PP$).** Every stage runs a different microbatch in parallel; the saturated formula above holds. The full traversal cost $\sum_j t_{\text{stage,hw},j}(B)$ is paid only by the *first* token (TTFT, prefill.md), not by each subsequent decode step.
-- **Pipeline underfilled ($B < PP$).** With fewer microbatches than stages, parallelism collapses: a single microbatch must walk all $PP$ stages in series before the user sees the next token, so both HW and SW step costs grow toward their traversal sums (with uniform stages and $B = 1$, these become $PP \cdot t_{\text{stage,hw}}(1)$ and $PP \cdot t_{\text{stage,kernel}}$).
-
-A first-order bubble correction captures both regimes with a single multiplier:
-
-$$
-\gamma_{\text{pp}} = \max\left(1,\; \frac{PP}{B}\right)
-$$
-
-At $B \ge PP$, $\gamma_{\text{pp}} = 1$ and the bubble vanishes. At $B = 1, PP > 1$ it equals $PP$. At $B = 1, PP = 1$ it also reduces to unity, recovering the non-pipelined decode model. Because $\gamma_{\text{pp}}$ scales the per-stage body costs (HW and kernel-launch) identically, it multiplies the body composition only; the LM head fires once per step on stage $PP{-}1$ regardless of bubble depth, and the per-sequence serving overhead fires once per step on the head node regardless of how the body is pipelined — both are added outside $\gamma_{\text{pp}}$:
-
-$$
-t_{\text{step,user}}(B) = \gamma_{\text{pp}} \cdot \bigl[ t_{\text{stage,hw}}(B) + \max\!\bigl(0,\; t_{\text{stage,kernel}} - \rho_{\text{kernel}} \cdot t_{\text{stage,hw}}(B)\bigr) \bigr] + t_{\text{LM,hw}}(B) + t_{\text{serving}}(B)
-$$
-
-This is the full user-observed step time. At $B = 1, PP = 1$ with $t_{\text{stage,kernel}} = 0$ and $c_{\mathrm{serving}} = 0$, it reduces to $t_{\text{stage,hw}}(1) + t_{\text{LM,hw}}(1)$ — single-stage body plus LM head, the non-pipelined decode model with a vocab projection at the end and no host-side overheads.
 
 > **Speculative-decoding extension.** The TPOT identity $\text{TPOT}(B) = t_{\text{step,user}}(B)$ holds for vanilla decode (one accepted token per sequence per step). Under speculative decoding (MTP / EAGLE / Medusa) each step costs more (the verify pass evaluates $n_{\text{tok,verify}}$ tokens per sequence) but emits more output ($N_{\text{tok/step}}$ accepted tokens per sequence on average). The effective TPOT is $t_{\text{step,user}}^{\text{verify}}(B) / N_{\text{tok/step}}$ — derivation and regime analysis in §8.
 
@@ -1950,7 +1952,7 @@ $$
 TTPS(B) = DP \cdot TPS_{\text{single}}(B) = \frac{DP \cdot B}{t_{\text{step,user}}(B)}
 $$
 
-When $B \ge PP$ the bubble factor is unity and $TPS_{\text{single}}(B) = B / t_{\text{step,user}}^{\text{sat}}(B)$, recovering the classical "throughput is gated by the slowest stage" result — where the bottleneck stage is $PP{-}1$ and its cost is the SW-composed body plus the once-per-step LM head $t_{\text{LM,hw}}(B)$.
+When $B \ge PP$ the bubble factor is unity and $TPS_{\text{single}}(B) = B / t_{\text{step,user}}(B)$ collapses to throughput gated by the slowest stage — the bottleneck stage is $PP{-}1$ and its cost is the kernel-launch-composed body plus the once-per-step LM head $t_{\text{LM,hw}}(B)$, augmented by any unhidden serving overflow from this section.
 
 ---
 

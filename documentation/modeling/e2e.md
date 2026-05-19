@@ -78,13 +78,18 @@ where $t_{\text{KV-transfer}} = 0$ for co-located prefill+decode. The prefill la
 
 ## 1.2 Time Per Output Token (TPOT)
 
-**Definition.** $\text{TPOT}$ is the **user-observed inter-token latency** for tokens 2 through $N_{\text{out}}$ of a single response (the decode phase). Each decode step produces exactly one new token per active sequence, so a user's TPOT equals the full step time $t_{\text{step,user}}$ — **not** amortized across the $B$ parallel sequences. The full form from `decode.md §7.2` composes the per-stage HW roofline, the SW dispatch budget, the pipeline bubble multiplier, and the once-per-step LM head surcharge:
+**Definition.** $\text{TPOT}$ is the **user-observed inter-token latency** for tokens 2 through $N_{\text{out}}$ of a single response (the decode phase). Each decode step produces exactly one new token per active sequence, so a user's TPOT equals the full step time $t_{\text{step,user}}$ — **not** amortized across the $B$ parallel sequences. The full form is assembled in two stages: `decode.md §7.2` builds the per-step hardware window from the per-stage HW roofline, the kernel-launch dispatch budget, the pipeline bubble multiplier, and the once-per-step LM head surcharge; `decode.md §7.3` then composes the per-sequence serving overhead on top:
 
 $$
-\text{TPOT} = t_{\text{step,user}}(B) = \gamma_{\text{pp}} \cdot \bigl[ t_{\text{stage,hw}}(B) + \max\!\bigl(0,\; t_{\text{stage,kernel}} - \rho_{\text{kernel}} \cdot t_{\text{stage,hw}}(B)\bigr) \bigr] + t_{\text{LM,hw}}(B)
+\text{TPOT} = t_{\text{step,user}}(B) = t_{\text{step,hw}}(B) + \max\!\bigl(0,\; t_{\text{serving,gross}}(B) - \rho_{\mathrm{serving}} \cdot t_{\text{step,hw}}(B)\bigr)
 $$
 
-where $B$ is the number of sequences decoded concurrently, $t_{\text{stage,hw}}(B)$ is the overlap-aware per-stage HW step time (`decode.md §6.2`), $t_{\text{stage,kernel}}$ is the per-stage CPU/host dispatch budget composed via $\rho_{\text{kernel}}$ (`decode.md §7.1`), $\gamma_{\text{pp}} = \max(1, PP/B)$ is the pipeline bubble correction (`decode.md §7.2`) — at $B \ge PP$ the pipeline is kept full and the factor is 1; at $B < PP$ the single microbatch pays full pipeline depth per token — and $t_{\text{LM,hw}}(B)$ is the LM head $H \to V$ projection roofline on stage $PP{-}1$ (added outside $\gamma_{\text{pp}}$ since it fires once per step, not per stage).
+with
+$$
+t_{\text{step,hw}}(B) = \gamma_{\text{pp}} \cdot \bigl[ t_{\text{stage,hw}}(B) + \max\!\bigl(0,\; t_{\text{stage,kernel}} - \rho_{\text{kernel}} \cdot t_{\text{stage,hw}}(B)\bigr) \bigr] + t_{\text{LM,hw}}(B)
+$$
+
+where $B$ is the number of sequences decoded concurrently, $t_{\text{stage,hw}}(B)$ is the overlap-aware per-stage HW step time (`decode.md §6.2`), $t_{\text{stage,kernel}}$ is the per-stage CPU/host kernel-launch dispatch budget composed via $\rho_{\text{kernel}}$ (`decode.md §7.1`), $\gamma_{\text{pp}} = \max(1, PP/B)$ is the pipeline bubble correction (`decode.md §7.2`) — at $B \ge PP$ the pipeline is kept full and the factor is 1; at $B < PP$ the single microbatch pays full pipeline depth per token — $t_{\text{LM,hw}}(B)$ is the LM head $H \to V$ projection roofline on stage $PP{-}1$ (added outside $\gamma_{\text{pp}}$ since it fires once per step, not per stage), and $t_{\text{serving,gross}}(B) = c_{\mathrm{serving}} \cdot B$ is the per-sequence serving runtime overhead composed via $\rho_{\mathrm{serving}}$ (`decode.md §7.3`).
 
 **Key property.** TPOT is the *streaming rate* perceived by the user. A TPOT of 50 ms means one new token appears every 50 ms — a rate of 20 tokens/s. Human reading comprehension speed is approximately 5–15 tokens/s; TPOT below 100 ms (>10 tokens/s) is a common production SLA threshold.
 
@@ -98,7 +103,7 @@ $$
 \text{Tput/GPU} = \frac{TTPS}{N_{\text{GPUs}}}
 $$
 
-where $TTPS$ is the global cluster token throughput (tokens/s, all sequences) defined in `decode.md §7.2`, and $N_{\text{GPUs}}$ is the total number of GPUs in the cluster. This is the standard X-axis of throughput–latency benchmark plots.
+where $TTPS$ is the global cluster token throughput (tokens/s, all sequences) defined in `decode.md §7.3`, and $N_{\text{GPUs}}$ is the total number of GPUs in the cluster. This is the standard X-axis of throughput–latency benchmark plots.
 
 ---
 
@@ -166,7 +171,7 @@ For a single request on a **co-located** prefill+decode cluster (no disaggregati
 
    where $t_{\text{prefill,local}}$ is the per-stage roofline time including SW composition (`prefill.md §3.4`), $t_{\text{prefill,comm}}$ is the collective communication time during prefill (same TP/EP/SP structure as decode, scaled by $S_{\text{input}}$), $\rho$ is the overlap factor (same as in decode, `decode.md §6.2`), $t_{\text{pipeline,warmup}} = (PP - 1) \times t_{\text{stage,max}}$ is the time for the prefill pass to fill the pipeline (`prefill.md §3.3`), and $t_{\text{LM,prefill,hw}}$ is the once-per-pass LM head $H \to V$ projection on stage $PP{-}1$ (`prefill.md §3.4`) — added outside the warmup since it fires once at the end of the traversal, not per stage.
 
-4. **$t_{\text{step,user}}$** — First decode step: one forward pass of the decode kernel, generating token 1. From `decode.md §7.2`:
+4. **$t_{\text{step,user}}$** — First decode step: one forward pass of the decode kernel, generating token 1. From `decode.md §7.3`:
 
    $$
    t_{\text{step,user}} = \gamma_{\text{pp}} \cdot \bigl[ t_{\text{stage,hw}} + \max\!\bigl(0,\; t_{\text{stage,kernel}} - \rho_{\text{kernel}} \cdot t_{\text{stage,hw}}\bigr) \bigr] + t_{\text{LM,hw}}
@@ -303,7 +308,7 @@ The optimal $C$ depends on the SLA balance between new-request TTFT and existing
 
 # 3. TPOT Assembly
 
-TPOT is the per-sequence inter-token latency during the decode phase. Its derivation from the roofline model was developed in detail in `decode.md §7.2`; this section assembles the result for both static and continuous batching, and explains the steady-state behavior under each scheduling policy.
+TPOT is the per-sequence inter-token latency during the decode phase. Its derivation from the roofline model was developed in detail in `decode.md §7.3`; this section assembles the result for both static and continuous batching, and explains the steady-state behavior under each scheduling policy.
 
 ---
 
@@ -319,7 +324,7 @@ $$
 t_{\text{stage,hw}}(B) = t_{\text{local}}(B) + \max\left(0,\; t_{\text{comm}}(B) - \rho \cdot t_{\text{local}}(B)\right)
 $$
 
-where the batched local time is (`decode.md §7.2`):
+where the batched local time is (`decode.md §7.3`):
 
 $$
 t_{\text{local}}(B) =
@@ -329,7 +334,7 @@ t_{\text{local}}(B) =
 \right)
 $$
 
-Composing with the per-stage kernel-launch dispatch budget $t_{\text{stage,kernel}}$ (`decode.md §7.1`), applying the pipeline bubble correction $\gamma_{\text{pp}} = \max(1, PP/B)$, and adding the once-per-step LM head $t_{\text{LM,hw}}(B)$ on stage $PP{-}1$ (`decode.md §6.2 / §7.2`) gives the user-observed step time:
+Composing with the per-stage kernel-launch dispatch budget $t_{\text{stage,kernel}}$ (`decode.md §7.1`), applying the pipeline bubble correction $\gamma_{\text{pp}} = \max(1, PP/B)$, and adding the once-per-step LM head $t_{\text{LM,hw}}(B)$ on stage $PP{-}1$ (`decode.md §6.2 / §7.2`), then composing per-sequence serving overhead (`decode.md §7.3`) gives the user-observed step time:
 
 $$
 t_{\text{step,user}}(B) = \gamma_{\text{pp}} \cdot \bigl[ t_{\text{stage,hw}}(B) + \max\!\bigl(0,\; t_{\text{stage,kernel}} - \rho_{\text{kernel}} \cdot t_{\text{stage,hw}}(B)\bigr) \bigr] + t_{\text{LM,hw}}(B)
@@ -343,11 +348,11 @@ $$
 \text{TPOT}_{\text{static}}(B) = t_{\text{step,user}}(B)
 $$
 
-Consistency with §1.2 and `decode.md §7.2`: the user observes one token per decode step per sequence, and the step time is set by the slowest pipeline stage (plus any bubble for $B < PP$). The throughput metric $B/t_{\text{step,user}}$ (tokens/s across the replica) is what is divided by $N_{\text{GPUs}}$ to get Throughput/GPU.
+Consistency with §1.2 and `decode.md §7.3`: the user observes one token per decode step per sequence, and the step time is set by the slowest pipeline stage (plus any bubble for $B < PP$). The throughput metric $B/t_{\text{step,user}}$ (tokens/s across the replica) is what is divided by $N_{\text{GPUs}}$ to get Throughput/GPU.
 
 ### Regime behavior
 
-From the batch-size analysis in `decode.md §7.2` (assuming $B \ge PP$ so bubble factor is 1):
+From the batch-size analysis in `decode.md §7.3` (assuming $B \ge PP$ so bubble factor is 1):
 
 **Memory-bound regime** ($B \ll B^*$, weight traffic dominates):
 $$
@@ -379,7 +384,7 @@ In **continuous batching** [VLLM], requests arrive and depart asynchronously. At
 
 ### Per-request average TPOT
 
-A request that requires $N_{\text{out}}$ decode steps experiences a different $B_{\text{eff},i}$ at each step $i$. Using $\text{TPOT}(B) = t_{\text{step,user}}(B)$ (§1.2, `decode.md §7.2`), the average TPOT over the full response is the mean step time:
+A request that requires $N_{\text{out}}$ decode steps experiences a different $B_{\text{eff},i}$ at each step $i$. Using $\text{TPOT}(B) = t_{\text{step,user}}(B)$ (§1.2, `decode.md §7.3`), the average TPOT over the full response is the mean step time:
 
 $$
 \overline{\text{TPOT}} = \frac{1}{N_{\text{out}}} \sum_{i=1}^{N_{\text{out}}} t_{\text{step,user}}(B_{\text{eff},i})
@@ -453,13 +458,13 @@ $TTFT \approx 100 + 20 = 120$ ms gives $N_{\text{out}}^{\star} = 120/20 + 1 = 7$
 
 ## 5.1 Throughput/GPU Derivation
 
-From `decode.md §7.2`, the global decode throughput across all DP replicas is:
+From `decode.md §7.3`, the global decode throughput across all DP replicas is:
 
 $$
 TTPS(B) = DP \cdot TPS_{\text{single}}(B) = DP \cdot \frac{B}{t_{\text{step,user}}(B)}
 $$
 
-where $t_{\text{step,user}}(B)$ is the full per-step decode time including SW composition, pipeline bubble, and LM head (§1.2 / `decode.md §7.2`). Each step emits $B$ tokens (one per active sequence), so the per-replica rate is $B / t_{\text{step,user}}$ tokens/s.
+where $t_{\text{step,user}}(B)$ is the full per-step decode time including SW composition, pipeline bubble, and LM head (§1.2 / `decode.md §7.3`). Each step emits $B$ tokens (one per active sequence), so the per-replica rate is $B / t_{\text{step,user}}$ tokens/s.
 
 The total GPU count in the cluster is:
 

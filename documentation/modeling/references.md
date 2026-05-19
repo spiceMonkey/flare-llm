@@ -195,7 +195,7 @@ SOSP 2023. arXiv:2309.06180.
 Yu, G.I., Jeong, J.S., Kim, G.W., Kim, S., & Chun, B.G. (2022).  
 *Orca: A Distributed Serving System for Transformer-Based Generative Models.*  
 OSDI 2022.  
-→ Iteration-level continuous batching; per-step admission/eviction; the scheduling pattern that motivates the per-sequence serving runtime overhead in `decode.md §7.2`.
+→ Iteration-level continuous batching; per-step admission/eviction; the scheduling pattern that motivates the per-sequence serving runtime overhead in `decode.md §7.3`.
 
 **[ALPASERVE]**  
 Li, Z., Zheng, L., Zhong, Y., Liu, V., Sheng, Y., Jin, X., Huang, Y., Chen, Z., Zhang, H., Gonzalez, J.E., & Stoica, I. (2023).  

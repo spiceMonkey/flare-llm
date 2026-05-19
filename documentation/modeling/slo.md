@@ -121,7 +121,7 @@ The TPOT-SLO bounds the per-step decode latency $t_{\mathrm{step,user}}(B)$, whi
 
 ## 2.1 Inverting the Decode Roofline
 
-The full decode-step time from `decode.md §7.2` is:
+The full decode-step time from `decode.md §7.3` is:
 
 $$
 t_{\mathrm{step,user}}(B)
