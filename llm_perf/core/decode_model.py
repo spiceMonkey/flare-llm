@@ -239,7 +239,7 @@ class LatencyResults:
     N_tok_per_step: float = 1.0
     t_step_user_verify: float = 0.0
     TPOT_spec: float = 0.0
-    # Per-sequence serving runtime overhead (decode.md §7.2). GROSS per-step
+    # Per-sequence serving runtime overhead (decode.md §7.3). GROSS per-step
     # host cost: c_seq_us * B * 1e-6. Parallel to t_kernel which also
     # stores the gross dispatch budget — both are diagnostic surfaces. The
     # actual contribution to t_step_user is the OVERLAP-GATED form
@@ -571,7 +571,7 @@ def compute_latency(
     CPU dispatch budget (kernel_launch_overhead.md §5). The two are
     composed via `kernel_overlap_factor` ρ_kernel: ρ_kernel=1 means SW is fully hidden
     by GPU work (just `max`), ρ_kernel=0 means strict serialization.
-    `t_step_seq` is the per-sequence serving runtime overhead (decode.md §7.2).
+    `t_step_seq` is the per-sequence serving runtime overhead (decode.md §7.3).
     Gross host work is `t_step_seq = c_seq_us · B · 1e-6`;
     composition via `seq_overlap_factor` ρ_seq uses the same physics
     as ρ_kernel — under CUDA-Graph replay (ρ_seq = 1, default) the CPU runs
@@ -665,7 +665,7 @@ def compute_latency(
     t_lm_mem = T_lm / BW_top if BW_top > 0 else 0.0
     t_LM = max(t_lm_compute, t_lm_mem)
 
-    # Per-sequence serving runtime overhead (decode.md §7.2): host-side work
+    # Per-sequence serving runtime overhead (decode.md §7.3): host-side work
     # that scales linearly with active-sequence count B (block-table gather,
     # sampling, scheduler). **Composed with GPU work via seq_overlap_factor
     # ρ_seq** — under CUDA-Graph replay the CPU runs ahead and host work
@@ -677,14 +677,12 @@ def compute_latency(
     t_step_seq = framework.c_seq_us * max(1, B) * 1e-6
     rho_seq = framework.seq_overlap_factor
     t_step_base = t_stage_with_kernel * pp_bubble_factor + t_LM
-    t_step_seq_excess = max(0.0, t_step_seq - rho_seq * t_step_base)
-
-    t_step_user = t_step_base + t_step_seq_excess
+    t_step_user = t_step_base + max(0.0, t_step_seq - rho_seq * t_step_base)
     TPOT = t_step_user
-    # t_step_seq stays as the gross value (= c_seq · B) for plotting and
-    # breakdown tables — readers see the gap between t_step_seq (gross) and
-    # the gated contribution inside t_step_user as the amount the overlap
-    # factor has hidden.
+    # t_step_seq is the GROSS per-step host work (= c_seq · B). Stored as-is
+    # in LatencyResults for plotting; the gated contribution to t_step_user
+    # is the inline max(...) above — readers see the gap between t_step_seq
+    # and t_step_user as the amount the overlap factor hid behind GPU work.
 
     TPS_single = B / t_step_user if t_step_user > 0 else 0.0
 
@@ -741,10 +739,9 @@ def compute_latency(
         t_lm_compute_verify = t_lm_compute * n_tok_verify
         t_LM_verify = max(t_lm_compute_verify, t_lm_mem)
         # t_step_seq fires once per verify step too; apply the same overlap
-        # gate against the verify-step GPU window.
+        # gate against the verify-step hardware window.
         t_step_base_verify = t_stage_with_kernel_verify * pp_bubble_factor + t_LM_verify
-        t_step_seq_verify = max(0.0, t_step_seq - rho_seq * t_step_base_verify)
-        t_step_user_verify = t_step_base_verify + t_step_seq_verify
+        t_step_user_verify = t_step_base_verify + max(0.0, t_step_seq - rho_seq * t_step_base_verify)
         TPOT_spec = t_step_user_verify / N_tok_per_step
     else:
         t_step_user_verify = t_step_user

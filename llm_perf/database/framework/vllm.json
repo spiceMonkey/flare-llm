@@ -8,7 +8,7 @@
   "moe_a2a_pattern": "scatter",
   "mla_mode": "absorbed",
   "inc_enabled": true,
-  "_comment_c_seq": "40 µs/seq with seq_overlap_factor=0.0 and kernel_overlap_factor=0.3 — Python-heavy stack (eager-mode interpreter wraps each per-seq sampling decision). Midpoint of decode.md §7.2's 30-60 µs Python-heavy range. CUDA-Graph replay doesn't help because the CPU work is between graph launches; seq_overlap_factor=0 captures that the per-seq host loop serializes after the GPU compute window. The same interpreter-stall mechanism limits dispatch overlap to ~0.3 (lower end of the FrameworkSpec docstring's 0.3-0.6 eager-mode range for ρ_kernel).",
+  "_comment_c_seq": "40 µs/seq with seq_overlap_factor=0.0 and kernel_overlap_factor=0.3 — Python-heavy stack (eager-mode interpreter wraps each per-seq sampling decision). Midpoint of decode.md §7.3's 30-60 µs Python-heavy range. CUDA-Graph replay doesn't help because the CPU work is between graph launches; seq_overlap_factor=0 captures that the per-seq host loop serializes after the GPU compute window. The same interpreter-stall mechanism limits dispatch overlap to ~0.3 (lower end of the FrameworkSpec docstring's 0.3-0.6 eager-mode range for ρ_kernel).",
   "tp_algorithm_decode": "auto",
   "tp_algorithm_prefill": "auto",
   "ep_algorithm_decode": "auto",

@@ -4,7 +4,7 @@
 Single cut: TP=4 EP=1 on 4 GPUs (the densest "exact-modelable" bucket in
 the dataset, no co-located complications). Calibration anchor for the
 Dynamo-TRT-LLM serving stack — best-fit `c_seq ≈ 22 µs/seq` per
-`decode.md §7.2` calibration table.
+`decode.md §7.3` calibration table.
 
 Usage:
     python benchmark/validate/gpt_oss_120b_gb200_dynamo_trt.py
