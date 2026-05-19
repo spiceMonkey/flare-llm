@@ -58,7 +58,7 @@ class TuningSpec:
     #     - c_serving_per_seq_us (renamed from t_serving_per_seq_us)
     #     - kernel_launch_us, kernels_per_layer_compute,
     #       kernels_per_collective_call, kernels_per_pp_hop
-    #     - sw_overlap_factor
+    #     - kernel_overlap_factor
     #     - moe_a2a_pattern, mla_mode, inc_enabled
     #   Phase E:
     #     - tp_algorithm_decode / tp_algorithm_prefill
@@ -67,7 +67,7 @@ class TuningSpec:
     #     - torus_algorithm
     #     - n_TP_collectives / n_EP_collectives / n_SP_collectives
     #     - overlap_factor → renamed comm_overlap_factor (ρ_comm; mirrors
-    #       sw_overlap_factor on the SW-vs-GPU side)
+    #       kernel_overlap_factor on the SW-vs-GPU side)
     #   Phase F (chip-side calibration curves):
     #     - tensor_core_efficiency (η_TC(mb) curve) → DeviceSpec
     #     - bw_efficiency (η_β(B) curve) → DeviceSpec

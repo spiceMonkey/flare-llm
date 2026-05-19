@@ -123,7 +123,7 @@ def _eta_beta_at_B(curve: Optional[Dict[int, float]], B: float) -> float:
     return _piecewise_linear_lookup(curve, B)
 
 
-def _t_SW_per_microbatch(
+def _t_kernel_per_microbatch(
     L: int,
     L_moe: int,
     tuner: TuningSpec,
@@ -132,7 +132,7 @@ def _t_SW_per_microbatch(
 ) -> float:
     """Per-microbatch dispatch budget on a single PP stage.
 
-        t_SW = (L/PP)     · (k_compute + k_coll · (n_TP + n_SP)) · τ_launch
+        t_kernel = (L/PP)     · (k_compute + k_coll · (n_TP + n_SP)) · τ_launch
              + (L_moe/PP) · k_coll · n_EP · τ_launch
              + k_pp_hop   · τ_launch    (P2P send/recv per microbatch transit)
 
@@ -222,7 +222,7 @@ class LatencyResults:
     t_local: float            # max(t_compute_eff, t_mem) — memory-or-compute-bound roofline
     t_comm: float
     t_stage: float            # GPU-only step time (compute + comm + overlap)
-    t_SW: float               # per-round CPU dispatch budget = L · k · τ_launch
+    t_kernel: float               # per-round CPU dispatch budget = L · k · τ_launch
     t_LM: float               # LM head one-shot latency on stage PP-1 (decode.md §6.2)
     t_step_user: float
     pp_bubble_factor: float
@@ -240,7 +240,7 @@ class LatencyResults:
     t_step_user_verify: float = 0.0
     TPOT_spec: float = 0.0
     # Per-sequence serving runtime overhead (decode.md §7.2). GROSS per-step
-    # host cost: c_serving_per_seq_us * B * 1e-6. Parallel to t_SW which also
+    # host cost: c_serving_per_seq_us * B * 1e-6. Parallel to t_kernel which also
     # stores the gross dispatch budget — both are diagnostic surfaces. The
     # actual contribution to t_step_user is the OVERLAP-GATED form
     # max(0, t_serving - serving_overlap_factor * t_GPU_step), applied
@@ -562,19 +562,19 @@ def compute_latency(
     The per-stage roofline gives the cost of one pipeline stage processing
     the current batch. For a user observing inter-token latency we apply a
     pipeline-bubble correction when B < PP:
-        t_GPU_step = max(t_stage_GPU, t_SW) · max(1, PP / B) + t_LM
+        t_GPU_step = max(t_stage_GPU, t_kernel) · max(1, PP / B) + t_LM
         t_step_user = t_GPU_step + max(0, t_serving_gross
                                           - ρ_serving · t_GPU_step)
 
     `t_stage_GPU` is the GPU-side compute + comm time (with optional Tensor
-    Core efficiency derate at small microbatch). `t_SW` is the per-round
+    Core efficiency derate at small microbatch). `t_kernel` is the per-round
     CPU dispatch budget (kernel_launch_overhead.md §5). The two are
-    composed via `sw_overlap_factor` ρ_SW: ρ_SW=1 means SW is fully hidden
-    by GPU work (just `max`), ρ_SW=0 means strict serialization.
+    composed via `kernel_overlap_factor` ρ_kernel: ρ_kernel=1 means SW is fully hidden
+    by GPU work (just `max`), ρ_kernel=0 means strict serialization.
     `t_serving` is the per-sequence serving runtime overhead (decode.md §7.2).
     Gross host work is `t_serving_gross = c_serving_per_seq_us · B · 1e-6`;
     composition via `serving_overlap_factor` ρ_serving uses the same physics
-    as ρ_SW — under CUDA-Graph replay (ρ_serving = 1, default) the CPU runs
+    as ρ_kernel — under CUDA-Graph replay (ρ_serving = 1, default) the CPU runs
     ahead and host work hides behind GPU compute until it exceeds `t_GPU_step`.
     """
     B = tuner.B_decode
@@ -625,22 +625,22 @@ def compute_latency(
     t_stage = t_local + max(0.0, t_comm - rho * t_local)
 
     # Per-microbatch per-stage CPU dispatch budget (kernel_launch_overhead.md §5).
-    # Composed with t_stage via ρ_SW: full overlap (default) ⇒ max(...);
-    # zero overlap ⇒ t_stage + t_SW. EP launches only fire on MoE layers
+    # Composed with t_stage via ρ_kernel: full overlap (default) ⇒ max(...);
+    # zero overlap ⇒ t_stage + t_kernel. EP launches only fire on MoE layers
     # (mirrors the L_moe/PP factor in §5.5's t_comm formula).
     if model.moe is not None:
         L_moe_total = model.moe.n_moe_layers if model.moe.n_moe_layers else model.L
     else:
         L_moe_total = 0
-    t_SW = _t_SW_per_microbatch(model.L, L_moe_total, tuner, framework, partition)
-    rho_SW = framework.sw_overlap_factor
+    t_kernel = _t_kernel_per_microbatch(model.L, L_moe_total, tuner, framework, partition)
+    rho_kernel = framework.kernel_overlap_factor
     # Base + unhidden-overflow form (same pattern as compute/comm overlap in
     # decode.md §6.2). GPU work is the base; SW dispatch overlaps for
-    # ρ_SW · t_stage; any remainder serializes after.
-    #   ρ_SW = 1 → t_stage + max(0, t_SW - t_stage) = max(t_stage, t_SW)
-    #             (SW fully hidden when t_stage >= t_SW; SW-bound floor otherwise)
-    #   ρ_SW = 0 → t_stage + t_SW (no overlap, costs add)
-    t_stage_with_SW = t_stage + max(0.0, t_SW - rho_SW * t_stage)
+    # ρ_kernel · t_stage; any remainder serializes after.
+    #   ρ_kernel = 1 → t_stage + max(0, t_kernel - t_stage) = max(t_stage, t_kernel)
+    #             (SW fully hidden when t_stage >= t_kernel; SW-bound floor otherwise)
+    #   ρ_kernel = 0 → t_stage + t_kernel (no overlap, costs add)
+    t_stage_with_kernel = t_stage + max(0.0, t_kernel - rho_kernel * t_stage)
 
     pp_bubble_factor = max(1.0, PP / max(1, B))
 
@@ -676,12 +676,12 @@ def compute_latency(
     #   ρ_serving = 0 → t_serving_gross  (eager-mode; host work always blocks)
     t_serving_gross = framework.c_serving_per_seq_us * max(1, B) * 1e-6
     rho_serving = framework.serving_overlap_factor
-    t_GPU_step = t_stage_with_SW * pp_bubble_factor + t_LM
+    t_GPU_step = t_stage_with_kernel * pp_bubble_factor + t_LM
     t_serving_excess = max(0.0, t_serving_gross - rho_serving * t_GPU_step)
 
     t_step_user = t_GPU_step + t_serving_excess
     TPOT = t_step_user
-    # Diagnostic surface (parallel to t_SW): expose the GROSS per-step host
+    # Diagnostic surface (parallel to t_kernel): expose the GROSS per-step host
     # cost in LatencyResults so plots and breakdown tables show the per-
     # sequence work as it scales with B, even when the overlap gate clips
     # its contribution to t_step_user to zero. The gated contribution lives
@@ -736,7 +736,7 @@ def compute_latency(
         # leading-order effect.
         t_comm_verify = t_comm * n_tok_verify
         t_stage_verify = t_local_verify + max(0.0, t_comm_verify - rho * t_local_verify)
-        t_stage_with_SW_verify = t_stage_verify + max(0.0, t_SW - rho_SW * t_stage_verify)
+        t_stage_with_kernel_verify = t_stage_verify + max(0.0, t_kernel - rho_kernel * t_stage_verify)
         # LM head: compute scales by n_tok_verify (one logits projection
         # per query token), memory invariant. Per decode.md §8.3 this is
         # max(...) of the two — at typical FP4 vocab sizes the LM head
@@ -745,7 +745,7 @@ def compute_latency(
         t_LM_verify = max(t_lm_compute_verify, t_lm_mem)
         # t_serving fires once per verify step too; apply the same overlap
         # gate against the verify-step GPU window.
-        t_GPU_step_verify = t_stage_with_SW_verify * pp_bubble_factor + t_LM_verify
+        t_GPU_step_verify = t_stage_with_kernel_verify * pp_bubble_factor + t_LM_verify
         t_serving_verify = max(0.0, t_serving_gross - rho_serving * t_GPU_step_verify)
         t_step_user_verify = t_GPU_step_verify + t_serving_verify
         TPOT_spec = t_step_user_verify / N_tok_per_step
@@ -761,7 +761,7 @@ def compute_latency(
         t_local=t_local,
         t_comm=t_comm,
         t_stage=t_stage,
-        t_SW=t_SW,
+        t_kernel=t_kernel,
         t_LM=t_LM,
         t_step_user=t_step_user,
         pp_bubble_factor=pp_bubble_factor,

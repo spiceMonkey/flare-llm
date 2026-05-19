@@ -7,7 +7,6 @@
   "kernels_per_layer_compute": 10,
   "kernels_per_collective_call": 2,
   "kernels_per_pp_hop": 2,
-  "sw_overlap_factor": 1.0,
   "moe_a2a_pattern": "scatter",
   "mla_mode": "absorbed",
   "inc_enabled": true,
@@ -25,5 +24,6 @@
   "n_SP_collectives": 1,
   "comm_overlap_factor": 0.0,
   "attention_mode": "dp",
-  "tp_ep_layout": "co_located"
+  "tp_ep_layout": "co_located",
+  "kernel_overlap_factor": 1.0
 }

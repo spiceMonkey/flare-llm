@@ -7,11 +7,10 @@
   "kernels_per_layer_compute": 10,
   "kernels_per_collective_call": 2,
   "kernels_per_pp_hop": 2,
-  "sw_overlap_factor": 0.3,
   "moe_a2a_pattern": "scatter",
   "mla_mode": "absorbed",
   "inc_enabled": true,
-  "_comment_c_serving": "40 \u00b5s/seq with serving_overlap_factor=0.0 and sw_overlap_factor=0.3 \u2014 Python-heavy stack (eager-mode interpreter wraps each per-seq sampling decision). Midpoint of decode.md \u00a77.2's 30-60 \u00b5s Python-heavy range. CUDA-Graph replay doesn't help because the CPU work is between graph launches; serving_overlap_factor=0 captures that the per-seq host loop serializes after the GPU compute window. The same interpreter-stall mechanism limits dispatch overlap to ~0.3 (lower end of the FrameworkSpec docstring's 0.3-0.6 eager-mode range for \u03c1_SW).",
+  "_comment_c_serving": "40 µs/seq with serving_overlap_factor=0.0 and kernel_overlap_factor=0.3 — Python-heavy stack (eager-mode interpreter wraps each per-seq sampling decision). Midpoint of decode.md §7.2's 30-60 µs Python-heavy range. CUDA-Graph replay doesn't help because the CPU work is between graph launches; serving_overlap_factor=0 captures that the per-seq host loop serializes after the GPU compute window. The same interpreter-stall mechanism limits dispatch overlap to ~0.3 (lower end of the FrameworkSpec docstring's 0.3-0.6 eager-mode range for ρ_kernel).",
   "tp_algorithm_decode": "auto",
   "tp_algorithm_prefill": "auto",
   "ep_algorithm_decode": "auto",
@@ -22,5 +21,6 @@
   "n_SP_collectives": 1,
   "comm_overlap_factor": 0.0,
   "attention_mode": "tp",
-  "tp_ep_layout": "orthogonal"
+  "tp_ep_layout": "orthogonal",
+  "kernel_overlap_factor": 0.3
 }

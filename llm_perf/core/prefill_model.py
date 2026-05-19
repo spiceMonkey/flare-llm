@@ -68,7 +68,7 @@ class PrefillLatencyResults:
     t_prefill_mem: float            # multi-tier sum, sram.md §2.1
     t_prefill_local: float          # max(compute_eff, mem)
     t_prefill_comm: float
-    t_SW_per_stage: float           # per-stage CPU dispatch budget = (L/PP) · k · τ_launch
+    t_kernel_per_stage: float           # per-stage CPU dispatch budget = (L/PP) · k · τ_launch
     t_pipeline_warmup: float        # (PP-1) * t_stage
     t_LM_prefill: float             # LM head one-shot on stage PP-1 (prefill.md §3.4)
     t_prefill: float                # full hardware prefill latency
@@ -384,7 +384,7 @@ def compute_prefill_latency(
     PP = partition.PP
     SP = partition.SP
     rho = fw.comm_overlap_factor
-    rho_SW = fw.sw_overlap_factor
+    rho_kernel = fw.kernel_overlap_factor
 
     # Collective group sizes (notation.md §1) for kernel-launch SW count
     # axis-presence guards. Equal to TP and EP across all three production
@@ -416,7 +416,7 @@ def compute_prefill_latency(
     # (or per chunk) — there is no microbatch round structure as in decode,
     # so the per-stage formula is L/PP layers worth of launches plus one
     # PP boundary's worth of P2P sends/recvs (inert when PP = 1):
-    #     t_SW_per_stage = (L/PP) · k · τ_launch  +  k_pp_hop · τ_launch
+    #     t_kernel_per_stage = (L/PP) · k · τ_launch  +  k_pp_hop · τ_launch
     # where k decomposes into compute + collective kernel counts and the
     # collective counts are zero on axes where the parallelism is 1.
     # The PP-hop term uses the middle-stage 2× factor (recv + send) by
@@ -424,7 +424,7 @@ def compute_prefill_latency(
     # negligible at PP >> 1).
     n_TP_calls = fw.n_TP_collectives if g_TP_pf > 1 else 0
     # n_EP_collectives counts NCCL API calls directly (dispatch + combine
-    # = 2 per MoE layer); see decode_model._t_SW_per_microbatch. EP launches
+    # = 2 per MoE layer); see decode_model._t_kernel_per_microbatch. EP launches
     # only fire on MoE layers — split the layer term into dense + MoE
     # contributions, matching the L_moe/PP factor in §5.5's t_comm formula.
     n_EP_calls = fw.n_EP_collectives if g_EP_pf > 1 else 0
@@ -438,23 +438,23 @@ def compute_prefill_latency(
     layers_per_stage = L / PP if PP > 0 else L
     moe_layers_per_stage = L_moe_total / PP if PP > 0 else L_moe_total
     k_pp_hop = fw.kernels_per_pp_hop if PP > 1 else 0
-    t_SW_per_stage = (
+    t_kernel_per_stage = (
         layers_per_stage * k_dense * fw.kernel_launch_us * 1e-6
         + moe_layers_per_stage * k_moe_extra * fw.kernel_launch_us * 1e-6
         + k_pp_hop * fw.kernel_launch_us * 1e-6
     )
 
     def _compose_SW(t_local_gpu: float) -> float:
-        """Compose per-stage GPU work with SW dispatch via ρ_SW.
+        """Compose per-stage GPU work with SW dispatch via ρ_kernel.
 
         Base + unhidden-overflow form (same pattern as compute/comm overlap
         in decode.md §6.2). GPU work is the base; SW dispatch overlaps for
-        ρ_SW · t_local_gpu; any remainder serializes after.
+        ρ_kernel · t_local_gpu; any remainder serializes after.
 
-        ρ_SW = 1 → t_local_gpu + max(0, t_SW - t_local_gpu) = max(t_local_gpu, t_SW)
-        ρ_SW = 0 → t_local_gpu + t_SW_per_stage (no overlap)
+        ρ_kernel = 1 → t_local_gpu + max(0, t_kernel - t_local_gpu) = max(t_local_gpu, t_kernel)
+        ρ_kernel = 0 → t_local_gpu + t_kernel_per_stage (no overlap)
         """
-        return t_local_gpu + max(0.0, t_SW_per_stage - rho_SW * t_local_gpu)
+        return t_local_gpu + max(0.0, t_kernel_per_stage - rho_kernel * t_local_gpu)
 
     # Per-tier memory time helper. T_kv_write_per_request is per-request; the
     # placement layer treats it the same as decode's T_KV (sram.md §1.3
@@ -642,7 +642,7 @@ def compute_prefill_latency(
         t_prefill_mem=t_prefill_mem,
         t_prefill_local=t_prefill_local,
         t_prefill_comm=t_prefill_comm,
-        t_SW_per_stage=t_SW_per_stage,
+        t_kernel_per_stage=t_kernel_per_stage,
         t_pipeline_warmup=t_pipeline_warmup,
         t_LM_prefill=t_LM_prefill,
         t_prefill=t_prefill,

@@ -15,8 +15,8 @@ class OverheadSpec:
     (kernel_launch_overhead.md §5), the per-round CUDA-graph dispatch budget
     is derived from TuningSpec (`kernels_per_layer_compute`,
     `kernels_per_collective_call`, `kernel_launch_us`) and surfaced as
-    `LatencyResults.t_SW`. The E2E calculator uses `t_graph_us` only when
-    `LatencyResults.t_SW == 0` (SW modeling disabled by setting
+    `LatencyResults.t_kernel`. The E2E calculator uses `t_graph_us` only when
+    `LatencyResults.t_kernel == 0` (SW modeling disabled by setting
     `kernel_launch_us = 0` in the tuner). Setting both is harmless — the
     derived term takes precedence — but `t_graph_us` is now redundant for
     most users.
@@ -27,5 +27,5 @@ class OverheadSpec:
     t_tok_us: float = 0.0          # tokenization
 
     # Per-step overhead (microseconds)
-    t_graph_us: float = 0.0        # legacy CUDA graph replay constant; superseded by LatencyResults.t_SW
+    t_graph_us: float = 0.0        # legacy CUDA graph replay constant; superseded by LatencyResults.t_kernel
     t_detok_us: float = 0.0        # detokenization

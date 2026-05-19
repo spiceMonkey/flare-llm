@@ -63,7 +63,7 @@ class FrameworkSpec:
     c_serving_per_seq_us: float = 0.0
 
     # Fraction of t_serving_gross hidden behind GPU compute. Same physics
-    # as sw_overlap_factor (below) but applied to host-side per-sequence
+    # as kernel_overlap_factor (below) but applied to host-side per-sequence
     # work rather than per-kernel dispatch. 1.0 (default) = full CUDA-
     # Graph-replay overlap — CPU runs ahead, host work hides until it
     # exceeds the per-step GPU time. 0.0 = eager-mode serialization,
@@ -73,7 +73,7 @@ class FrameworkSpec:
     serving_overlap_factor: float = 1.0
 
     # Per-kernel dispatch budget (decode.md §7.1).
-    #   t_stage_sw = tau_launch * (k_compute + k_collective + k_pp_hop)
+    #   t_stage_kernel = tau_launch * (k_compute + k_collective + k_pp_hop)
     # Production-realistic anchors:
     # - CUDA Graphs replay (Dynamo / TRT-LLM): ~1.5 us
     # - Eager-mode PyTorch / Python serving: ~7 us
@@ -87,14 +87,17 @@ class FrameworkSpec:
     kernels_per_collective_call: int = 2
     kernels_per_pp_hop: int = 2
 
-    # Fraction of t_stage_sw hidden behind GPU compute (decode.md §6.3).
+    # Fraction of t_stage_kernel hidden behind GPU compute (decode.md §7.1).
     # 1.0 = full async overlap (CUDA-Graph replay steady-state on
     # TensorRT-LLM / vLLM / SGLang where the CPU runs ahead). Eager-mode
     # PyTorch sees ~0.3-0.6 because the Python interpreter breaks the
-    # CPU-runs-ahead invariant. Caveat: sw_overlap_factor only modulates
-    # the *hideable* portion; t_stage_sw remains a hard floor when it
-    # exceeds t_stage_GPU regardless of this knob.
-    sw_overlap_factor: float = 1.0
+    # CPU-runs-ahead invariant. Caveat: kernel_overlap_factor only modulates
+    # the *hideable* portion; t_stage_kernel remains a hard floor when it
+    # exceeds t_stage_GPU regardless of this knob. The "kernel" in the
+    # name distinguishes this from the other host-side overlap factors
+    # (serving_overlap_factor for per-sequence host work, and a future
+    # per-step host floor); together they form the "SW overhead" umbrella.
+    kernel_overlap_factor: float = 1.0
 
     # ── Framework execution-mode choices ───────────────────────────────
     # MoE All-to-All data-flow pattern under DP-attention (decode.md §5.2).
@@ -171,7 +174,7 @@ class FrameworkSpec:
     #   - 2 EP MoE A2A calls per MoE layer (dispatch + combine).
     #   - 1 SP all-gather per layer (with ring SP — only shipped variant
     #     per `collectives/01_collective_algorithms.md §6`).
-    # Counts are zeroed dynamically in `_t_SW_per_microbatch` when the
+    # Counts are zeroed dynamically in `_t_kernel_per_microbatch` when the
     # corresponding parallelism axis is 1 (no collective fires).
     n_TP_collectives: int = 2
     n_EP_collectives: int = 2
@@ -207,7 +210,7 @@ class FrameworkSpec:
 
     # ── Comm/compute overlap (decode.md §6.2) ──────────────────────────
     # Fraction ρ_comm of GPU compute time used to hide collective comm
-    # (distinct from `sw_overlap_factor` which is the SW-vs-GPU overlap):
+    # (distinct from `kernel_overlap_factor` which is the kernel-launch-vs-GPU overlap):
     #
     #   t_stage = t_local + max(0, t_comm - ρ_comm * t_local)
     #
