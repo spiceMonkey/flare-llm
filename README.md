@@ -145,29 +145,33 @@ Doc: [`collectives/02_topology_mapping.md`](documentation/modeling/collectives/0
 
 Per-device sharding factors (`D_attn`, `D_kv`, `D_exp`, `N_replica` from `core/primitives/sharding_factors.py`) absorb all the partition × framework algebra so the rooflines stay framework-agnostic. Docs: [`decode.md §1.4 / §5.3`](documentation/modeling/decode.md), [`notation.md §1`](documentation/modeling/notation.md).
 
-### Serving stack overhead model — 5 production framework JSONs
+### Serving stack overhead model — 7 production framework JSONs
 
-`FrameworkSpec` carries every host-side / dispatch-side knob; the database ships 5 calibrated stacks. Side-by-side:
+`FrameworkSpec` carries every host-side / dispatch-side knob; the database ships 7 calibrated stacks. Side-by-side (per-step host work decomposes into `t_step,seq(B) = c_orch + c_seq · B`):
 
-| Field (units) | What it models | `default` | `trt` | `dynamo_trt` | `sglang` | `vllm` |
-|---|---|---|---|---|---|---|
-| `kernel_launch_us` (μs) | Per-kernel CUDA dispatch budget τ_launch — multiplied by partition-dependent kernel count K to get t_SW | 1.5 | 1.5 | 7.0 | 10.0 | 10.0 |
-| `c_serving_per_seq_us` (μs/seq) | Per-sequence host work (sampling, scheduler, block-table gather) | 0 | 50 | 0 | 20 | 20 |
-| `moe_a2a_pattern` | MoE Dispatch+Combine pattern | gather | gather | scatter | scatter | scatter |
-| `attention_mode` | `tp` / `dp` dispatch | tp | tp | dp | tp | tp |
-| `tp_ep_layout` | `orthogonal` / `co_located` | orthogonal | orthogonal | co_located | orthogonal | orthogonal |
-| `inc_enabled` | Engage SHARP-class INC where fabric supports it | True | True | True | True | True |
-| `tp/ep_algorithm_*` | `ring` / `tree` / `auto` | ring | auto | auto | auto | auto |
-| `comm_overlap_factor` (ρ_comm) | Collective comm hidden under HW compute | 0 | 0 | 0 | 0 | 0 |
-| `sw_overlap_factor` (ρ_SW) | SW dispatch hidden under GPU step | 1.0 | 1.0 | 1.0 | 1.0 | 1.0 |
+| Field (units) | What it models | `default` | `trt` | `dynamo_trt` | `dynamo_sglang` | `dynamo_vllm` | `sglang` | `vllm` |
+|---|---|---|---|---|---|---|---|---|
+| `kernel_launch_us` (μs) | Per-kernel CUDA dispatch budget τ_launch — multiplied by partition-dependent kernel count K to get `t_stage,kernel` | 1.5 | 1.5 | 4.0 | 12.0 | 8.0 | 10.0 | 10.0 |
+| `c_orch_us` (μs/step) | B-independent per-step orchestration floor (graph-launch decision, scheduler tick, sampler glue between graph replays) | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| `c_seq_us` (μs/seq) | Per-sequence host work (sampling, scheduler, block-table gather) — scales with B | 0 | 75 | 5 | 5 | 5 | 40 | 40 |
+| `moe_a2a_pattern` | MoE Dispatch+Combine pattern | gather | gather | scatter | scatter | scatter | scatter | scatter |
+| `attention_mode` | `tp` / `dp` dispatch | tp | tp | dp | dp | dp | tp | tp |
+| `tp_ep_layout` | `orthogonal` / `co_located` | orthogonal | orthogonal | co_located | co_located | co_located | orthogonal | orthogonal |
+| `inc_enabled` | Engage SHARP-class INC where fabric supports it | True | True | True | True | True | True | True |
+| `tp/ep_algorithm_*` | `ring` / `tree` / `auto` | ring | auto | auto | auto | auto | auto | auto |
+| `comm_overlap_factor` (ρ_comm) | Collective comm hidden under HW compute | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| `kernel_overlap_factor` (ρ_kernel) | Kernel-launch dispatch hidden under GPU step | 1.0 | 1.0 | 1.0 | 1.0 | 1.0 | 0.3 | 0.3 |
+| `seq_overlap_factor` (ρ_seq) | Per-step host work hidden under GPU step | 1.0 | 1.0 | 1.0 | 1.0 | 1.0 | 0.0 | 0.0 |
 
 Anchor calibrations (from `benchmark/validate/*` against InferenceX measurements):
 
-- `dynamo_trt`: `c_serving_per_seq_us=0` because the Dynamo orchestrator absorbs per-seq host work into one CUDA-graph launch per microbatch.
-- `trt` (raw TRT-LLM): `c_serving_per_seq_us=50` — fast C++ runtime but more individual kernel launches per step than Dynamo.
-- `sglang` / `vllm`: `c_serving_per_seq_us=20` — Python-heavy stacks; CUDA-graph replay doesn't help because per-seq Python runs between graph launches.
+- `dynamo_trt`: `c_seq=5` µs/seq — Dynamo orchestrator absorbs most per-seq host work into the CUDA-graph launch (ρ_seq=1 full overlap); residual is the irreducible per-seq sampling + block-table cost.
+- `trt` (raw TRT-LLM): `c_seq=75` µs/seq — fast C++ runtime but no orchestrator absorbing per-step bookkeeping; ~15× larger than `dynamo_trt`.
+- `dynamo_sglang` / `dynamo_vllm`: `c_seq=5`, but `kernel_launch_us` higher (12 / 8 µs vs `dynamo_trt`'s 4) — orchestrator absorbs *per-seq* host work but not all *per-kernel* dispatch (SGLang's Python paths survive the wrap; vLLM's are partially captured).
+- `sglang` / `vllm`: `c_seq=40` µs/seq with `ρ_seq=0` (eager-mode Python interpreter wraps each per-seq decision, breaks CPU-runs-ahead) and `ρ_kernel=0.3` (limited dispatch overlap from interpreter stalls).
+- `c_orch=0` everywhere by default — the per-step orchestration floor is opt-in. The Kimi-K2.5/Dynamo+vLLM §5 panel-(d) residual ~10 ms gap is the primary empirical motivator pending calibration.
 
-The kernel-launch tax `t_SW = τ_launch · K(partition)` produces visible Pareto cliffs at high τ_launch (eager-mode stacks) — see [`pareto_vs_kernel_launch.ipynb`](notebooks/pareto_vs_kernel_launch.ipynb). Docs: [`decode.md §7.1 / §7.2`](documentation/modeling/decode.md), [`framework.md`](documentation/modeling/framework.md).
+The kernel-launch tax `t_stage,kernel = τ_launch · K(partition)` produces visible Pareto cliffs at high τ_launch (eager-mode stacks) — see [`pareto_vs_kernel_launch.ipynb`](notebooks/pareto_vs_kernel_launch.ipynb). Docs: [`decode.md §7.1 / §7.3`](documentation/modeling/decode.md), [`framework.md`](documentation/modeling/framework.md).
 
 ### KV handoff & disaggregation
 
@@ -189,7 +193,7 @@ The kernel-launch tax `t_SW = τ_launch · K(partition)` produces visible Pareto
 
 The diagram flows top-to-bottom in five color-banded stages; the prose walkthrough below maps each stage to its implementation in [`documentation/modeling/decode.md`](documentation/modeling/decode.md) and `llm_perf/core/`.
 
-1. **Four design pillars + workload point (blue + orange).** Four typed-dataclass inputs the framework co-designs over: `LlmModelSpec` (transformer architecture), `SystemSpec` (cluster hardware + per-tier fabric capability incl. `inc` disclosure), `PartitionSpec` (`PP × TP × EP × SP`; `DP = N / product` inferred), and `FrameworkSpec` (stack-axis decisions — attention_mode, tp_ep_layout, algorithm choices, `inc_enabled`, kernel-launch budget, ρ_SW, ρ, MoE A2A pattern). The workload point — sequence length `S` and active batch `B` (carried internally on `TuningSpec`) — parameterizes the prediction; it's the user's request shape, not a configuration the framework co-designs.
+1. **Four design pillars + workload point (blue + orange).** Four typed-dataclass inputs the framework co-designs over: `LlmModelSpec` (transformer architecture), `SystemSpec` (cluster hardware + per-tier fabric capability incl. `inc` disclosure), `PartitionSpec` (`PP × TP × EP × SP`; `DP = N / product` inferred), and `FrameworkSpec` (stack-axis decisions — attention_mode, tp_ep_layout, algorithm choices, `inc_enabled`, kernel-launch budget, ρ_kernel, ρ_seq, ρ_comm, MoE A2A pattern, c_orch / c_seq host overhead). The workload point — sequence length `S` and active batch `B` (carried internally on `TuningSpec`) — parameterizes the prediction; it's the user's request shape, not a configuration the framework co-designs.
 
 2. **Cross-input validation + per-device sharding (purple).** `compose_check(partition, framework)` enforces invariants that mix-and-match across specs — e.g. `tp_ep_layout="co_located" ⇒ attention_mode="dp" ∧ TP == EP` — on calculator entry. The validated join resolves to abstract per-device sharding factors `D_attn`, `D_kv`, `D_exp`, `N_replica` (`core/primitives/sharding_factors.py`) that encode every production-relevant configuration (orthogonal TP+EP, co-located TP+EP, DP-attention, MLA) in one lookup table so the downstream rooflines stay framework-agnostic. When `framework` ships `"auto"` algorithm fields, `optimize_collective_algorithms` resolves them per (phase × collective × G × M) before the cost branches fire.
 
@@ -197,12 +201,12 @@ The diagram flows top-to-bottom in five color-banded stages; the prose walkthrou
     - **Memory** → $t_\mathrm{mem}(B) = \sum_i (T_{\theta,i} + B \cdot T_\mathrm{KV,i})/\mathrm{BW_\mathrm{eff,i}}$ — multi-tier roofline; single-tier devices reduce to $T_\mathrm{step}/\mathrm{BW_\mathrm{HBM}}$ bit-for-bit (`memory_model.py`).
     - **Compute** → $t_\mathrm{compute}(B) = B \cdot F_\mathrm{token}^\mathrm{dev}/(R_\mathrm{peak} \cdot \eta_\mathrm{TC}(B))$, Tensor-Core-efficiency-derated (`decode_model.py:compute_flops`).
     - **Collective comm** → per-axis $t_\mathrm{PP}$, $t_\mathrm{TP}$, $t_\mathrm{EP}$, $t_\mathrm{SP}$ summed per stage via `cost_collective` dispatch (α–β model or INC short-circuit, per fabric capability and `framework.inc_enabled`).
-    - **Stack overheads** → per-stage dispatch budget $t_\mathrm{stage,sw}$ (kernel-launch × kernel count), per-sequence serving overhead $t_\mathrm{serving}(B) = c_\mathrm{serving} \cdot B$, LM-head roofline $t_\mathrm{LM,hw}$, pipeline-bubble multiplier $\gamma_\mathrm{pp} = \max(1, PP/B)$.
+    - **Stack overheads** → per-stage kernel-launch dispatch budget $t_\mathrm{stage,kernel}$ (kernel-launch × kernel count), per-step host work $t_\mathrm{step,seq}(B) = c_\mathrm{orch} + c_\mathrm{seq} \cdot B$ (B-independent orchestration floor + per-sequence inner loops), LM-head roofline $t_\mathrm{LM,hw}$, pipeline-bubble multiplier $\gamma_\mathrm{pp} = \max(1, PP/B)$.
 
-4. **Three-stage assembly (pink).** The four cost branches combine through three composition equations governed by two overlap factors (ρ for compute/comm, ρ_SW for HW/SW):
+4. **Three-stage assembly (pink).** The four cost branches combine through three composition equations governed by three overlap factors (ρ_comm for compute/comm, ρ_kernel for kernel-launch dispatch, ρ_seq for per-step host work):
     - **Roofline:** $t_\mathrm{local}(B) = \max(t_\mathrm{compute}(B), t_\mathrm{mem}(B))$ picks the bottleneck side of the device.
-    - **Compute/comm overlap:** $t_\mathrm{stage,hw}(B) = t_\mathrm{local}(B) + \max(0, t_\mathrm{comm}(B) - \rho \cdot t_\mathrm{local}(B))$ folds in collective comm under ρ.
-    - **HW/SW overlap + pipeline bubble:** $t_\mathrm{step,user}(B) = \gamma_\mathrm{pp} \cdot [t_\mathrm{stage,hw} + \max(0, t_\mathrm{stage,sw} - \rho_\mathrm{SW} \cdot t_\mathrm{stage,hw})] + t_\mathrm{LM,hw} + t_\mathrm{serving}$. The LM head and per-sequence serving overhead fire once per step on the head node, outside the pipeline bubble.
+    - **Compute/comm overlap:** $t_\mathrm{stage,hw}(B) = t_\mathrm{local}(B) + \max(0, t_\mathrm{comm}(B) - \rho_\mathrm{comm} \cdot t_\mathrm{local}(B))$ folds in collective comm under ρ_comm.
+    - **Per-step hardware window + host overlap + pipeline bubble:** First assemble the hardware window $t_\mathrm{step,base}(B) = \gamma_\mathrm{pp} \cdot [t_\mathrm{stage,hw} + \max(0, t_\mathrm{stage,kernel} - \rho_\mathrm{kernel} \cdot t_\mathrm{stage,hw})] + t_\mathrm{LM,hw}$ (kernel-launch dispatch composed under ρ_kernel inside the bubble; LM head added outside). Then layer per-step host work on top: $t_\mathrm{step,user}(B) = t_\mathrm{step,base}(B) + \max(0, t_\mathrm{step,seq}(B) - \rho_\mathrm{seq} \cdot t_\mathrm{step,base}(B))$. The LM head and per-step serving overhead fire once per step on the head node, outside the pipeline bubble.
 
 5. **Outputs + closed-form bounds (light blue + green dashed).** $\mathrm{TPOT} = t_\mathrm{step,user}(B)$; per-replica throughput $\mathrm{TPS}(B) = B/t_\mathrm{step,user}(B)$; cluster throughput $\mathrm{TTPS}(B) = \mathrm{DP} \cdot \mathrm{TPS}(B)$. The diagnostic bounds — memory→compute crossover $B^*$, memory-vs-interconnect saturation $\mathrm{BW_\mathrm{link}^*}$, INC payoff threshold $m_\mathrm{INC}$, and the unified per-knob sensitivity table — name which primitive is binding at any operating point.
 
@@ -261,7 +265,7 @@ The joint feasibility region $\mathcal{F}_\mathrm{SLO}$, the dynamic-stability c
     ├── core/
     │   ├── memory_model.py           — M_θ, M_act, M_kv, per-tier residency, fit predicate
     │   ├── memory_placement.py       — split T_θ / T_KV across device memory tiers (greedy or pinned); multi-tier t_mem
-    │   ├── decode_model.py           — decode FLOPs, traffic, comm, multi-tier roofline + overlap-aware TPOT, B*, t_SW, t_LM, γ_pp
+    │   ├── decode_model.py           — decode FLOPs, traffic, comm, multi-tier roofline + overlap-aware TPOT, B*, t_kernel, t_step_seq, t_LM, γ_pp
     │   ├── prefill_model.py          — prefill FLOPs, traffic, comm, latency (incl. chunked prefill, LM head)
     │   ├── collective_algo_opt.py    — post-partition resolver for `auto` collective algorithms (per-cell min(cost), INC short-circuit)
     │   ├── kv_paging_model.py        — paged-attention block accounting
@@ -277,7 +281,7 @@ The joint feasibility region $\mathcal{F}_\mathrm{SLO}$, the dynamic-stability c
     │   ├── model/         (12)       — model JSONs (gpt_1_8t_moe, gpt_oss_120b, llama3.1_{8b,70b}, deepseek_{r1_0528,v4_pro}, glm5, kimi_k25, minimax_m25, qwen35_397b_a17b, qwen3_vl_235b_fp8, example.model.dense)
     │   ├── system/        (14)       — system JSONs: per-family `<chip>.8gpu` (B/H series) + `<chip>.multibox` template; gb200.{72gpu,multibox}; gb300.72gpu; dmatrix.{server,squadrack}; tpu.v5p.pod; example.sys
     │   ├── tuner/         (4)        — workload knob JSONs (S_decode, B_decode, MemoryPlacementSpec, attention/MLP gains)
-    │   └── framework/     (5)        — per-stack framework JSONs (default, dynamo_trt, sglang, trt, vllm — algorithm choices, INC, kernel_launch_us, ρ_SW, ρ_comm, …)
+    │   └── framework/     (7)        — per-stack framework JSONs (default, dynamo_trt, dynamo_sglang, dynamo_vllm, sglang, trt, vllm — algorithm choices, INC, kernel_launch_us, ρ_kernel, ρ_seq, ρ_comm, c_orch_us, c_seq_us)
     ├── specs/                        — LlmModelSpec, SystemSpec (DeviceSpec + MemoryTierSpec + FabricSpec + CrossbarTier/TorusTier/MeshTier), PartitionSpec, TuningSpec (+ MemoryPlacementSpec), FrameworkSpec, OverheadSpec, DisaggSpec
     ├── io/                           — JSON loaders + list helpers per schema (load_{model,system,tuner,framework}_from_db)
     └── utils/                        — constants, equations, HF adapter, DRAM3D helper, plotting, partition_enum
@@ -291,7 +295,7 @@ archives/hf/                         — raw HuggingFace configs (conversion inp
 
 The `llm_perf` package is organized as four concentric layers — each one pure, each one a single-purpose target for reading and extension:
 
-**1. Specs (`llm_perf/specs/`)** — typed dataclasses that describe the problem. `LlmModelSpec` + optional `MoESpec` fix the architecture; `SystemSpec` + nested `DeviceSpec` (+ optional `tiers: List[MemoryTierSpec]` or top-level `sram_capacity_MB` / `sram_bandwidth_TBps` for SRAM-augmented devices) + `FabricSpec` + tier classes (`CrossbarTier`, `TorusTier`, `MeshTier`, each with optional `inc: "nvls" | "sharp" | "hw_a2a"` capability disclosure) fix the hardware and its fabric-chain topology; `PartitionSpec` is strictly the 4 shard ints (PP / TP / EP / SP); `TuningSpec` is strictly workload knobs (`S_input`, `S_decode`, `B_prefill`, `B_decode`, `chunk_size`, attention/MLP flash gains, plus a `MemoryPlacementSpec` that decides which memory tier holds weights vs KV); **`FrameworkSpec`** carries every stack-axis decision (`attention_mode` `"tp"`/`"dp"`, `tp_ep_layout` `"orthogonal"`/`"co_located"`, per-phase algorithm choices `tp/ep_algorithm_decode/prefill ∈ {ring, tree, auto}`, `inc_enabled` toggle, per-layer collective counts `n_TP/EP/SP_collectives`, `kernel_launch_us`, `sw_overlap_factor`, `comm_overlap_factor` ρ, MLA mode, MoE A2A pattern, `c_serving_per_seq_us`); `OverheadSpec` and `DisaggSpec` add framework overheads and inter-cluster KV transfer. No behaviour — only data.
+**1. Specs (`llm_perf/specs/`)** — typed dataclasses that describe the problem. `LlmModelSpec` + optional `MoESpec` fix the architecture; `SystemSpec` + nested `DeviceSpec` (+ optional `tiers: List[MemoryTierSpec]` or top-level `sram_capacity_MB` / `sram_bandwidth_TBps` for SRAM-augmented devices) + `FabricSpec` + tier classes (`CrossbarTier`, `TorusTier`, `MeshTier`, each with optional `inc: "nvls" | "sharp" | "hw_a2a"` capability disclosure) fix the hardware and its fabric-chain topology; `PartitionSpec` is strictly the 4 shard ints (PP / TP / EP / SP); `TuningSpec` is strictly workload knobs (`S_input`, `S_decode`, `B_prefill`, `B_decode`, `chunk_size`, attention/MLP flash gains, plus a `MemoryPlacementSpec` that decides which memory tier holds weights vs KV); **`FrameworkSpec`** carries every stack-axis decision (`attention_mode` `"tp"`/`"dp"`, `tp_ep_layout` `"orthogonal"`/`"co_located"`, per-phase algorithm choices `tp/ep_algorithm_decode/prefill ∈ {ring, tree, auto}`, `inc_enabled` toggle, per-layer collective counts `n_TP/EP/SP_collectives`, `kernel_launch_us`, `kernel_overlap_factor` ρ_kernel, `comm_overlap_factor` ρ_comm, `seq_overlap_factor` ρ_seq, MLA mode, MoE A2A pattern, `c_orch_us`, `c_seq_us`); `OverheadSpec` and `DisaggSpec` add framework overheads and inter-cluster KV transfer. No behaviour — only data.
 
 > **System describes capability; framework describes selection.** A fabric tier with `inc: "nvls"` advertises that the silicon supports NVLink SHARP; `FrameworkSpec.inc_enabled` decides whether the runtime engages it. The benchmark validators set `inc_enabled=False` because the InferenceX measurements they calibrate against were not captured with SHARP-class INC engaged; INC-study notebooks (`pareto_collective_algorithms`, `pareto_vs_kernel_launch`, `pareto_vs_mem_alpha*`) keep the default `inc_enabled=True`. Cross-spec invariants (e.g. `tp_ep_layout="co_located"` forces `attention_mode="dp"` and `TP == EP`) are enforced by `core/primitives/sharding_factors.compose_check(partition, framework)` on calculator entry.
 
