@@ -1904,21 +1904,21 @@ This per-sequence work is distinct from two other overheads tracked elsewhere:
 Because the four components above are each per-sequence inner loops on the CPU, the aggregate gross cost is modeled as linear in $B$ with a single per-sequence calibration constant $c_{\mathrm{seq}}$:
 
 $$
-t_{\text{step,seq,gross}}(B) = c_{\mathrm{seq}} \cdot B
+t_{\text{step,seq}}(B) = c_{\mathrm{seq}} \cdot B
 $$
 
 with units of seconds per sequence per step (the framework parameterizes $c_{\mathrm{seq}}$ in microseconds for ergonomics). A more elaborate non-linear form (piecewise-linear in $B$ to capture cache-line effects in the block-table gather, $B \log B$ from per-step sorting) is possible but unnecessary for the typical 1 ≤ $B$ ≤ 1024 operating range; the linear fit captures the dominant scaling for all four components.
 
-**Composition with the hardware window.** Like $t_{\text{stage,kernel}}$ (§7.1), the per-sequence serving work admits a CUDA-Graph-replay overlap: under graph replay the CPU launches the per-step graph in $\sim$1.5 µs and is then free for the duration of the hardware step window $t_{\text{step,base}}(B)$ (§7.2), which it uses for exactly this per-sequence work (block-table assembly for the *next* step, sampling glue for the *previous* step's outputs, scheduler bookkeeping). The host work hides behind the hardware window until $t_{\text{step,seq,gross}}(B)$ exceeds $t_{\text{step,base}}(B)$, at which point only the excess blocks. The composition is parameterized by an overlap factor $\rho_{\mathrm{seq}} \in [0, 1]$, applied to the per-step hardware window from §7.2:
+**Composition with the hardware window.** Like $t_{\text{stage,kernel}}$ (§7.1), the per-sequence serving work admits a CUDA-Graph-replay overlap: under graph replay the CPU launches the per-step graph in $\sim$1.5 µs and is then free for the duration of the hardware step window $t_{\text{step,base}}(B)$ (§7.2), which it uses for exactly this per-sequence work (block-table assembly for the *next* step, sampling glue for the *previous* step's outputs, scheduler bookkeeping). The host work hides behind the hardware window until $t_{\text{step,seq}}(B)$ exceeds $t_{\text{step,base}}(B)$, at which point only the excess blocks. The composition is parameterized by an overlap factor $\rho_{\mathrm{seq}} \in [0, 1]$, applied to the per-step hardware window from §7.2:
 
 $$
-t_{\text{step,user}}(B) \;=\; t_{\text{step,base}}(B) + \max\!\bigl(0,\; t_{\text{step,seq,gross}}(B) - \rho_{\mathrm{seq}} \cdot t_{\text{step,base}}(B)\bigr)
+t_{\text{step,user}}(B) \;=\; t_{\text{step,base}}(B) + \max\!\bigl(0,\; t_{\text{step,seq}}(B) - \rho_{\mathrm{seq}} \cdot t_{\text{step,base}}(B)\bigr)
 $$
 
 with $\rho_{\mathrm{seq}} = 1$ for CUDA-Graph-replay stacks (full overlap; default), $\rho_{\mathrm{seq}} = 0$ for eager-mode stacks where Python interpreter stalls between graph launches break the CPU-runs-ahead invariant (host work always blocks). The two regimes are:
 
-- **CUDA-Graph regime** ($\rho_{\mathrm{seq}} = 1$). When $t_{\text{step,seq,gross}}(B) \le t_{\text{step,base}}(B)$, the overflow is 0 and $t_{\text{step,user}}(B) = t_{\text{step,base}}(B)$ — host work is fully hidden. When $t_{\text{step,seq,gross}}(B) > t_{\text{step,base}}(B)$, only the excess blocks the next step's hardware window.
-- **Eager regime** ($\rho_{\mathrm{seq}} = 0$). The overflow becomes the full $t_{\text{step,seq,gross}}(B)$ — the Python interpreter cannot use the GPU compute window for the next step's setup, so host work serializes after GPU compute.
+- **CUDA-Graph regime** ($\rho_{\mathrm{seq}} = 1$). When $t_{\text{step,seq}}(B) \le t_{\text{step,base}}(B)$, the overflow is 0 and $t_{\text{step,user}}(B) = t_{\text{step,base}}(B)$ — host work is fully hidden. When $t_{\text{step,seq}}(B) > t_{\text{step,base}}(B)$, only the excess blocks the next step's hardware window.
+- **Eager regime** ($\rho_{\mathrm{seq}} = 0$). The overflow becomes the full $t_{\text{step,seq}}(B)$ — the Python interpreter cannot use the GPU compute window for the next step's setup, so host work serializes after GPU compute.
 
 The serving term sits **outside** the pipeline-bubble multiplier $\gamma_{\text{pp}}$ since it fires once per step on the head node regardless of how the body is pipelined across stages — the bubble factor is already absorbed inside $t_{\text{step,base}}(B)$ from §7.2. This composition is identical in form to $t_{\text{stage,kernel}}$'s composition via $\rho_{\mathrm{kernel}}$ (§7.1); the two terms model different host-side work (per-microbatch dispatch vs per-sequence runtime) but admit the same overlap physics.
 

@@ -81,7 +81,7 @@ where $t_{\text{KV-transfer}} = 0$ for co-located prefill+decode. The prefill la
 **Definition.** $\text{TPOT}$ is the **user-observed inter-token latency** for tokens 2 through $N_{\text{out}}$ of a single response (the decode phase). Each decode step produces exactly one new token per active sequence, so a user's TPOT equals the full step time $t_{\text{step,user}}$ — **not** amortized across the $B$ parallel sequences. The full form is assembled in two stages: `decode.md §7.2` builds the per-step hardware window from the per-stage HW roofline, the kernel-launch dispatch budget, the pipeline bubble multiplier, and the once-per-step LM head surcharge; `decode.md §7.3` then composes the per-sequence serving overhead on top:
 
 $$
-\text{TPOT} = t_{\text{step,user}}(B) = t_{\text{step,base}}(B) + \max\!\bigl(0,\; t_{\text{step,seq,gross}}(B) - \rho_{\mathrm{seq}} \cdot t_{\text{step,base}}(B)\bigr)
+\text{TPOT} = t_{\text{step,user}}(B) = t_{\text{step,base}}(B) + \max\!\bigl(0,\; t_{\text{step,seq}}(B) - \rho_{\mathrm{seq}} \cdot t_{\text{step,base}}(B)\bigr)
 $$
 
 with
@@ -89,7 +89,7 @@ $$
 t_{\text{step,base}}(B) = \gamma_{\text{pp}} \cdot \bigl[ t_{\text{stage,hw}}(B) + \max\!\bigl(0,\; t_{\text{stage,kernel}} - \rho_{\text{kernel}} \cdot t_{\text{stage,hw}}(B)\bigr) \bigr] + t_{\text{LM,hw}}(B)
 $$
 
-where $B$ is the number of sequences decoded concurrently, $t_{\text{stage,hw}}(B)$ is the overlap-aware per-stage HW step time (`decode.md §6.2`), $t_{\text{stage,kernel}}$ is the per-stage CPU/host kernel-launch dispatch budget composed via $\rho_{\text{kernel}}$ (`decode.md §7.1`), $\gamma_{\text{pp}} = \max(1, PP/B)$ is the pipeline bubble correction (`decode.md §7.2`) — at $B \ge PP$ the pipeline is kept full and the factor is 1; at $B < PP$ the single microbatch pays full pipeline depth per token — $t_{\text{LM,hw}}(B)$ is the LM head $H \to V$ projection roofline on stage $PP{-}1$ (added outside $\gamma_{\text{pp}}$ since it fires once per step, not per stage), and $t_{\text{step,seq,gross}}(B) = c_{\mathrm{seq}} \cdot B$ is the per-sequence serving runtime overhead composed via $\rho_{\mathrm{seq}}$ (`decode.md §7.3`).
+where $B$ is the number of sequences decoded concurrently, $t_{\text{stage,hw}}(B)$ is the overlap-aware per-stage HW step time (`decode.md §6.2`), $t_{\text{stage,kernel}}$ is the per-stage CPU/host kernel-launch dispatch budget composed via $\rho_{\text{kernel}}$ (`decode.md §7.1`), $\gamma_{\text{pp}} = \max(1, PP/B)$ is the pipeline bubble correction (`decode.md §7.2`) — at $B \ge PP$ the pipeline is kept full and the factor is 1; at $B < PP$ the single microbatch pays full pipeline depth per token — $t_{\text{LM,hw}}(B)$ is the LM head $H \to V$ projection roofline on stage $PP{-}1$ (added outside $\gamma_{\text{pp}}$ since it fires once per step, not per stage), and $t_{\text{step,seq}}(B) = c_{\mathrm{seq}} \cdot B$ is the per-sequence serving runtime overhead composed via $\rho_{\mathrm{seq}}$ (`decode.md §7.3`).
 
 **Key property.** TPOT is the *streaming rate* perceived by the user. A TPOT of 50 ms means one new token appears every 50 ms — a rate of 20 tokens/s. Human reading comprehension speed is approximately 5–15 tokens/s; TPOT below 100 ms (>10 tokens/s) is a common production SLA threshold.
 

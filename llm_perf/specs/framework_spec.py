@@ -47,11 +47,11 @@ class FrameworkSpec:
     # behind GPU compute until it exceeds the per-step GPU time.
     #
     # Gross per-step host work:
-    #   t_step_seq_gross = c_seq_us * B * 1e-6     [seconds]
+    #   t_step_seq = c_seq_us * B * 1e-6     [seconds]
     #
     # Net contribution to t_step_user (after overlap with the per-step
     # hardware window t_step_base = γ_pp · t_stage,with_kernel + t_LM):
-    #   t_step_seq = max(0, t_step_seq_gross
+    #   t_step_seq = max(0, t_step_seq
     #                     - seq_overlap_factor * t_step_base)
     #
     # Stack-dependent ranges for c_seq_us (decode.md §7.2):
@@ -62,13 +62,13 @@ class FrameworkSpec:
     # - Python-heavy (vLLM, SGLang eager): 30-60 µs/seq
     c_seq_us: float = 0.0
 
-    # Fraction of t_step_seq_gross hidden behind GPU compute. Same physics
+    # Fraction of t_step_seq hidden behind GPU compute. Same physics
     # as kernel_overlap_factor (below) but applied to host-side per-sequence
     # work rather than per-kernel dispatch. 1.0 (default) = full CUDA-
     # Graph-replay overlap — CPU runs ahead, host work hides until it
     # exceeds the per-step GPU time. 0.0 = eager-mode serialization,
     # host work always blocks. Caveat: only modulates the *hideable*
-    # portion; t_step_seq_gross remains a hard floor when it exceeds
+    # portion; t_step_seq remains a hard floor when it exceeds
     # t_step_base regardless of this knob.
     seq_overlap_factor: float = 1.0
 
