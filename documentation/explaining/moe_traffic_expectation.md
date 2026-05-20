@@ -294,9 +294,16 @@ Map the routing process to a classical probability setup:
 | $t = B \cdot k / D_{\text{exp}}$ total assignments to this rank per step | $t$ balls thrown |
 | Number of distinct experts that received ≥1 assignment | Number of distinct non-empty bins |
 
-**Uniform routing assumption**: under load-balancing-aware training, each token independently picks each expert with equal probability $1/N$. Each ball lands in any bin with equal probability $1/N$, independently of other balls.
+**Uniform independent routing assumption**: each token *independently* picks each expert with equal probability $1/N$. Each ball lands in any bin with probability $1/N$, independently of other balls.
 
-This is an approximation — real production routers have some non-uniformity (load-balancing-loss anti-correlation, expert affinity for certain token types). But it's tractable analytically and a reasonable first-order model.
+The word "independent" is doing important work here — it's what makes the derivation interesting. Independence means **the per-batch counts have variance**: even though every ball has the same per-bin probability, some bins randomly receive 0 balls and some receive 2 or 3, just by chance. Collisions can (and do) happen even when $t < N$. This is exactly the stochastic structure that produces the $(1 - 1/N)^t$ "miss probability" used in the derivation below.
+
+Be careful to distinguish two ideas that get loosely lumped under "load balancing":
+
+- **Uniform marginal probability** (this section's assumption): each token's *per-expert probability* is $1/N$. This is what aux-loss-trained top-$k$ routers approximate in production — the router learns to spread probability mass evenly across experts on average, but each token's routing decision is still made independently, so per-batch counts still have binomial variance.
+- **Perfectly load-balanced allocation** (the §11 extreme): the $t$ assignments are distributed *exactly evenly* across experts every step — zero variance, no collisions until $t \geq N$. This requires *global coordination across the batch* (the router sees all $t$ tokens together and partitions them optimally), which is what expert-choice routing or hard capacity caps achieve.
+
+This section's derivation assumes the first (uniform independent). §11 contrasts it with the second (perfectly balanced). Real production routers sit between the two — closer to uniform-independent than to perfectly-balanced, because per-token decisions can't coordinate without a batch-wide barrier.
 
 ```
                 The setup:
@@ -306,21 +313,23 @@ This is an approximation — real production routers have some non-uniformity (l
         │  │  │  │  │  │  │  │  │  │  │  │
         └──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┘
 
-        t balls (= token-expert assignments) thrown
-        uniformly at random into the bins, INDEPENDENTLY
+        Throw t balls (= token-expert assignments) uniformly
+        at random into the bins, INDEPENDENTLY.
 
-           ⚫            ⚫
-              ⚫           ⚫⚫
-                   ⚫⚫       ⚫
+        Example outcome with t = 7 throws:
+
         ┌──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┐
-        │⚫│  │  │⚫│  │⚫⚫│⚫│  │⚫│⚫│  │
+        │ *│  │  │ *│  │**│ *│  │ *│ *│  │
         └──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┘
-         ▲           ▲     ▲▲▲   ▲     ▲  ▲
-         │           │     │     │     │  │
-         touched    untouched   "touched" but multiple
-                                ━━━━ ONE weight load serves all
+          ▲        ▲    ▲▲  ▲     ▲  ▲
+          │        │    ││  │     │  │
+        touched bins: 6 distinct (out of N = 11)
+                          ▲▲ — bin received 2 balls; still
+                               ONE HBM load serves both
 
-        Want: E[number of distinct bins that received ≥1 ball]
+        Untouched bins (2, 3, 5, 8, 11): weights stay cold
+
+        Want: E[number of distinct bins with ≥ 1 ball]
 ```
 
 ---
@@ -398,15 +407,15 @@ $$\mathbb{E}[T] \approx N \cdot \frac{t}{N} = t$$
 In other words: **at small $t$, you touch approximately $t$ experts** (each token-expert pair lands in a different expert with high probability). Traffic grows **linearly in B** (since $t \propto B$).
 
 ```
-        Sparse regime (t = 4, N = 16):
-              ⚫        ⚫            ⚫
-                                ⚫
+        Sparse regime (t = 4 balls, N = 16 bins):
+
         ┌──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┐
-        │⚫│  │  │  │  │⚫│  │  │⚫│⚫│  │  │  │  │  │  │
+        │ *│  │  │  │  │ *│  │  │ *│ *│  │  │  │  │  │  │
         └──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┘
-         ▲           ▲           ▲   ▲
-         All 4 balls in distinct bins  → 4 experts touched, ~= t
-         12 experts untouched          → their weights stay cold
+          ▲              ▲        ▲  ▲
+
+        All 4 balls land in distinct bins → 4 experts touched ≈ t
+        12 experts untouched              → their weights stay cold
 ```
 
 Why physically? When you batch only a few tokens, the routing decisions almost certainly pick distinct experts. The system reads only those few experts' weights from HBM, leaving the rest cold.
@@ -424,14 +433,15 @@ $$\mathbb{E}[T] \to N$$
 **At large $t$, you touch essentially all $N$ experts.** Traffic **saturates at the full per-rank MoE footprint** = $N \cdot 3HI_{\text{moe}} \cdot b$ bytes.
 
 ```
-        Saturated regime (t = 64, N = 16):
-        ⚫⚫⚫⚫ ⚫⚫⚫  ⚫⚫⚫⚫⚫ ⚫⚫⚫⚫⚫⚫ ⚫⚫⚫⚫⚫⚫⚫⚫⚫
-         ⚫⚫⚫⚫    ⚫⚫⚫⚫⚫    ⚫⚫⚫     ⚫⚫⚫⚫⚫⚫⚫⚫
+        Saturated regime (t = 64 balls, N = 16 bins, average 4 balls per bin):
+
         ┌──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┐
-        │⚫⚫│⚫⚫│⚫⚫│⚫⚫│⚫⚫│⚫⚫│⚫⚫│⚫⚫│⚫⚫│⚫⚫│⚫⚫│⚫⚫│⚫⚫│⚫⚫│⚫⚫│⚫⚫│
+        │**│**│**│**│**│**│**│**│**│**│**│**│**│**│**│**│
+        │**│**│**│**│**│**│**│**│**│**│**│**│**│**│**│**│
         └──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┘
-         Every bin touched at least once → 16 experts touched ≈ N
-         Extra balls don't add new expert loads → traffic saturated
+
+        Every bin touched at least once → 16 experts touched ≈ N
+        Extra balls don't add new expert loads → traffic saturated
 ```
 
 Why physically? When you batch many tokens, the law of large numbers takes over. With high probability every expert gets at least one token, so every expert's weights must be loaded. Beyond saturation, adding more tokens doesn't add new weight loads — they reuse the experts already loaded. Total per-step weight traffic is **constant in B** past this point.
@@ -457,29 +467,29 @@ $$B^{\text{moe-knee}} = \frac{N_{\text{exp}}}{k}$$
 Plotting $\mathbb{E}[T] / N$ vs $t/N$ shows the universal shape:
 
 ```
-          1.0 ┤ saturation asymptote: E[T] → N as t → ∞
-              │              ◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦
-              │       ◦◦◦◦◦◦◦
-              │   ◦◦◦◦                ← KNEE around t/N ≈ 1
-   E[T]/N    │ ◦◦
-              │◦
-          0.5 ┤◦         "soft" transition: smooth curve, no
-              ◦          sharp kink — pure exponential decay
-              ◦          of the miss probability
-              ◦
-              │◦         sparse-regime tangent: y = t/N (linear)
-          0.0 │◦
-              └─────────────────────────────────────────────────
-              0          1            2            3            4
-                                    t / N
+   E[T]/N
 
-      Specific values:
-        t/N = 0.1   →  E[T]/N ≈ 0.095   (very close to t/N: linear)
-        t/N = 0.5   →  E[T]/N ≈ 0.393
-        t/N = 1.0   →  E[T]/N ≈ 0.632   (the knee — 1 - 1/e)
-        t/N = 2.0   →  E[T]/N ≈ 0.865
-        t/N = 3.0   →  E[T]/N ≈ 0.950
-        t/N = 5.0   →  E[T]/N ≈ 0.993
+          1.0 ┤              ◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦  ← saturation: E[T]/N → 1
+              │       ◦◦◦◦◦◦◦
+              │   ◦◦◦◦                ← knee around t/N ≈ 1 (y ≈ 0.632)
+              │ ◦◦
+              │◦
+          0.5 ┤◦
+              │◦         smooth curve (no sharp kink) — pure
+              │◦         exponential decay of miss probability (1 - 1/N)^t
+              │◦
+              │◦         sparse-regime tangent: y = t/N (linear at small t)
+          0.0 ┼◦
+              └─────────────────────────────────────────────────▶ t/N
+              0          1            2            3            4
+
+   Specific values of E[T]/N:
+     t/N = 0.1   →  0.095   (very close to t/N: linear regime)
+     t/N = 0.5   →  0.393
+     t/N = 1.0   →  0.632   (the knee — exactly 1 - 1/e)
+     t/N = 2.0   →  0.865
+     t/N = 3.0   →  0.950
+     t/N = 5.0   →  0.993
 ```
 
 This is the standard "coupon collector" curve. At $t/N = 1$, you've touched $1 - 1/e \approx 63\%$ of bins. To touch 95% of bins, you need $t/N \approx 3$. To touch 99.3%, $t/N \approx 5$.
@@ -520,27 +530,24 @@ Key observations:
 ## 10. Expectation curve vs naive footprint, side-by-side
 
 ```
-   T_θ^moe                                   M_θ^moe (full footprint)
-       │                                       ━━━━━━━━━━━━━━━━━━━━━━━━━
-       │  Naive:           ━━━━━━━━━━━━━━━━━━━━ "always load everything"
-       │  always = M_θ     ↑                    (correct only at saturation)
-       │                   │
-       │                   │
-       │                   │
-       │  Expectation      │
-       │  formula          │      ◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦  ← saturates
-       │  N·(1−(1−1/N)^t): │ ◦◦◦◦◦                            here at M_θ
-       │                   ◦◦                ↑
-       │              ◦◦◦◦   ◦              the knee
-       │         ◦◦◦◦  ◦                    around B·k ≈ N_exp
-       │     ◦◦◦◦
-       │ ◦◦◦◦                ← linear-ish at small B (touched ≈ t)
-       │◦      ← naive over-counts by N/touched ≈ 64× at B=1 in this config
-       │
-       └─────────────────────────────────────────────────────────────
-       0                                              B (active sequences)
-       └────────────┬────────────┴───────────────────┘
-              sparse / linear      saturated / constant
+   T_θ^moe
+
+   M_θ^moe ┤━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  ← naive: flat at M_θ
+           │                                                       (always loads all)
+           │
+           │                              ◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦
+           │                       ◦◦◦◦◦◦
+           │                ◦◦◦◦◦◦                                 ← expectation curve
+           │           ◦◦◦◦                                          approaches M_θ
+           │        ◦◦◦                                              asymptotically
+           │      ◦◦         ← knee at B·k ≈ N_exp
+           │    ◦◦
+           │  ◦◦              linear at small B (touched ≈ B·k)
+           │ ◦
+         0 ┼◦──────────────────────────────────────────────────▶ B
+           0          knee=N_exp/k                              (active sequences)
+
+   At B=1, naive over-counts traffic by ~N/k (≈ 64× for N=128, k=2).
 ```
 
 The visible Pareto kink is exactly this regime change. Under the expectation formula, traffic ramps up from $\sim 0$ to $M_\theta^{\text{moe}}$ across $B \in [1, \sim N_{\text{exp}}/k]$ — that ramp creates a visible curvature in TPOT (and hence in the Pareto frontier). Under the naive footprint model, traffic is flat at $M_\theta^{\text{moe}}$ for every B and TPOT has no MoE-driven knee — a smoother but physically incorrect curve.
@@ -549,7 +556,9 @@ The visible Pareto kink is exactly this regime change. Under the expectation for
 
 ## 11. Comparison to the load-balanced extreme
 
-The formula assumes **independent uniform routing**. The other extreme is **perfectly load-balanced routing** — every expert receives exactly $\lceil t / N \rceil$ tokens (or as close as possible). This is what an idealized router would do if it could see all $t$ assignments and partition them optimally.
+The §6 formula assumes **uniform independent routing** — uniform per-token probability with independent draws, so per-batch counts have binomial variance and collisions can occur even at $t < N$ (see the framing in §5). The opposite extreme is **perfectly load-balanced routing**: the $t$ assignments are partitioned *exactly evenly* across experts every step — zero variance, no collisions until $t \geq N$. This requires global coordination across the batch (the router sees all $t$ tokens together and assigns them optimally), which is what expert-choice routing or hard capacity caps achieve.
+
+So the difference between "uniform" and "load-balanced" is **variance**, not the average. Both have the same marginal probability $1/N$ per expert. Uniform leaves the per-batch counts random; load-balanced flattens them deterministically.
 
 Load-balanced touched count:
 - If $t < N$: touched = $t$ (each token to a distinct expert, no collisions)
@@ -559,21 +568,28 @@ Comparing the two curves:
 
 ```
    E[touched] / N
-       │
-       │     load-balanced:  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   1.0 ┤              ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-       │           ◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦
-       │       ◦◦◦◦       uniform (this formula): smooth, asymptotic
-       │     ◦◦              load-balanced: piecewise linear,
-   0.5 ┤    ◦                                 hard knee at t/N = 1
-       │   ◦
-       │  ◦  ← both curves identical in the sparse regime
-       │ ◦      (t small ⇒ collision-free, hits every distinct bin)
-       │◦
-   0.0 │◦
-       └─────────────────────────────────────────────────────────────
-       0           1           2           3           4           5
-                                     t / N
+
+       1.0 ┤           ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  ← both → 1
+           │          /       ◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦◦
+           │         /     ◦◦◦
+           │        /   ◦◦◦                ← uniform (this formula):
+           │       /  ◦◦                     asymptotic to 1
+           │      / ◦◦
+       0.5 ┤     /◦◦
+           │    /◦                          load-balanced (━): linear
+           │   /◦                            up to t/N=1, then HARD
+           │  /◦                              knee, flat at 1
+           │ /◦
+           │/◦                ← both match in sparse regime
+       0.0 ┼◦──────────────────────────────────────────────────────▶ t/N
+           0           1            2            3            4
+
+   ━━━ Load-balanced (perfect):  y = min(t/N, 1) — linear, then flat
+   ◦◦◦ Uniform (this formula):   y = 1 - (1 - 1/N)^t — smooth, asymptotic
+
+   Match exactly at small t (collision-free). In the transition zone (t ~ N),
+   uniform stays BELOW load-balanced (collisions cause balls to land in
+   already-touched bins). Both → 1 as t → ∞.
 ```
 
 **The two curves match in the sparse regime** (no collisions either way) and **converge at large t** (saturation). They differ only in the transition zone — uniform has a smooth knee around $t/N = 1$; load-balanced has a sharp corner.
