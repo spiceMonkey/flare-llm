@@ -17,3 +17,6 @@ documentation/explaining/
 notebooks/*.ipynb
 !notebooks/quickstart.ipynb
 !notebooks/pareto_basic.ipynb
+
+# HuggingFace raw configs — kept local (conversion inputs, not library data)
+archives/
