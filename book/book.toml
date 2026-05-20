@@ -1,7 +1,7 @@
 [book]
-title = "FLARE Modeling"
+title = "Decode Modeling"
 authors = ["Yue Lu"]
-description = "First-principles analytical derivations for LLM inference performance modeling on a cluster."
+description = "First-principles analytical derivation of decode-phase latency, throughput, and memory bandwidth for LLM inference on a cluster."
 language = "en"
 src = "../documentation/modeling"
 

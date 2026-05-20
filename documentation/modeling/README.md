@@ -1,13 +1,14 @@
-# FLARE Modeling
+# Decode Modeling
 
 **Author:** Yue Lu
 
-First-principles analytical derivations for LLM inference performance modeling on a cluster. The chapters in this book are intentionally **implementation-independent** — they describe the cost model, the assumptions, and the symbol conventions; the FLARE code in [`spiceMonkey/flare-llm`](https://github.com/spiceMonkey/flare-llm) is one possible realization.
+First-principles analytical derivation of decode-phase latency, throughput, and memory bandwidth for LLM inference on a cluster. The chapters are intentionally **implementation-independent** — they describe the cost model, the assumptions, and the symbol conventions; the FLARE code in [`spiceMonkey/flare-llm`](https://github.com/spiceMonkey/flare-llm) is one possible realization.
 
-**Where to start.** [Decode and TPOT](decode.md) is the centerpiece — every other chapter is either a prerequisite (notation, attention variants, memory hierarchy) or a downstream composition (prefill, end-to-end, SLO). If you only have time for one chapter, read that one.
+**Where to start.** [Decode and TPOT](decode.md) is the centerpiece. The other two chapters cover the supporting physics it references:
 
-**Reading paths.**
+- [Attention variants](attention.md) — MHA / GQA / MQA / MLA, what each costs per token-per-layer
+- [Memory hierarchy](sram.md) — multi-tier roofline that generalizes the legacy single-HBM model to SRAM-augmented and 3D-stacked devices
 
-- **Decode roofline (the main flow):** Notation → Decode → Attention variants → Memory hierarchy → Serving framework overhead.
-- **Prefill and end-to-end:** Decode → Prefill → E2E latency metrics → SLO feasibility.
-- **Collective communication (workload-agnostic):** see the dedicated tutorial at [spicemonkey.github.io/collective-comm](https://spicemonkey.github.io/collective-comm/). The local `collectives/` subdirectory under `documentation/modeling/` is an auto-synced mirror of that source for offline reference.
+For the collective-communication cost model that decode references throughout (α–β cost form, ring / tree / hierarchical algorithms, topology composition, in-network reduction), see the dedicated tutorial at [spicemonkey.github.io/collective-comm](https://spicemonkey.github.io/collective-comm/) — linked from the [Collective Communication](collective_comm.md) chapter.
+
+**Scope.** This book is intentionally focused. Prefill, end-to-end metrics, SLO feasibility, KV paging, and serving-framework overhead each have their own derivation docs in the [`documentation/modeling/`](https://github.com/spiceMonkey/flare-llm/tree/main/documentation/modeling) tree on GitHub, but they're not in this book yet.
