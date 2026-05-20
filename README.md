@@ -263,8 +263,6 @@ The joint feasibility region $\mathcal{F}_\mathrm{SLO}$, the dynamic-stability c
     ├── specs/                        — LlmModelSpec, SystemSpec (DeviceSpec + MemoryTierSpec + FabricSpec + CrossbarTier/TorusTier/MeshTier), PartitionSpec, TuningSpec (+ MemoryPlacementSpec), FrameworkSpec, OverheadSpec, DisaggSpec
     ├── io/                           — JSON loaders + list helpers per schema (load_{model,system,tuner,framework}_from_db)
     └── utils/                        — constants, equations, HF adapter, DRAM3D helper, plotting, partition_enum
-
-archives/hf/                         — raw HuggingFace configs (conversion inputs for scripts/convert_hf_model.py; not loaded by the library)
 ```
 
 ---
