@@ -25,9 +25,11 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install mdBook
+        # Pinned to the 0.4.x line — mdbook 0.5.x changed the
+        # RenderContext schema and breaks mdbook-katex's stdin parser.
         uses: peaceiris/actions-mdbook@v2
         with:
-          mdbook-version: 'latest'
+          mdbook-version: '0.4.40'
 
       - name: Install mdbook-katex
         uses: taiki-e/install-action@v2
