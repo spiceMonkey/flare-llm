@@ -6,7 +6,7 @@ A five-stage roofline pipeline (memory → FLOPs → traffic → comm → latenc
 
 **Four-pillar composition** (`model × system × partition × framework`), parameterized by a workload point (sequence length, batch size). The split keeps "which deployment shape" (partition) cleanly separated from "which serving stack runs it" (framework), so a single (model, system, partition) can be evaluated under multiple stacks (TRT-LLM, Dynamo+TRT, SGLang, vLLM, …) by swapping just the framework JSON.
 
-> A separate paper will cover the full derivation. This README is a navigation guide; the methodology lives in [`documentation/modeling/`](documentation/modeling/), starting with [`decode.md`](documentation/modeling/decode.md).
+This README is a navigation guide; the methodology lives in [`documentation/modeling/`](documentation/modeling/), starting with [`decode.md`](documentation/modeling/decode.md).
 
 ---
 
