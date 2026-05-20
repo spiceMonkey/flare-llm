@@ -22,15 +22,9 @@
 
 # Collective Communication
 
-- [Summary](collectives/00_summary.md)
-- [Algorithms](collectives/01_collective_algorithms.md)
-- [Topology mapping](collectives/02_topology_mapping.md)
-- [Hierarchical topologies](collectives/03_hierarchical_topologies.md)
-- [In-network collectives](collectives/04_in_network_collectives.md)
-- [Contention and congestion](collectives/05_contention_and_congestion.md)
+- [Collective Communication](collective_comm.md)
 
 # Reference
 
 - [Notation](notation.md)
 - [Bibliography](references.md)
-- [Collective-comm bibliography](collectives/references.md)

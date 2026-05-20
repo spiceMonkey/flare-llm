@@ -10,4 +10,4 @@ First-principles analytical derivations for LLM inference performance modeling o
 
 - **Decode roofline (the main flow):** Notation → Decode → Attention variants → Memory hierarchy → Serving framework overhead.
 - **Prefill and end-to-end:** Decode → Prefill → E2E latency metrics → SLO feasibility.
-- **Collective communication (workload-agnostic):** the [Collective Communication](collectives/00_summary.md) subseries mirrors [`spiceMonkey/collective-comm`](https://github.com/spiceMonkey/collective-comm) and can be read independently.
+- **Collective communication (workload-agnostic):** see the dedicated tutorial at [spicemonkey.github.io/collective-comm](https://spicemonkey.github.io/collective-comm/). The local `collectives/` subdirectory under `documentation/modeling/` is an auto-synced mirror of that source for offline reference.
