@@ -28,7 +28,7 @@ The diagram above shows the components of an LLM inference cluster that `llm_per
 
 The **scale-up/out network** within and between clusters carries collective traffic for tensor parallelism (TP), expert parallelism (EP), and sequence parallelism (SP). The collective cost model accounts for effective per-port bandwidth under aggregate capacity constraints, latency ($\alpha$), and the algorithm choice (ring vs. DBT, dim-decomposed torus, hierarchical RS → sub-AR → AG, plus in-network reduction where the fabric supports it). See [`modeling/collectives/`](documentation/modeling/collectives/) (the upstream-synced explainer subseries — start with `00_summary.md`) and [`core/primitives/collective_cost.py`](llm_perf/core/primitives/collective_cost.py).
 
-**Hierarchical scale-up/out.** Each parallelism domain is described by an ordered list of switching tiers (innermost first), each with its own radix *P*<sub>i</sub>, per-port bandwidth *BW*<sub>i</sub>, and latency *α*<sub>i</sub>. A collective over *G* ranks crosses the minimum number of tiers needed to reach all ranks; multi-tier all-reduce decomposes as inner reduce-scatter → outer sub-AR → inner all-gather, with payload telescoping shrinking the cross-tier traffic. A single-tier list reproduces the legacy flat (*α*<sub>role</sub>, *BW*<sub>role</sub>) model exactly; multi-tier configurations (e.g. NVL72 intra-rack NVSwitch + inter-rack aggregation; d-Matrix `pair_mesh → pcie_server → ethernet_rack` for scale-out across servers) are supported via a `"tiers": [...]` JSON form. See [`modeling/collectives/03_hierarchical_topologies.md`](documentation/modeling/collectives/03_hierarchical_topologies.md) §2 "Composition rules for hierarchical collectives" and `notebooks/pareto_vs_scale_up_tier.ipynb` for a worked example.
+**Hierarchical scale-up/out.** Each parallelism domain is described by an ordered list of switching tiers (innermost first), each with its own radix *P*<sub>i</sub>, per-port bandwidth *BW*<sub>i</sub>, and latency *α*<sub>i</sub>. A collective over *G* ranks crosses the minimum number of tiers needed to reach all ranks; multi-tier all-reduce decomposes as inner reduce-scatter → outer sub-AR → inner all-gather, with payload telescoping shrinking the cross-tier traffic. A single-tier list reproduces the legacy flat (*α*<sub>role</sub>, *BW*<sub>role</sub>) model exactly; multi-tier configurations (e.g. NVL72 intra-rack NVSwitch + inter-rack aggregation; d-Matrix `pair_mesh → pcie_server → ethernet_rack` for scale-out across servers) are supported via a `"tiers": [...]` JSON form. See [`modeling/collectives/03_hierarchical_topologies.md`](documentation/modeling/collectives/03_hierarchical_topologies.md) §2 "Composition rules for hierarchical collectives".
 
 ---
 
@@ -171,7 +171,7 @@ Anchor calibrations (from `benchmark/validate/*` against InferenceX measurements
 - `sglang` / `vllm`: `c_seq=40` µs/seq with `ρ_seq=0` (eager-mode Python interpreter wraps each per-seq decision, breaks CPU-runs-ahead) and `ρ_kernel=0.3` (limited dispatch overlap from interpreter stalls).
 - `c_orch=0` everywhere by default — the per-step orchestration floor is opt-in. The Kimi-K2.5/Dynamo+vLLM §5 panel-(d) residual ~10 ms gap is the primary empirical motivator pending calibration.
 
-The kernel-launch tax `t_stage,kernel = τ_launch · K(partition)` produces visible Pareto cliffs at high τ_launch (eager-mode stacks) — see [`pareto_vs_kernel_launch.ipynb`](notebooks/pareto_vs_kernel_launch.ipynb). Docs: [`decode.md §7.1 / §7.3`](documentation/modeling/decode.md), [`framework.md`](documentation/modeling/framework.md).
+The kernel-launch tax `t_stage,kernel = τ_launch · K(partition)` produces visible Pareto cliffs at high τ_launch (eager-mode stacks). Docs: [`decode.md §7.1 / §7.3`](documentation/modeling/decode.md), [`framework.md`](documentation/modeling/framework.md).
 
 ### KV handoff & disaggregation
 
@@ -239,20 +239,19 @@ The joint feasibility region $\mathcal{F}_\mathrm{SLO}$, the dynamic-stability c
 .
 ├── README.md                         — this file
 ├── assets/                           — PNGs embedded in README + notebooks
-├── notebooks/                        — interactive tutorial + case studies (Pareto + TTFT sweeps)
+├── notebooks/                        — `quickstart.ipynb` (tutorial) + `pareto_basic.ipynb` (Pareto-frontier case study)
 ├── documentation/
-│   ├── modeling/                     — methodology derivations
-│   │   ├── decode.md                 — decode roofline (compute + multi-tier mem + comm + SW + LM + bubble)
-│   │   ├── prefill.md                — prefill latency (incl. chunked + LM head)
-│   │   ├── e2e.md                    — TTFT, TPOT, throughput, interactivity, goodput, Pareto
-│   │   ├── slo.md                    — SLO-driven partition feasibility (B_max, PP_max, goodput-optimal sweep)
-│   │   ├── kv.md                     — paged-attention KV bookkeeping
-│   │   ├── framework.md              — CPU-side serving overhead (t_tok, t_sched, t_detok)
-│   │   ├── notation.md               — canonical symbol reference (synced with decode/prefill/e2e)
-│   │   ├── sram.md, dram3d.md        — multi-tier memory + 3D-DRAM bandwidth derivations
-│   │   ├── references.md             — bibliography
-│   │   └── collectives/              — upstream-synced explainer subseries (00 cheatsheet through 05 contention)
-│   └── explaining/                   — design-intent walkthroughs (PP/TP/EP scaling, kernel-launch, pipeline bubble, FLOPS-doesnt-help, scale-up I/O break-even, …)
+│   └── modeling/                     — methodology derivations
+│       ├── decode.md                 — decode roofline (compute + multi-tier mem + comm + SW + LM + bubble)
+│       ├── prefill.md                — prefill latency (incl. chunked + LM head)
+│       ├── e2e.md                    — TTFT, TPOT, throughput, interactivity, goodput, Pareto
+│       ├── slo.md                    — SLO-driven partition feasibility (B_max, PP_max, goodput-optimal sweep)
+│       ├── kv.md                     — paged-attention KV bookkeeping
+│       ├── framework.md              — CPU-side serving overhead (t_tok, t_sched, t_detok)
+│       ├── notation.md               — canonical symbol reference (synced with decode/prefill/e2e)
+│       ├── sram.md, dram3d.md        — multi-tier memory + 3D-DRAM bandwidth derivations
+│       ├── references.md             — bibliography
+│       └── collectives/              — upstream-synced explainer subseries (00 cheatsheet through 05 contention)
 ├── sandbox/                          — one-off experiments + ad-hoc Python sweeps (not part of supported tooling)
 ├── scripts/                          — supported CLI tools
 │   └── convert_hf_model.py           — HF config.json → llm_perf model JSON converter
@@ -297,7 +296,7 @@ The `llm_perf` package is organized as four concentric layers — each one pure,
 
 **1. Specs (`llm_perf/specs/`)** — typed dataclasses that describe the problem. `LlmModelSpec` + optional `MoESpec` fix the architecture; `SystemSpec` + nested `DeviceSpec` (+ optional `tiers: List[MemoryTierSpec]` or top-level `sram_capacity_MB` / `sram_bandwidth_TBps` for SRAM-augmented devices) + `FabricSpec` + tier classes (`CrossbarTier`, `TorusTier`, `MeshTier`, each with optional `inc: "nvls" | "sharp" | "hw_a2a"` capability disclosure) fix the hardware and its fabric-chain topology; `PartitionSpec` is strictly the 4 shard ints (PP / TP / EP / SP); `TuningSpec` is strictly workload knobs (`S_input`, `S_decode`, `B_prefill`, `B_decode`, `chunk_size`, attention/MLP flash gains, plus a `MemoryPlacementSpec` that decides which memory tier holds weights vs KV); **`FrameworkSpec`** carries every stack-axis decision (`attention_mode` `"tp"`/`"dp"`, `tp_ep_layout` `"orthogonal"`/`"co_located"`, per-phase algorithm choices `tp/ep_algorithm_decode/prefill ∈ {ring, tree, auto}`, `inc_enabled` toggle, per-layer collective counts `n_TP/EP/SP_collectives`, `kernel_launch_us`, `kernel_overlap_factor` ρ_kernel, `comm_overlap_factor` ρ_comm, `seq_overlap_factor` ρ_seq, MLA mode, MoE A2A pattern, `c_orch_us`, `c_seq_us`); `OverheadSpec` and `DisaggSpec` add framework overheads and inter-cluster KV transfer. No behaviour — only data.
 
-> **System describes capability; framework describes selection.** A fabric tier with `inc: "nvls"` advertises that the silicon supports NVLink SHARP; `FrameworkSpec.inc_enabled` decides whether the runtime engages it. The benchmark validators set `inc_enabled=False` because the InferenceX measurements they calibrate against were not captured with SHARP-class INC engaged; INC-study notebooks (`pareto_collective_algorithms`, `pareto_vs_kernel_launch`, `pareto_vs_mem_alpha*`) keep the default `inc_enabled=True`. Cross-spec invariants (e.g. `tp_ep_layout="co_located"` forces `attention_mode="dp"` and `TP == EP`) are enforced by `core/primitives/sharding_factors.compose_check(partition, framework)` on calculator entry.
+> **System describes capability; framework describes selection.** A fabric tier with `inc: "nvls"` advertises that the silicon supports NVLink SHARP; `FrameworkSpec.inc_enabled` decides whether the runtime engages it. The benchmark validators set `inc_enabled=False` because the InferenceX measurements they calibrate against were not captured with SHARP-class INC engaged; INC studies keep the default `inc_enabled=True`. Cross-spec invariants (e.g. `tp_ep_layout="co_located"` forces `attention_mode="dp"` and `TP == EP`) are enforced by `core/primitives/sharding_factors.compose_check(partition, framework)` on calculator entry.
 
 **2. Core primitives (`llm_perf/core/primitives/`)** — phase-agnostic physics reused by both decode and prefill. Four modules, each a pure function of specs only: `weight_footprint.py` (dense / MoE / embedding bytes), `kv_footprint.py` (KV bytes for `n_tokens` context), `linear_flops.py` (proj + FFN + MoE-router FLOPs per token, attention excluded), and `collective_cost.py` (α-β cost formulas for p2p-hop, ring/tree all-reduce, ring/tree MoE all-to-all, ring all-gather, plus the per-stage aggregator). Everything downstream composes these.
 
@@ -366,13 +365,13 @@ print(f"tok/s/GPU  = {e2e.throughput_per_gpu:.1f}")
 
 ---
 
-## Case Studies
+## Case Study
 
-Each notebook is a self-contained design question with a plot and a short takeaway. They're meant as reading material — a reader can step through the cells to understand how a specific decision (partition, I/O BW, HBM BW, overhead, chunk size, disagg) shapes the end-to-end metric that matters.
+The case study below is a self-contained design question with a plot and a short takeaway. Step through the cells to see how partition shape × batch shape the Pareto frontier in (interactivity, throughput/GPU) space.
 
-The case studies use **GPT-1.8T MoE @ FP4** on **GB200-class devices** (NVL72 baseline; cluster-size study extends past 72 GPUs hypothetically). The TPU-vs-GB200 study is the one exception — it compares a TPU v5p pod against GB200 NVL576 to isolate fabric-topology and AR-algorithm effects.
+It uses **GPT-1.8T MoE @ FP4** on **GB200 NVL72**.
 
-> **Operational PP cap.** All `pareto_*` notebooks pin **`PP_MAX = 8`** in cell #5 — the typical PP-capped operational regime where pipeline bubble cost / latency budget / microbatch-floor make deeper PP impractical. Raise `PP_MAX` in any notebook to study the unbounded-PP frontier (winners shift toward `PP=32 TP=2`-style shapes that amortize attention more efficiently at the cost of longer pipelines).
+> **Operational PP cap.** The notebook pins **`PP_MAX = 8`** in cell #5 — the typical PP-capped operational regime where pipeline bubble cost / latency budget / microbatch-floor make deeper PP impractical. Raise `PP_MAX` to study the unbounded-PP frontier (winners shift toward `PP=32 TP=2`-style shapes that amortize attention more efficiently at the cost of longer pipelines).
 
 ### `notebooks/pareto_basic.ipynb` — the full exploration space behind the frontier
 
@@ -382,122 +381,9 @@ The case studies use **GPT-1.8T MoE @ FP4** on **GB200-class devices** (NVL72 ba
 
 Enumerates every valid `(PP, TP, EP, SP)` partition, sweeps `B` from 1 to the KV-paging max per partition, then extracts the upper-right envelope in (interactivity, throughput/GPU) space. Left panel shows the full cloud with the frontier overlaid; right panel colors the same cloud by pipeline parallelism (PP) so the regime segmentation is visible.
 
-**Headline:** at baseline GB200 NVL72 under the operational `PP_MAX = 8` cap (consistent across the entire `pareto_*` notebook suite), **260 valid partitions → 37 frontier points**. Of those 37, `PP=8 TP=8 EP=1 SP=1` claims 33 (the dominant winner — PP=8 amortizes weight reads as much as the cap allows, TP=8 is the largest group that fits in a single NVL5 rank slot per AR), and `PP=6 TP=4 EP=1 SP=1` rounds out the high-interactivity corner with 4. The §8 latency-breakdown table dumps per-collective costs ($t_\mathrm{compute}$, $t_\mathrm{mem}$, $t_\mathrm{TP}$, $t_\mathrm{SW}$, $t_\mathrm{LM}$, $\gamma_\mathrm{pp}$) for every frontier point so you can read the regime directly. The later notebooks (`pareto_vs_io`, `pareto_vs_mem`, `pareto_vs_overhead`) re-run this exact enumeration once per hardware/overhead anchor and plot only the frontier — this notebook is what's underneath.
+**Headline:** at baseline GB200 NVL72 under the operational `PP_MAX = 8` cap, **260 valid partitions → 37 frontier points**. Of those 37, `PP=8 TP=8 EP=1 SP=1` claims 33 (the dominant winner — PP=8 amortizes weight reads as much as the cap allows, TP=8 is the largest group that fits in a single NVL5 rank slot per AR), and `PP=6 TP=4 EP=1 SP=1` rounds out the high-interactivity corner with 4. The §8 latency-breakdown table dumps per-collective costs ($t_\mathrm{compute}$, $t_\mathrm{mem}$, $t_\mathrm{TP}$, $t_\mathrm{SW}$, $t_\mathrm{LM}$, $\gamma_\mathrm{pp}$) for every frontier point so you can read the regime directly.
 
 To compare against the unbounded-PP regime (PP up to 32 — the `pareto_basic` historical setup), raise `PP_MAX` in cell #5; winners then shift toward `PP=32 TP=2`-style shapes that amortize attention more efficiently at the cost of longer pipelines.
-
-### `notebooks/pareto_collective_algorithms.ipynb` — worst-case vs optimized SW vs INC on the same hardware
-
-![decode Pareto: 3 collective-algorithm modes on GB200 NVL576 (NVLS + Quantum SHARP)](assets/pareto_collective_algorithms.png)
-
-*Question: how much does the choice of collective algorithm move the decode Pareto frontier on a fixed cluster?*
-
-Three frontiers, same model + system, only the `FrameworkSpec` algorithm fields and `inc_enabled` flag differ:
-
-1. **Worst-case SW** — pin every collective to ring; `inc_enabled=False`. The do-nothing baseline (red).
-2. **Optimized SW** — `tp/ep_algorithm_*='auto'` + `optimize_collective_algorithms` resolves per (phase × collective × M); `inc_enabled=False`. Picks DBT vs ring per cell (orange).
-3. **INC** — `auto` fields + `inc_enabled=True`. Optimizer short-circuits to NVLS / Quantum SHARP for AR / AG where the fabric supports it (EP A2A still on SW pairwise — sharp_class doesn't accelerate A2A; would need a `hw_a2a` tier) (green).
-
-System: `gb200.multibox` loaded with `num_devices=576` (8 racks × 72 GPUs; NVLink5 + IB, NVLS + Quantum SHARP declared on both tiers).
-
-**Headline at the corners** (under the operational `PP_MAX = 8` cap; cluster spans tier-1 IB so collectives can cross the rack boundary):
-
-| Corner | Mode | Partition | B | TPOT (ms) | tput/GPU |
-|---|---|---|---|---|---|
-| high interactivity | worst | `PP=8 TP=8 EP=8 SP=1` | 8 | 0.70 | 19.7 |
-| | sw_opt | `PP=8 TP=16 EP=4 SP=1` | 8 | 0.47 | 29.8 |
-| | inc | `PP=8 TP=16 EP=4 SP=1` | 8 | 0.42 | 33.2 |
-| mid frontier | worst | `PP=8 TP=16 EP=1 SP=1` | 560 | 3.09 | 1259 |
-| | sw_opt | `PP=6 TP=16 EP=1 SP=1` | 534 | 3.35 | 1660 |
-| | inc | `PP=6 TP=16 EP=1 SP=1` | 534 | 3.21 | 1735 |
-| high throughput | worst | `PP=8 TP=8 EP=1 SP=1` | 4096 | 24.86 | 2575 |
-| | sw_opt | `PP=8 TP=8 EP=1 SP=1` | 4477 | 25.72 | 2720 |
-| | inc | `PP=8 TP=8 EP=1 SP=1` | 4477 | 25.64 | 2728 |
-
-Under the PP=8 cap, the optimizer can no longer amortize via deep PP, so it activates **EP-sharding** (EP=4/8 winners emerge at the high-interactivity corner). The cheaper AR cost from `sw_opt` and `inc` lets the optimizer afford TP=16 + EP=4 — sacrificing throughput for lower TPOT (0.42 ms with INC vs 0.70 ms for `worst`). Mid- and high-throughput corners converge as compute starts dominating comm at large B. With `TP=16` exceeding the 72-port NVL5 inner tier when combined with EP=4 (TP·EP = 64), the multi-tier hierarchical AR / AG branch begins firing, and INC's lift is both the `n_α` collapse + BW-eff doubling on AR plus the cross-tier RS → sub-AR → AG payload-telescoping savings. EP A2A still uses the SW path on `sharp_class` fabrics.
-
-### `notebooks/pareto_vs_io.ipynb` — decode Pareto under scale-up I/O provisioning
-
-![decode Pareto vs. scale-up I/O](assets/pareto_vs_io.png)
-
-*Question: how does the partition-optimal Pareto frontier move as you vary scale-up NVLink bandwidth and α?*
-
-Sweeps BW (`[1×, 2×, 10×, 20×]` × baseline = 900 GB/s → 18 TB/s, well past HBM-class scale-up) and α (`[1×, 0.5×, 0.25×, 0×]` × baseline = 0.5 μs → complete elimination) as two panels. Enumerates all valid (PP, TP, EP, SP) partitions under the PP=8 cap, finds the upper-right envelope in (interactivity, throughput/GPU) space, annotates winners.
-
-**Headline:** **BW alone — even at 20× current — cannot trigger a partition-shape change.** `PP=8 TP=8 EP=1 SP=1` exclusively wins all 36 frontier corners at every BW from 1× through 20×; the optimizer's bias toward smaller TP outweighs the per-device weight savings of TP=16 even when scale-up BW is HBM-class. **α elimination alone partially activates wide-TP** — the α sweep is flat through 0.25×, but at α=0 (complete elimination) `PP=4 TP=16 EP=1 SP=1` emerges (6 corners) because the per-collective `2(G−1)·α` cost at G=16 is the structural latency floor. The ideal-I/O reference (BW→∞, α→0, ρ=1) wins `PP=4 TP=16` at 39/40 corners — getting *all three* knobs simultaneously is what fully shifts the frontier. **BW boost is necessary but not sufficient** for wide-TP wins: it makes those shapes affordable in absolute terms (β-side `t_comm` shrinks proportionally), but α reduction or ρ overlap improvement is also required to actually flip the winner.
-
-For the closed-form theory behind this — and a sandbox script that computes the BW threshold $BW^* (B) = b_p(B) / (f \cdot t_\mathrm{mem}(B) - a_p \cdot \alpha)$ for any (model, partition, B) — see [`documentation/explaining/scale_up_io_break_even.md`](documentation/explaining/scale_up_io_break_even.md) and the companion [`notebooks/scale_up_io_bw_target.ipynb`](notebooks/scale_up_io_bw_target.ipynb).
-
-### `notebooks/pareto_vs_mem.ipynb` — decode Pareto under HBM-BW scaling
-
-![decode Pareto vs. HBM bandwidth](assets/pareto_vs_mem.png)
-
-*Question: as HBM bandwidth grows (DRAM-3D / stacked-memory trajectory), which partition wins?*
-
-Sweeps HBM BW from 1× (8 TB/s, baseline) to 4× (32 TB/s) at fixed scale-up I/O and FLOPS.
-
-**Headline:** under the PP=8 cap, the partition shape **evolves with HBM** (in contrast to the unbounded-PP regime where TP stays pinned at 2). With abundant HBM, the optimizer accepts a smaller TP group (cheaper per-collective AR) and reaches for EP-sharding to free up SRAM headroom.
-
-| HBM BW | Dominant winner (×points on frontier) |
-|---|---|
-| 1× (8 TB/s)  | `PP=8 TP=8 EP=1 SP=1` × 33 |
-| 2× (16 TB/s) | `PP=8 TP=8 EP=1` × 28; `PP=8 TP=4 EP=2` × 3 emerges |
-| 4× (32 TB/s) | `PP=8 TP=8 EP=1` × 18; `PP=8 TP=4 EP=2` × 9; `PP=8 TP=4 EP=1` × 8 |
-| ideal (∞)   | `PP=8 TP=1 EP=1` × 10; `PP=6 TP=1 EP=1` × 8 — TP collective is pure overhead |
-
-Scarce HBM favors wide TP to parallelize weight reads; abundant HBM makes the TP collective pure overhead and activates EP for the MoE-FFN slice. **Practical implication:** under the operational PP cap, a partition tuned for today's HBM may need adjustment as HBM scales 2-4× — re-run the partition-optimal sweep when the fabric upgrades.
-
-### `notebooks/pareto_vs_flops.ipynb` — decode Pareto under peak-FLOPS scaling
-
-![decode Pareto vs. peak FLOPS at two context lengths](assets/pareto_vs_flops_short_vs_long.png)
-
-*Question: if GPU peak FLOPS grew without any change to HBM or scale-up I/O, how much further would the decode Pareto frontier push?*
-
-Sweeps peak FLOPS from 0.5× (H100-class ~4.5 PF) to 4× (~36 PF) at fixed HBM (8 TB/s) and scale-up I/O, plus an `ideal compute` (FLOPS → ∞) reference. Runs the same sweep at two context lengths to expose the regime boundary.
-
-**Headline (split by regime; under PP=8 cap, dominant winner `PP=8 TP=8 EP=1 SP=1`):**
-
-- **At `S`=8192 (left): all five curves overlap exactly** — peak FLOPS is a non-knob. `t_mem / t_compute` is 6×–1400× across every `B`, so the memory-bound asymptote pins the frontier. More FLOPS only widens the machine balance point further from the workload's per-`B` arithmetic intensity.
-- **At `S`=1024 (right): the right corner fans out** — shorter context shrinks `T_kv`'s slope in `B` ~8×, pushing per-`B` AI above GB200's 1125 FLOPs/byte balance. At `B`=8192 on 1× FLOPS the step flips compute-bound; 4× FLOPS then lifts high-`B` throughput/GPU from ~7500 → ~9400 (~25% gain), tracing the ideal-compute ceiling.
-
-**Complementary read with `pareto_vs_mem`:** at long `S` this workload is memory-bound end-to-end, so HBM BW moves both corners and FLOPS moves neither. At short `S`, the corners split — memory BW still drives the high-interactivity corner, FLOPS drives the high-throughput corner.
-
-**Prefill / training are the opposite regime** — their attention compute grows as `S²` while KV traffic grows as `S`, putting arithmetic intensity orders of magnitude above any hardware balance point. FLOPS is the primary knob for TTFT and for training throughput. See `documentation/explaining/why_flops_doesnt_help_at_long_context.md` for the full AI / slope derivation and the decode-vs-prefill-vs-training contrast, and `documentation/explaining/frontier_convergence_at_high_b.md` for the $B^*$ story.
-
-### `notebooks/ttft_vs_io.ipynb` — mismatched-partition disaggregation: does it pay off?
-
-![TTFT vs. inter-cluster BW/α under mismatched-partition disagg](assets/ttft_vs_io.png)
-
-*Question: if prefill and decode clusters use different partitions (prefill shape optimized for its compute profile, decode shape optimized for its own), when does the KV handoff cost get paid back by faster prefill?*
-
-Fixes decode partition at `PP=8 TP=8 EP=1 SP=1` (the decode-Pareto winner) and compares two mismatched prefill shapes vs. co-lo reference across the **2–32k commercial prompt band** (anchored to ShareGPT / Splitwise / DistServe / Mooncake traces):
-
-- **Mismatch A** — wide-TP prefill (`PP=1 TP=16 EP=4`): PP/TP/EP **all differ** from decode.
-- **Mismatch B** — MoE-EP prefill (`PP=2 TP=8 EP=4`): PP+EP differ; TP matches.
-
-Sweeps inter-cluster BW (50 GB/s → 3.6 TB/s) and α (0.5 μs → 5 ms) as two panels.
-
-**Headline:** in the 2–32k commercial band, **mismatched-partition disagg doesn't pay off** — at any BW, at any α. Compute savings from the mismatched prefill partitions are 0.4–8 ms; the KV handoff tax exceeds those savings everywhere. The win case is long-context (64k+) workloads (Mooncake P99 territory) where wide-TP prefill's attention-FLOP savings materialize. For the bulk of commercial traffic, matched-partition co-lo — or disagg-with-matched-partition for scheduling benefits — is the simpler choice.
-
-### `notebooks/ttft_vs_chunk.ipynb` — chunked prefill sweet-spot
-
-![TTFT vs. chunk size across 2k–32k prompts](assets/ttft_vs_chunk.png)
-
-*Question: what chunk size minimizes TTFT for chunked prefill, and how does the sweet spot shift with prompt length?*
-
-Fixes partition at `PP=8 TP=8 EP=1 SP=1` (co-lo, matched). Sweeps chunk size log-spaced from 128 tokens up to `S_input` across the same 2–32k band.
-
-**Headline:** a sweet spot of `C* ≈ 2–4k` tokens across the entire commercial band — 2k at 2k prompts, shifting to 4k for 4k+ prompts.
-
-| S_input | Workload | C\* | n_chunks | TTFT\* | vs. single-pass |
-|---|---|---|---|---|---|
-| 2k | chat+hist     | 2048 | 1 | 3.8 ms   | 5.4× |
-| 4k | code/RAG      | 4096 | 1 | 7.6 ms   | 5.5× |
-| 8k | prod+RAG      | 4096 | 2 | 15.4 ms  | 5.7× |
-| 16k | long-doc     | 4096 | 4 | 32.0 ms  | 6.1× |
-| 32k | reason/agent | 4096 | 8 | 68.5 ms | 6.7× |
-
-The U-shape is genuine — small C (128) pays `n_chunks × T_θ` weight re-reads; large C pays quadratic attention; optimum sits near 2–4k tokens. A single hard-coded `C = 2–4k` is within 5–10% of optimal across the full band, so production engines don't need per-request tuning. Most of the headline speedup is from avoiding the PP warmup tax that single-pass prefill pays fully; within the chunked regime itself the win is a more modest ~1–3%.
 
 ---
 
