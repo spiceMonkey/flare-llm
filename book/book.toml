@@ -1,0 +1,33 @@
+[book]
+title = "FLARE Modeling"
+authors = ["Yue Lu"]
+description = "First-principles analytical derivations for LLM inference performance modeling on a cluster."
+language = "en"
+src = "../documentation/modeling"
+
+[build]
+build-dir = "build"
+create-missing = false
+
+[output.html]
+default-theme = "navy"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/spiceMonkey/flare-llm"
+no-section-label = false
+mathjax-support = false
+
+[output.html.fold]
+enable = true
+level = 1
+
+[output.html.search]
+enable = true
+limit-results = 30
+use-boolean-and = true
+boost-title = 2
+boost-hierarchy = 2
+
+[preprocessor.katex]
+after = ["links"]
+optional = true
+

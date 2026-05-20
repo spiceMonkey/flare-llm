@@ -1,0 +1,62 @@
+name: Deploy mdBook to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'documentation/modeling/**'
+      - 'book/**'
+      - '.github/workflows/deploy-book.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install mdBook
+        uses: peaceiris/actions-mdbook@v2
+        with:
+          mdbook-version: 'latest'
+
+      - name: Install mdbook-katex
+        uses: taiki-e/install-action@v2
+        with:
+          tool: mdbook-katex
+
+      - name: Build book
+        run: mdbook build book
+
+      - name: Stage assets into book output
+        # The modeling docs reference repo-root assets via ../../assets/ so
+        # they still render on github.com. For the deployed site, copy the
+        # assets next to the HTML and rewrite the relative paths.
+        run: |
+          cp -r assets book/build/assets
+          find book/build -maxdepth 1 -name "*.html" -exec sed -i 's|\.\./\.\./assets/|assets/|g' {} +
+          find book/build -mindepth 2 -name "*.html" -exec sed -i 's|\.\./\.\./assets/|../assets/|g' {} +
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: book/build
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
