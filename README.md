@@ -35,17 +35,6 @@ A disaggregated prefill/decode pipeline with a distributed KV cache. Each device
 
 ---
 
-## Collective & Network Primitives — Upstream Anchor
-
-The α–β cost model, algorithm library, and topology composition are anchored to [`spiceMonkey/collective-comm`](https://github.com/spiceMonkey/collective-comm). Two paths in this repo are auto-synced from upstream by [`.github/workflows/sync-collectives.yml`](.github/workflows/sync-collectives.yml):
-
-- [`llm_perf/core/primitives/collective_cost.py`](llm_perf/core/primitives/collective_cost.py) — the α–β primitive library
-- [`documentation/modeling/collectives/`](documentation/modeling/collectives/) — workload-agnostic explainers + cheatsheet
-
-Refer to the upstream repo for full derivations.
-
----
-
 ## Repository Layout
 
 ```
@@ -54,9 +43,11 @@ Refer to the upstream repo for full derivations.
 ├── notebooks/         — quickstart + Pareto-frontier case study
 ├── documentation/
 │   └── modeling/      — methodology derivations + symbol reference
+│       └── collectives/   — mirrored from spiceMonkey/collective-comm
 ├── llm_perf/
 │   ├── calculators/   — InferenceCalculator, PrefillCalculator, E2ECalculator
 │   ├── core/          — memory_model, decode_model, prefill_model + primitives
+│   │   └── primitives/collective_cost.py   — mirrored from spiceMonkey/collective-comm
 │   ├── database/      — model / system / tuner / framework JSON specs
 │   ├── specs/         — typed dataclasses (LlmModelSpec, SystemSpec, …)
 │   └── io/, utils/    — loaders, equations, HF adapter, DRAM3D helper
