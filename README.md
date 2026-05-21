@@ -8,6 +8,8 @@ A five-stage roofline pipeline (memory → FLOPs → traffic → comm → latenc
 
 This README is a navigation guide; the methodology lives in [`documentation/modeling/`](documentation/modeling/), starting with [`decode.md`](documentation/modeling/decode.md).
 
+**Tutorial:** [**Decode Modeling**](https://spicemonkey.github.io/flare-llm/) — a rendered mdBook walkthrough of the decode-phase derivation (decode + attention + memory hierarchy), with a pointer to the upstream collective-communication tutorial.
+
 ---
 
 ## Cluster Architecture
