@@ -1,3 +1,7 @@
+# macOS Finder metadata
+.DS_Store
+**/.DS_Store
+
 # Ignore Python cache directories and local venv
 **/__pycache__/
 .llm_perf/
