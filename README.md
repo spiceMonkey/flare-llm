@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.png" alt="FLARE" width="180">
+</p>
+
 # FLARE — Fast LLM Analytical Roofline Explorer
 
 FLARE is a lightweight, first-principles analytical framework for large-language-model inference performance modeling. It predicts latency, throughput, and memory footprint of LLM inference on a given cluster *before* you build or rent it — from JSON descriptions of the model, the hardware, the parallelism layout, the workload, and the serving stack.
