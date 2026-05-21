@@ -44,32 +44,32 @@ def ref_text(x, y, text, fontsize=8.5, ha="center"):
 # ═══════════════════════════════════════════════════════════════════
 # Title
 # ═══════════════════════════════════════════════════════════════════
-ax.text(8, 11.65, "LLM Inference Cluster — Modeled Architecture", ha="center", va="center",
+ax.text(6.825, 11.65, "LLM Inference Cluster — Modeled Architecture", ha="center", va="center",
         fontsize=18, fontweight="bold", color=C_TEXT)
 
 # ═══════════════════════════════════════════════════════════════════
 # Serving Framework (top bar)
 # ═══════════════════════════════════════════════════════════════════
-rounded_box(1.5, 10.7, 12.6, 0.65, C_FRAME, lw=2.0, ec="#546E7A")
-ax.text(8, 11.12, "Serving Framework", ha="center", va="center",
+rounded_box(0.5, 10.7, 12.65, 0.65, C_FRAME, lw=2.0, ec="#546E7A")
+ax.text(6.825, 11.12, "Serving Framework", ha="center", va="center",
         fontsize=14, fontweight="bold", color="#37474F")
-ax.text(8, 10.83, "continuous batching · request scheduler · tokenizer · KV-aware router",
+ax.text(6.825, 10.83, "continuous batching · request scheduler · tokenizer · KV-aware router",
         ha="center", va="center", fontsize=10, color="#546E7A", fontstyle="italic")
-ref_text(8, 10.52, "modeling/framework.md", fontsize=9)
+ref_text(6.825, 10.52, "modeling/framework.md", fontsize=9)
 
 # Arrow down
-ax.annotate("", xy=(8, 10.2), xytext=(8, 10.47),
+ax.annotate("", xy=(6.825, 10.2), xytext=(6.825, 10.47),
             arrowprops=dict(arrowstyle="-|>", color="#37474F", lw=2.0))
 
 # ═══════════════════════════════════════════════════════════════════
 # Prefill Cluster (left)
 # ═══════════════════════════════════════════════════════════════════
-rounded_box(0.5, 5.4, 3.8, 4.75, C_PREFILL, lw=2.0, ec="#1976D2", alpha=0.35, zorder=1)
-ax.text(2.4, 9.85, "Prefill Cluster", ha="center", va="center",
+rounded_box(0.5, 5.4, 3.5, 4.75, C_PREFILL, lw=2.0, ec="#1976D2", alpha=0.35, zorder=1)
+ax.text(2.25, 9.85, "Prefill Cluster", ha="center", va="center",
         fontsize=14, fontweight="bold", color="#1565C0")
-ax.text(2.4, 9.55, "(compute-heavy, large S)", ha="center", va="center",
+ax.text(2.25, 9.55, "(compute-heavy, large S)", ha="center", va="center",
         fontsize=10, color="#1565C0", fontstyle="italic")
-ref_text(2.4, 9.28, "modeling/prefill.md · core/prefill_model.py", fontsize=7.5)
+ref_text(2.25, 9.28, "modeling/prefill.md · core/prefill_model.py", fontsize=7.5)
 
 # Prefill devices — 2x2, tight
 for dx, dy in [(0.8, 7.85), (2.35, 7.85), (0.8, 6.75), (2.35, 6.75)]:
@@ -81,12 +81,12 @@ rounded_box(0.8, 5.7, 2.9, 0.42, C_SWITCH, label="Scale-up/out Network", fontsiz
 # ═══════════════════════════════════════════════════════════════════
 # Decode Cluster (right)
 # ═══════════════════════════════════════════════════════════════════
-rounded_box(5.5, 5.4, 8.6, 4.75, C_DECODE, lw=2.0, ec="#E65100", alpha=0.35, zorder=1)
-ax.text(10.5, 9.85, "Decode Cluster", ha="center", va="center",
+rounded_box(5.5, 5.4, 7.65, 4.75, C_DECODE, lw=2.0, ec="#E65100", alpha=0.35, zorder=1)
+ax.text(9.325, 9.85, "Decode Cluster", ha="center", va="center",
         fontsize=14, fontweight="bold", color="#BF360C")
-ax.text(10.5, 9.55, "(memory-bound, autoregressive)", ha="center", va="center",
+ax.text(9.325, 9.55, "(memory-bound, autoregressive)", ha="center", va="center",
         fontsize=10, color="#BF360C", fontstyle="italic")
-ref_text(10.5, 9.28, "modeling/decode.md · core/decode_model.py", fontsize=7.5)
+ref_text(9.325, 9.28, "modeling/decode.md · core/decode_model.py", fontsize=7.5)
 
 # Decode devices — 4 top, 4 bottom; each device is a 3-tier memory stack:
 # GPU compute (top) · SRAM fast tier (middle) · HBM/DRAM slow tier (bottom).
@@ -108,23 +108,23 @@ for row_y in [top_y, bot_y]:
         rounded_box(dx + 0.04, hbm_y,  dw - 0.08, band_h, C_HBM,  label="HBM/DRAM", fontsize=8.5, lw=0.8, ec="#7B1FA2")
 
 # Device-level references
-ref_text(10.5, 9.0, "core/{memory_model, decode_model, memory_placement}.py · sram.md · primitives/", fontsize=7.5)
+ref_text(9.325, 9.0, "core/{memory_model, decode_model, memory_placement}.py · sram.md · primitives/", fontsize=7.5)
 
 # Decode scale-up/out network — shown as the canonical hierarchical chain
 # (innermost first). Single-tier deployments collapse to one element.
 # All five parallelism dimensions (TP/EP/SP intra-domain, PP cross-stage,
 # DP across replicas) ride this one fabric model.
-rounded_box(5.85, 5.7, 6.5, 0.42, C_SWITCH, lw=1.5, ec="#2E7D32")
-ax.text(9.1, 5.91, "Scale-up/out Network  (TP / EP / SP / PP / DP)", ha="center", va="center",
+rounded_box(5.85, 5.7, 6.95, 0.42, C_SWITCH, lw=1.5, ec="#2E7D32")
+ax.text(9.325, 5.91, "Scale-up/out Network  (TP / EP / SP / PP / DP)", ha="center", va="center",
         fontsize=11, fontweight="bold", color="#1B5E20")
-ax.text(9.1, 5.55, "hierarchical α-β:  pair_mesh / NVLink → PCIe / fat-tree → ethernet  · INC short-circuit on sharp_class / hw_a2a tiers",
+ax.text(9.325, 5.55, "hierarchical α-β:  pair_mesh / NVLink → PCIe / fat-tree → ethernet  · INC short-circuit on sharp_class / hw_a2a tiers",
         ha="center", va="center", fontsize=8.5, color="#1B5E20", fontstyle="italic")
-ref_text(9.1, 5.25, "modeling/collectives/00_summary.md · core/{decode_model, collective_algo_opt}.py · primitives/dispatch.py", fontsize=7.5)
+ref_text(9.325, 5.25, "modeling/collectives/00_summary.md · core/{decode_model, collective_algo_opt}.py · primitives/dispatch.py", fontsize=7.5)
 
 # ═══════════════════════════════════════════════════════════════════
 # KV Transfer interconnect (between clusters)
 # ═══════════════════════════════════════════════════════════════════
-ax.annotate("", xy=(5.35, 7.6), xytext=(4.5, 7.6),
+ax.annotate("", xy=(5.35, 7.6), xytext=(4.15, 7.6),
             arrowprops=dict(arrowstyle="<->", color="#37474F", lw=2.5))
 rounded_box(4.15, 7.0, 1.2, 0.45, C_INTERCO, lw=1.2, ec="#37474F")
 ax.text(4.75, 7.22, "KV Transfer", ha="center", va="center", fontsize=9.5, fontweight="bold",
@@ -134,17 +134,17 @@ ref_text(4.75, 6.72, "modeling/e2e.md", fontsize=7.5)
 # ═══════════════════════════════════════════════════════════════════
 # Distributed KV Cache (bottom bar)
 # ═══════════════════════════════════════════════════════════════════
-ax.annotate("", xy=(2.4, 4.55), xytext=(2.4, 5.15),
+ax.annotate("", xy=(2.25, 4.55), xytext=(2.25, 5.15),
             arrowprops=dict(arrowstyle="-|>", color="#6A1B9A", lw=2.0))
-ax.annotate("", xy=(8, 4.55), xytext=(8, 5.15),
+ax.annotate("", xy=(9.325, 4.55), xytext=(9.325, 5.15),
             arrowprops=dict(arrowstyle="-|>", color="#6A1B9A", lw=2.0))
 
-rounded_box(1.5, 3.85, 12.6, 0.65, C_KV, lw=2.0, ec="#6A1B9A")
-ax.text(8, 4.28, "Distributed KV Cache", ha="center", va="center",
+rounded_box(0.5, 3.85, 12.65, 0.65, C_KV, lw=2.0, ec="#6A1B9A")
+ax.text(6.825, 4.28, "Distributed KV Cache", ha="center", va="center",
         fontsize=14, fontweight="bold", color="#4A148C")
-ax.text(8, 3.98, "HBM + host DRAM + SSD tiers · paged blocks · fragmentation model",
+ax.text(6.825, 3.98, "HBM + host DRAM + SSD tiers · paged blocks · fragmentation model",
         ha="center", va="center", fontsize=10, color="#6A1B9A", fontstyle="italic")
-ref_text(8, 3.65, "modeling/kv.md · core/kv_paging_model.py", fontsize=9)
+ref_text(6.825, 3.65, "modeling/kv.md · core/kv_paging_model.py", fontsize=9)
 
 # ═══════════════════════════════════════════════════════════════════
 # Legend at bottom
@@ -159,11 +159,11 @@ legend_items = [
     (C_KV,     "#6A1B9A", "Distributed KV Cache"),
 ]
 for i, (fc, ec, label) in enumerate(legend_items):
-    lx = 0.5 + i * 2.55
+    lx = 0.675 + i * 2.0
     rounded_box(lx, legend_y, 0.4, 0.25, fc, lw=0.8, ec=ec)
     ax.text(lx + 0.5, legend_y + 0.12, label, ha="left", va="center", fontsize=9, color=C_TEXT)
 
-ax.text(8, 2.6, "Green italic labels reference modeling docs and core Python modules",
+ax.text(6.825, 2.6, "Green italic labels reference modeling docs and core Python modules",
         ha="center", va="center", fontsize=10, color=C_REF, fontstyle="italic")
 
 fig.tight_layout()
