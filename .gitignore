@@ -26,6 +26,7 @@ book/build/
 
 # Assets — publish only the PNGs referenced from README, public docs, and tutorial
 assets/*.png
+!assets/logo.png
 !assets/cluster_architecture.png
 !assets/pareto_basic.png
 !assets/pareto_basic_kernel_toggle.png
