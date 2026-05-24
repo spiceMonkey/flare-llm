@@ -42,6 +42,7 @@ assets/*.png
 !assets/attention_mla.png
 !assets/attention_mla_intuition.png
 !assets/attention_swa_intuition.png
+!assets/social-card.png
 
 # Mermaid sources + render helper — kept local
 assets/mermaid/
