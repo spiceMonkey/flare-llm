@@ -135,7 +135,7 @@ For batch sizes $B \ge PP$ (the pipeline-full regime, see §4.2 for why this is 
 
 $$
 t_{\mathrm{stage,hw}}(B)
-\;=\; t_{\mathrm{stage,local}}(B) + \max(0, t_{\mathrm{stage,comm}}(B) - \rho \, t_{\mathrm{stage,local}}(B))
+\;=\; t_{\mathrm{stage,local}}(B) + \max(0, t_{\mathrm{stage,comm}}(B) - \rho_{\text{comm}} \, t_{\mathrm{stage,local}}(B))
 $$
 
 with the local term given by the compute/memory roofline:
@@ -248,7 +248,7 @@ From `prefill.md §3.3 / §3.4`, the prefill forward pass for a single request t
 
 $$
 t_{\mathrm{prefill}}
-\;=\; t_{\mathrm{prefill,local}}(S_{\mathrm{input}}) + \max(0, t_{\mathrm{prefill,comm}} - \rho \, t_{\mathrm{prefill,local}})
+\;=\; t_{\mathrm{prefill,local}}(S_{\mathrm{input}}) + \max(0, t_{\mathrm{prefill,comm}} - \rho_{\text{comm}} \, t_{\mathrm{prefill,local}})
 \;+\; \underbrace{(PP - 1) \cdot t_{\mathrm{stage,max}}}_{t_{\mathrm{pipeline,warmup}}}
 \;+\; t_{\mathrm{LM,prefill,hw}}
 $$

@@ -253,7 +253,7 @@ _(→ decode.md)_
 - $t_{TP}, t_{EP}, t_{SP}, t_{PP}$ — Communication time per step per parallelism type (message sizes scale with $B$; see decode.md §5).
 - $t_{\text{comm}}$ — Combined communication time per decode step per PP stage.
 - $t_{\text{stage}}$ — Per-PP-stage GPU-side step time (overlap-aware, pre-bubble):
-  $$t_{\text{stage}} = t_{\text{local}} + \max(0,\; t_{\text{comm}} - \rho \cdot t_{\text{local}})$$
+  $$t_{\text{stage}} = t_{\text{local}} + \max(0,\; t_{\text{comm}} - \rho_{\text{comm}} \cdot t_{\text{local}})$$
 - $\tau_{\mathrm{launch}}$ — Per-kernel CPU dispatch latency (typical: ~1.5 μs with CUDA Graphs, ~7 μs without).
 - $k$ — Kernel launches per layer per microbatch: $k = k_{\mathrm{compute}} + k_{\mathrm{collective}} \cdot (n_{\mathrm{TP}}^{\mathrm{calls}} + n_{\mathrm{EP}}^{\mathrm{calls}} + n_{\mathrm{SP}}^{\mathrm{calls}})$. Per-axis NCCL API call counts (zero when that parallelism axis is 1): $n_{\mathrm{TP}}^{\mathrm{calls}} = n_{\mathrm{TP\_collectives}}$; $n_{\mathrm{SP}}^{\mathrm{calls}} = n_{\mathrm{SP\_collectives}}$; **$n_{\mathrm{EP}}^{\mathrm{calls}} = 2 \cdot n_{\mathrm{EP\_collectives}}$** because the cost-model treats one MoE A2A as a single round-trip (with the 2× wrapped inside `_cost("moe_a2a")`), but the launch counter must expand to 2 actual NCCL calls (dispatch + combine).
 - $k_{\mathrm{pp\_hop}}$ — Kernels per PP boundary per microbatch on each device: typically 2 (1 recv + 1 send); 1 if `ncclSendRecv` or a custom kernel fuses the pair.
@@ -265,7 +265,7 @@ _(→ decode.md)_
 - $t_{\text{step,user}}$ — User-observed per-step decode time:
   $$t_{\text{step,user}} = \max\!\bigl(t_{\text{stage}},\ \rho_{\mathrm{kernel}} \cdot t_{\text{stage}} + (1 - \rho_{\mathrm{kernel}}) \cdot (t_{\text{stage}} + t_{\mathrm{stage,kernel}}),\ t_{\mathrm{stage,kernel}}\bigr) \cdot \gamma_{\text{pp}}$$
   Reduces to $t_{\text{stage}} \cdot \gamma_{\text{pp}}$ when $t_{\mathrm{stage,kernel}} = 0$ (kernel-launch term disabled).
-- $\rho$ — Compute-comm overlap factor $\in [0,1]$: fraction of $t_{\text{local}}$ that hides $t_{\text{comm}}$.
+- $\rho_{\text{comm}}$ — Compute-comm overlap factor $\in [0,1]$: fraction of $t_{\text{local}}$ that hides $t_{\text{comm}}$.
 - $TPS_{\text{single}}$ — Per-DP-replica decode throughput: $B / t_{\text{step,user}}$ (tokens/s).
 - $TTPS$ — Global decode throughput across all DP replicas: $DP \cdot B / t_{\text{step,user}}$ (tokens/s).
 

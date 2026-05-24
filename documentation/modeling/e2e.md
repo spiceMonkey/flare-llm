@@ -166,10 +166,10 @@ For a single request on a **co-located** prefill+decode cluster (no disaggregati
 3. **$t_{\text{prefill}}$** — Prefill forward pass latency: the model processes all $S_{\text{input}}$ tokens in a single GEMM-dominated pass. The full derivation is in `prefill.md §3.4`; the boxed result is:
 
    $$
-   t_{\text{prefill}} = t_{\text{prefill,local}} + \max\left(0,\; t_{\text{prefill,comm}} - \rho\, t_{\text{prefill,local}}\right) + t_{\text{pipeline,warmup}} + t_{\text{LM,prefill,hw}}
+   t_{\text{prefill}} = t_{\text{prefill,local}} + \max\left(0,\; t_{\text{prefill,comm}} - \rho_{\text{comm}}\, t_{\text{prefill,local}}\right) + t_{\text{pipeline,warmup}} + t_{\text{LM,prefill,hw}}
    $$
 
-   where $t_{\text{prefill,local}}$ is the per-stage roofline time including SW composition (`prefill.md §3.4`), $t_{\text{prefill,comm}}$ is the collective communication time during prefill (same TP/EP/SP structure as decode, scaled by $S_{\text{input}}$), $\rho$ is the overlap factor (same as in decode, `decode.md §6.2`), $t_{\text{pipeline,warmup}} = (PP - 1) \times t_{\text{stage,max}}$ is the time for the prefill pass to fill the pipeline (`prefill.md §3.3`), and $t_{\text{LM,prefill,hw}}$ is the once-per-pass LM head $H \to V$ projection on stage $PP{-}1$ (`prefill.md §3.4`) — added outside the warmup since it fires once at the end of the traversal, not per stage.
+   where $t_{\text{prefill,local}}$ is the per-stage roofline time including SW composition (`prefill.md §3.4`), $t_{\text{prefill,comm}}$ is the collective communication time during prefill (same TP/EP/SP structure as decode, scaled by $S_{\text{input}}$), $\rho_{\text{comm}}$ is the overlap factor (same as in decode, `decode.md §6.2`), $t_{\text{pipeline,warmup}} = (PP - 1) \times t_{\text{stage,max}}$ is the time for the prefill pass to fill the pipeline (`prefill.md §3.3`), and $t_{\text{LM,prefill,hw}}$ is the once-per-pass LM head $H \to V$ projection on stage $PP{-}1$ (`prefill.md §3.4`) — added outside the warmup since it fires once at the end of the traversal, not per stage.
 
 4. **$t_{\text{step,user}}$** — First decode step: one forward pass of the decode kernel, generating token 1. From `decode.md §7.3`:
 
@@ -250,7 +250,7 @@ The KV write traffic $T_{\text{KV,write,device}}$ scales with $B_{\text{prefill}
 From a user's perspective, the worst-case TTFT applies to the **last request** admitted to the prefill batch — that request waits for the entire joint prefill to complete before its first token is produced:
 
 $$
-TTFT_{\text{batched}} = t_{\text{sched}} + t_{\text{prefill,local}}(B_{\text{prefill}}) + \max\left(0,\; t_{\text{prefill,comm}} - \rho\, t_{\text{prefill,local}}\right) + t_{\text{pipeline,warmup}} + t_{\text{LM,prefill,hw}}(B_{\text{prefill}}) + t_{\text{step,user}}
+TTFT_{\text{batched}} = t_{\text{sched}} + t_{\text{prefill,local}}(B_{\text{prefill}}) + \max\left(0,\; t_{\text{prefill,comm}} - \rho_{\text{comm}}\, t_{\text{prefill,local}}\right) + t_{\text{pipeline,warmup}} + t_{\text{LM,prefill,hw}}(B_{\text{prefill}}) + t_{\text{step,user}}
 $$
 
 where $t_{\text{LM,prefill,hw}}(B_{\text{prefill}})$ scales with **only $B_{\text{prefill}}$** (one $H \to V$ projection per request, last position only — see `prefill.md §1.5`), not with $B_{\text{prefill}} \cdot S_{\text{input}}$.
@@ -321,7 +321,7 @@ In **static batching**, all $B$ requests in the batch start together, are padded
 At each decode step, the model processes $B$ tokens simultaneously (one per sequence). The overlap-aware per-stage HW step time from `decode.md §6.2` is:
 
 $$
-t_{\text{stage,hw}}(B) = t_{\text{local}}(B) + \max\left(0,\; t_{\text{comm}}(B) - \rho \cdot t_{\text{local}}(B)\right)
+t_{\text{stage,hw}}(B) = t_{\text{local}}(B) + \max\left(0,\; t_{\text{comm}}(B) - \rho_{\text{comm}} \cdot t_{\text{local}}(B)\right)
 $$
 
 where the batched local time is (`decode.md §7.3`):
@@ -716,7 +716,7 @@ The following existing symbols from `notation.md` are used extensively; they are
 | $t_{\text{KV-transfer}}$ | `notation.md §13` | Disaggregated KV cache transfer latency |
 | $B_{\text{eff}}$ | `notation.md §4` | Effective batch size under continuous batching |
 | $B^*$ | `decode.md §4` | Crossover batch size (memory-bound → compute-bound) |
-| $\rho$ | `notation.md §9` | Compute–communication overlap factor |
+| $\rho_{\text{comm}}$ | `notation.md §9` | Compute–communication overlap factor |
 
 ---
 

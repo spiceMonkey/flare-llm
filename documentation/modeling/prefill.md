@@ -469,7 +469,7 @@ We now derive the hardware prefill latency $t_{\text{prefill}}(B_{\text{prefill}
 $t_{\text{prefill}}(B_{\text{prefill}})$ decomposes into three sequential phases:
 
 $$
-t_{\text{prefill}}(B_{\text{prefill}}) = t_{\text{prefill,local}}(B_{\text{prefill}}) + \max\!\bigl(0,\; t_{\text{prefill,comm}}(B_{\text{prefill}}) - \rho\, t_{\text{prefill,local}}(B_{\text{prefill}})\bigr) + t_{\text{pipeline,warmup}}(B_{\text{prefill}})
+t_{\text{prefill}}(B_{\text{prefill}}) = t_{\text{prefill,local}}(B_{\text{prefill}}) + \max\!\bigl(0,\; t_{\text{prefill,comm}}(B_{\text{prefill}}) - \rho_{\text{comm}}\, t_{\text{prefill,local}}(B_{\text{prefill}})\bigr) + t_{\text{pipeline,warmup}}(B_{\text{prefill}})
 $$
 
 Each term is derived below. The structure mirrors decode's per-step roofline; the differences are (i) FLOPs scale with $B_{\text{prefill}} \cdot S_{\text{input}}$ instead of just $B$, (ii) the KV cache is *written* (not read) during prefill, so the per-step memory term has a $B_{\text{prefill}} \cdot T_{\text{KV,write,device}}$ component; (iii) the pipeline must fill from empty, contributing a $(PP-1)$ stage-time warmup.
@@ -582,7 +582,7 @@ The AG cost is half the AR cost (one ring pass instead of the AR's two: reduce-s
 
 The per-layer TP cost depends on attention mode: under TP-attention the attention output fires an AR; under DP-attention it fires an AG. The FFN / MoE expert output projection always fires an AR (TP-sharded under both modes). The per-layer aggregate is assembled in the per-stage budget below (§3.2 "Total per-stage communication").
 
-> **Implementation note — tiled prefill and $\alpha_{TP}$ accumulation:** In practice, large-$S_{\text{input}}$ prefill is often processed in $k$ sub-sequence tiles (e.g., to fit within SRAM or network buffer limits). Each tile launches an independent all-reduce, accumulating the $\alpha_{TP}$ startup latency $k$ times. The total un-hidden $\alpha$ overhead is $k \times \max(0,\, \alpha_{TP} - \rho \cdot t_{\text{tile,compute}})$, where $t_{\text{tile,compute}}$ is the compute time for a single tile. For fine-grained tiling with small tiles, each tile's compute-to-communication ratio mirrors the full-sequence overlap structure, so the $\rho$ factor still absorbs the hiding benefit. However, for very large $S_{\text{input}}$ and small tile sizes, the accumulated $k \cdot \alpha_{TP}$ term can become non-negligible even when each individual $\alpha_{TP}$ is fully hidden. The formulas above model a single collective per layer; the tiling multiplier $k$ can be incorporated when tile size is a known design parameter.
+> **Implementation note — tiled prefill and $\alpha_{TP}$ accumulation:** In practice, large-$S_{\text{input}}$ prefill is often processed in $k$ sub-sequence tiles (e.g., to fit within SRAM or network buffer limits). Each tile launches an independent all-reduce, accumulating the $\alpha_{TP}$ startup latency $k$ times. The total un-hidden $\alpha$ overhead is $k \times \max(0,\, \alpha_{TP} - \rho_{\text{comm}} \cdot t_{\text{tile,compute}})$, where $t_{\text{tile,compute}}$ is the compute time for a single tile. For fine-grained tiling with small tiles, each tile's compute-to-communication ratio mirrors the full-sequence overlap structure, so the $\rho_{\text{comm}}$ factor still absorbs the hiding benefit. However, for very large $S_{\text{input}}$ and small tile sizes, the accumulated $k \cdot \alpha_{TP}$ term can become non-negligible even when each individual $\alpha_{TP}$ is fully hidden. The formulas above model a single collective per layer; the tiling multiplier $k$ can be incorporated when tile size is a known design parameter.
 
 ### EP All-to-All (prefill, MoE)
 
@@ -669,16 +669,16 @@ For $PP = 1$ (no pipeline parallelism), $t_{\text{pipeline,warmup}}(B_{\text{pre
 
 ## 3.4 Hardware Prefill Latency Formula
 
-Combining all three phases, with overlap factor $\rho \in [0, 1]$ capturing the fraction of prefill communication that can be hidden behind compute, a kernel-launch dispatch budget $t_{\text{stage,kernel}}$ for per-stage CPU dispatch overhead, and the once-per-pass LM head roofline $t_{\text{LM,prefill,hw}}$ on stage $PP{-}1$:
+Combining all three phases, with overlap factor $\rho_{\text{comm}} \in [0, 1]$ capturing the fraction of prefill communication that can be hidden behind compute, a kernel-launch dispatch budget $t_{\text{stage,kernel}}$ for per-stage CPU dispatch overhead, and the once-per-pass LM head roofline $t_{\text{LM,prefill,hw}}$ on stage $PP{-}1$:
 
 $$
-t_{\text{prefill}}(B_{\text{prefill}}) = t_{\text{prefill,local}}(B_{\text{prefill}}) + \max\!\bigl(0,\; t_{\text{prefill,comm}}(B_{\text{prefill}}) - \rho\, t_{\text{prefill,local}}(B_{\text{prefill}})\bigr) + t_{\text{pipeline,warmup}}(B_{\text{prefill}}) + t_{\text{LM,prefill,hw}}(B_{\text{prefill}})
+t_{\text{prefill}}(B_{\text{prefill}}) = t_{\text{prefill,local}}(B_{\text{prefill}}) + \max\!\bigl(0,\; t_{\text{prefill,comm}}(B_{\text{prefill}}) - \rho_{\text{comm}}\, t_{\text{prefill,local}}(B_{\text{prefill}})\bigr) + t_{\text{pipeline,warmup}}(B_{\text{prefill}}) + t_{\text{LM,prefill,hw}}(B_{\text{prefill}})
 $$
 
 **Interpretation of each term:**
 
 - **$t_{\text{prefill,local}}(B_{\text{prefill}})$** is the roofline local time with three corrections added to the legacy $\max(t_{\text{compute}}, t_{\text{mem}})$ form: a Tensor Core efficiency derate at small effective microbatch, an HBM sustained-bandwidth derate against $\eta_\beta(B_{\text{prefill}})$, and a kernel-launch composition for per-stage CPU dispatch overhead. All three are detailed below.
-- **$\max(0,\, t_{\text{prefill,comm}}(B_{\text{prefill}}) - \rho\, t_{\text{prefill,local}}(B_{\text{prefill}}))$** is residual communication after compute–communication overlap. In the compute-bound prefill regime, $t_{\text{prefill,local}}$ is large, so significant communication hiding ($\rho \approx 0.8$–$1.0$) is achievable.
+- **$\max(0,\, t_{\text{prefill,comm}}(B_{\text{prefill}}) - \rho_{\text{comm}}\, t_{\text{prefill,local}}(B_{\text{prefill}}))$** is residual communication after compute–communication overlap. In the compute-bound prefill regime, $t_{\text{prefill,local}}$ is large, so significant communication hiding ($\rho_{\text{comm}} \approx 0.8$–$1.0$) is achievable.
 - **$t_{\text{pipeline,warmup}}(B_{\text{prefill}})$** is the pipeline fill penalty; grows with $PP$ and with $B_{\text{prefill}} \cdot S_{\text{input}}$ since both $t_{PP}^{\text{prefill}}$ and $t_{\text{prefill,local}}$ scale with the per-step token count.
 - **$t_{\text{LM,prefill,hw}}(B_{\text{prefill}})$** is the once-per-pass LM head roofline on stage $PP{-}1$, defined below. It is added outside the warmup because it fires once at the end of the prefill traversal (after the pipeline is filled), not per stage.
 
@@ -732,7 +732,7 @@ $$
 
 with the unified $n_{EP} = 2$ for MoE layers (Dispatch + Combine). $t_{\text{stage,kernel}}$ is $B_{\text{prefill}}$-independent — kernel launches pay $\tau_{\text{launch}}$ once per launch event regardless of payload. Each prefill forward pass is a single end-to-end sweep with no microbatch round structure (cf. decode's pipelined steady state); the per-stage formula applies once per stage per prefill pass. With `kernel_launch_us = 0` the term vanishes (legacy roofline).
 
-> **Overlap note:** The overlap factor $\rho$ is an original parameterization (this work); see `references.md`. In the compute-bound prefill regime, compute and communication can be overlapped aggressively by pipelining GEMM tiles with collective operations (e.g., using NCCL + CUDA stream concurrency). Practical $\rho$ values are system-dependent but commonly 0.5–0.9. The independent $\rho_{\text{kernel}}$ governs CPU-GPU dispatch overlap; default $\rho_{\text{kernel}} = 1$ assumes async dispatch keeps the GPU command queue full.
+> **Overlap note:** The overlap factor $\rho_{\text{comm}}$ is an original parameterization (this work); see `references.md`. In the compute-bound prefill regime, compute and communication can be overlapped aggressively by pipelining GEMM tiles with collective operations (e.g., using NCCL + CUDA stream concurrency). Practical $\rho_{\text{comm}}$ values are system-dependent but commonly 0.5–0.9. The independent $\rho_{\text{kernel}}$ governs CPU-GPU dispatch overlap; default $\rho_{\text{kernel}} = 1$ assumes async dispatch keeps the GPU command queue full.
 
 ---
 
@@ -831,7 +831,7 @@ $$
 Per-chunk overlap-adjusted latency:
 
 $$
-t_{\text{chunk}}^{(k)} = t_{\text{chunk,local}}^{(k)} + \max\!\left(0,\; t_{\text{chunk,comm}} - \rho\, t_{\text{chunk,local}}^{(k)}\right)
+t_{\text{chunk}}^{(k)} = t_{\text{chunk,local}}^{(k)} + \max\!\left(0,\; t_{\text{chunk,comm}} - \rho_{\text{comm}}\, t_{\text{chunk,local}}^{(k)}\right)
 $$
 
 ---

@@ -125,7 +125,7 @@ The full local roofline becomes
 
 $$t_{\mathrm{local}}(B) = \max\!\bigl(t_{\mathrm{compute}}(B),\; t_{\mathrm{mem}}(B)\bigr)$$
 
-with $t_{\mathrm{compute}}(B) = B \cdot F_{\mathrm{token,device}} / R_{\mathrm{GPU}}$ as in `decode.md §4.2`. The pipeline-stage assembly and bubble correction in `decode.md §6.2` (overlap factor $\rho$, bubble multiplier $\gamma_{\mathrm{pp}}$) apply unchanged on top of this $t_{\mathrm{local}}(B)$.
+with $t_{\mathrm{compute}}(B) = B \cdot F_{\mathrm{token,device}} / R_{\mathrm{GPU}}$ as in `decode.md §4.2`. The pipeline-stage assembly and bubble correction in `decode.md §6.2` (overlap factor $\rho_{\text{comm}}$, bubble multiplier $\gamma_{\mathrm{pp}}$) apply unchanged on top of this $t_{\mathrm{local}}(B)$.
 
 The single-tier reduction is exact: when $n = 1$ the sum has one term and
 

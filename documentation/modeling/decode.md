@@ -1428,7 +1428,7 @@ $$
 
 The per-step message size composes the $D_{\text{kv}}$ partition and the SP sequence partition, with $B$ multiplying because each sequence in the batch independently gathers its own KV shard. For torus SP fabrics, use the torus AG form of `collectives/02_topology_mapping.md §3` with the same $M_\text{SP}(B)$.
 
-**Decode overlap note:** in single-token decode, per-token compute time is small, so communication overlap with compute ($\rho$) is unlikely to be significant for SP. The unified $\rho$ in §6.2 applies to all collective traffic; if SP dominates the comm budget on a given config, calibrate $\rho$ down accordingly rather than zeroing it per-axis (the cost model has no per-axis $\rho$ knob).
+**Decode overlap note:** in single-token decode, per-token compute time is small, so communication overlap with compute ($\rho_{\text{comm}}$) is unlikely to be significant for SP. The unified $\rho_{\text{comm}}$ in §6.2 applies to all collective traffic; if SP dominates the comm budget on a given config, calibrate $\rho_{\text{comm}}$ down accordingly rather than zeroing it per-axis (the cost model has no per-axis $\rho_{\text{comm}}$ knob).
 
 ---
 
@@ -1714,7 +1714,7 @@ Note: EP collectives only apply to MoE layers ($L_{\text{moe}}$), while TP and S
 
 ### Unified Overlap Model
 
-We introduce an overlap factor $\rho \in [0, 1]$ representing the fraction of local compute/memory time that is successfully utilized to hide communication.
+We introduce an overlap factor $\rho_{\text{comm}} \in [0, 1]$ representing the fraction of local compute/memory time that is successfully utilized to hide communication.
 
 The effective per-stage HW time is the local time plus any **unhidden** communication:
 
@@ -1722,25 +1722,25 @@ $$
 t_{\text{stage,hw}}(B) =
 t_{\text{local}}(B)
 +
-\max\bigl(0,\; t_{\text{comm}}(B) - \rho \cdot t_{\text{local}}(B)\bigr)
+\max\bigl(0,\; t_{\text{comm}}(B) - \rho_{\text{comm}} \cdot t_{\text{local}}(B)\bigr)
 $$
 
 This is the GPU-side wall-clock cost of one pipeline stage processing one decode step's worth of $B$ sequences — purely **hardware-intrinsic** (compute + memory + interconnect, after collective overlap), no scheduling or host-side overhead. §7 introduces the per-stage kernel-launch dispatch budget $t_{\text{stage,kernel}}$ (§7.1), assembles the per-step hardware window with pipeline-bubble correction (§7.2), and adds the per-sequence serving overhead plus throughput (§7.3) to produce the user-observed step time $t_{\text{step,user}}$.
 
 **Regimes:**
 
-- **$\rho = 0$ (No Overlap):**
+- **$\rho_{\text{comm}} = 0$ (No Overlap):**
   $$t_{\text{stage,hw}}(B) = t_{\text{local}}(B) + t_{\text{comm}}(B)$$
   Typical for naive implementations or strictly sequential dependencies.
 
-- **$\rho = 1$ (Perfect Overlap Opportunity):**
+- **$\rho_{\text{comm}} = 1$ (Perfect Overlap Opportunity):**
   $$t_{\text{stage,hw}}(B) = t_{\text{local}}(B) + \max(0, t_{\text{comm}}(B) - t_{\text{local}}(B)) = \max(t_{\text{local}}(B), t_{\text{comm}}(B))$$
   Achieved by highly optimized kernels (e.g., Ring Attention) where independent work exists.
 
-- **$0 < \rho < 1$ (Partial Overlap):**
-  Models real-world overheads (synchronization barriers, partial dependency chains) that prevent utilizing the full local duration for hiding comms. Kernel-launch overhead is *not* part of $\rho$ here — it is modeled separately as $t_{\text{stage,kernel}}$ with its own overlap factor $\rho_{\text{kernel}}$ in §7.1.
+- **$0 < \rho_{\text{comm}} < 1$ (Partial Overlap):**
+  Models real-world overheads (synchronization barriers, partial dependency chains) that prevent utilizing the full local duration for hiding comms. Kernel-launch overhead is *not* part of $\rho_{\text{comm}}$ here — it is modeled separately as $t_{\text{stage,kernel}}$ with its own overlap factor $\rho_{\text{kernel}}$ in §7.1.
 
-**Realistic $\rho$ for decode is small.** A single decode step traverses every layer once with a tight data-dependency chain — attention → TP all-reduce → MoE dispatch (A2A) → expert FFN → MoE combine (A2A) → norm → next layer — and each step processes one batch through the full stack. Unlike training (and unlike prefill, which is compute-bound and has long collective windows to hide behind GEMM tiles), decode has no microbatch rotation to pipeline communication behind compute when $PP$ is small (the typical production case). The within-layer overlap opportunities are narrow: stream-concurrent expert dispatch within an MoE block (dispatch to expert $i+1$ overlaps with FFN of expert $i$), TP all-reduce overlapped with the post-projection layernorm, and next-step host-side preparation (sampling, KV append) overlapped with the current step's tail. Aggressively fused MoE dispatch implementations claim to hide roughly half the A2A behind compute under favorable conditions; vanilla decode stacks see far less. The realistic decode range is $\rho \approx 0$–$0.3$, with $\rho = 0$ a sensible default for any deployment without explicit dispatch fusion or stream-concurrent expert pipelining. The $\rho \approx 0.7$–$1.0$ values familiar from training and prefill literature are not directly applicable here.
+**Realistic $\rho_{\text{comm}}$ for decode is small.** A single decode step traverses every layer once with a tight data-dependency chain — attention → TP all-reduce → MoE dispatch (A2A) → expert FFN → MoE combine (A2A) → norm → next layer — and each step processes one batch through the full stack. Unlike training (and unlike prefill, which is compute-bound and has long collective windows to hide behind GEMM tiles), decode has no microbatch rotation to pipeline communication behind compute when $PP$ is small (the typical production case). The within-layer overlap opportunities are narrow: stream-concurrent expert dispatch within an MoE block (dispatch to expert $i+1$ overlaps with FFN of expert $i$), TP all-reduce overlapped with the post-projection layernorm, and next-step host-side preparation (sampling, KV append) overlapped with the current step's tail. Aggressively fused MoE dispatch implementations claim to hide roughly half the A2A behind compute under favorable conditions; vanilla decode stacks see far less. The realistic decode range is $\rho_{\text{comm}} \approx 0$–$0.3$, with $\rho_{\text{comm}} = 0$ a sensible default for any deployment without explicit dispatch fusion or stream-concurrent expert pipelining. The $\rho_{\text{comm}} \approx 0.7$–$1.0$ values familiar from training and prefill literature are not directly applicable here.
 
 ### LM head latency (stage PP-1 only)
 

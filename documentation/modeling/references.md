@@ -532,7 +532,7 @@ https://github.com/deepseek-ai/DeepEP
 
 The following constants and models are **original to this document suite** and are not derived from a published paper. They should be marked as such in inline citations:
 
-- **$\rho$ (overlap factor)** — The parameterization $t_{\text{step,user}} = t_{\text{local}} + \max(0, t_{\text{comm}} - \rho \cdot t_{\text{local}})$ is an original formulation introduced in `decode.md`. The concept of compute–communication overlap is discussed in [MEGATRON3] and [DEEPSPEED-MOE] but without this exact model. Use "this work" as the citation.
+- **$\rho_{\text{comm}}$ (overlap factor)** — The parameterization $t_{\text{step,user}} = t_{\text{local}} + \max(0, t_{\text{comm}} - \rho_{\text{comm}} \cdot t_{\text{local}})$ is an original formulation introduced in `decode.md`. The concept of compute–communication overlap is discussed in [MEGATRON3] and [DEEPSPEED-MOE] but without this exact model. Use "this work" as the citation.
 
 ---
 
