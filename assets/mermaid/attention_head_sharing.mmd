@@ -1,0 +1,76 @@
+flowchart TB
+    MHA ~~~ GQA ~~~ MQA
+
+    subgraph MHA["<b>MHA</b> &nbsp;—&nbsp; n_kv = n_q &nbsp;(every head has its own K, V)"]
+        direction TB
+        M_Q1((Q)):::q
+        M_Q2((Q)):::q
+        M_Q3((Q)):::q
+        M_Q4((Q)):::q
+        M_Q5((Q)):::q
+        M_Q6((Q)):::q
+        M_Q7((Q)):::q
+        M_Q8((Q)):::q
+        M_KV1[K, V]:::kv
+        M_KV2[K, V]:::kv
+        M_KV3[K, V]:::kv
+        M_KV4[K, V]:::kv
+        M_KV5[K, V]:::kv
+        M_KV6[K, V]:::kv
+        M_KV7[K, V]:::kv
+        M_KV8[K, V]:::kv
+        M_Q1 --- M_KV1
+        M_Q2 --- M_KV2
+        M_Q3 --- M_KV3
+        M_Q4 --- M_KV4
+        M_Q5 --- M_KV5
+        M_Q6 --- M_KV6
+        M_Q7 --- M_KV7
+        M_Q8 --- M_KV8
+    end
+
+    subgraph GQA["<b>GQA</b> &nbsp;—&nbsp; n_kv = 2 groups (here), each shared by n_q/n_kv = 4 query heads"]
+        direction TB
+        G_Q1((Q)):::q
+        G_Q2((Q)):::q
+        G_Q3((Q)):::q
+        G_Q4((Q)):::q
+        G_Q5((Q)):::q
+        G_Q6((Q)):::q
+        G_Q7((Q)):::q
+        G_Q8((Q)):::q
+        G_KV1[K, V]:::kv
+        G_KV2[K, V]:::kv
+        G_Q1 --- G_KV1
+        G_Q2 --- G_KV1
+        G_Q3 --- G_KV1
+        G_Q4 --- G_KV1
+        G_Q5 --- G_KV2
+        G_Q6 --- G_KV2
+        G_Q7 --- G_KV2
+        G_Q8 --- G_KV2
+    end
+
+    subgraph MQA["<b>MQA</b> &nbsp;—&nbsp; n_kv = 1 (a single K, V shared by all n_q query heads)"]
+        direction TB
+        Z_Q1((Q)):::q
+        Z_Q2((Q)):::q
+        Z_Q3((Q)):::q
+        Z_Q4((Q)):::q
+        Z_Q5((Q)):::q
+        Z_Q6((Q)):::q
+        Z_Q7((Q)):::q
+        Z_Q8((Q)):::q
+        Z_KV[K, V]:::kv
+        Z_Q1 --- Z_KV
+        Z_Q2 --- Z_KV
+        Z_Q3 --- Z_KV
+        Z_Q4 --- Z_KV
+        Z_Q5 --- Z_KV
+        Z_Q6 --- Z_KV
+        Z_Q7 --- Z_KV
+        Z_Q8 --- Z_KV
+    end
+
+    classDef q fill:#FFCDD2,stroke:#C62828,color:#B71C1C
+    classDef kv fill:#C8E6C9,stroke:#2E7D32,color:#1B5E20,stroke-width:1.5px

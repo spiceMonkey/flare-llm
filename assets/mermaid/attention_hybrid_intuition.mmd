@@ -1,0 +1,31 @@
+flowchart LR
+    subgraph uniform["Uniform Transformer: every layer holds a growing KV cache"]
+        direction TB
+        u_l1["Layer 1<br/>full attention<br/>KV cache: B·S·base"]:::full
+        u_l2["Layer 2<br/>full attention<br/>KV cache: B·S·base"]:::full
+        u_ldots["..."]:::dots
+        u_lL["Layer L<br/>full attention<br/>KV cache: B·S·base"]:::full
+        u_total["cluster cache:<br/>B·S·<b><i><font color='#0D47A1'>L</font></i></b>·base<br/>scales with <b><i><font color='#0D47A1'>L</font></i></b>"]:::cache
+
+        u_l1 --> u_l2 --> u_ldots --> u_lL --> u_total
+    end
+
+    subgraph hybrid["Hybrid: most layers are linear / SSM with O(1) state; only a few full layers grow with S"]
+        direction TB
+        h_l1["Layer 1<br/>linear / SSM<br/>state: O(d_state)"]:::lin
+        h_l2["Layer 2<br/>linear / SSM<br/>state: O(d_state)"]:::lin
+        h_l3["Layer 3<br/>full attention<br/>KV cache: B·S·base"]:::full
+        h_l4["Layer 4<br/>linear / SSM<br/>state: O(d_state)"]:::lin
+        h_ldots["..."]:::dots
+        h_lL["Layer L"]:::lin
+        h_total["cluster cache:<br/>B·S·<b><i><font color='#AD1457'>L_full</font></i></b>·base<br/>+ small fixed SSM state<br/>scales with <b><i><font color='#AD1457'>L_full</font></i></b> ≪ <b><i><font color='#0D47A1'>L</font></i></b>"]:::cache
+
+        h_l1 --> h_l2 --> h_l3 --> h_l4 --> h_ldots --> h_lL --> h_total
+    end
+
+    uniform ~~~ hybrid
+
+    classDef full fill:#FFE0B2,stroke:#E65100,stroke-width:2px,color:#BF360C
+    classDef lin fill:#C8E6C9,stroke:#2E7D32,color:#1B5E20
+    classDef cache fill:#F8BBD0,stroke:#AD1457,stroke-width:3px,color:#880E4F
+    classDef dots fill:#FFFFFF,stroke:#FFFFFF,color:#9E9E9E

@@ -1,0 +1,39 @@
+flowchart LR
+    subgraph dense["MLA dense attention: every query attends to all S past tokens"]
+        direction TB
+        dq["query"]:::q
+        dcache[("KV cache<br/>(MLA latent c_KV)<br/>S tokens")]:::cache
+        dattn["attention<br/>over all S tokens<br/>O(S · n_q · d_qk)"]:::attn
+        dout["output"]:::tok
+
+        dq --> dattn
+        dcache ==> |"read all S"| dattn
+        dattn --> dout
+    end
+
+    subgraph dsa["DSA: lightweight indexer picks top-<b><i><font color='#0D47A1'>k</font></i></b>; attention only over selected"]
+        direction TB
+        sq["query"]:::q
+        scache[("KV cache<br/>(MLA latent c_KV<br/>+ small indexer feature)<br/>S tokens")]:::cache
+        sidx["indexer:<br/>score query<br/>vs each past token<br/>O(S · d_idx) — cheap"]:::idx
+        ssel["top-<b><i><font color='#0D47A1'>k</font></i></b> selection<br/>(pick most relevant<br/>past tokens)"]:::sel
+        sattn["attention<br/>over <b><i><font color='#0D47A1'>k</font></i></b> tokens only<br/>O(<b><i><font color='#0D47A1'>k</font></i></b> · n_q · d_qk)"]:::attn
+        sout["output"]:::tok
+
+        sq --> sidx
+        scache ==> |"read all S<br/>for indexer"| sidx
+        sidx --> ssel
+        ssel --> sattn
+        scache ==> |"read only<br/>selected k"| sattn
+        sq --> sattn
+        sattn --> sout
+    end
+
+    dense ~~~ dsa
+
+    classDef tok fill:#B3D9FF,stroke:#1976D2,stroke-width:2px,color:#0D47A1
+    classDef q fill:#FFCDD2,stroke:#C62828,color:#B71C1C
+    classDef cache fill:#F8BBD0,stroke:#AD1457,stroke-width:3px,color:#880E4F
+    classDef attn fill:#FFE0B2,stroke:#E65100,stroke-width:2px,color:#BF360C
+    classDef idx fill:#D1C4E9,stroke:#5E35B1,color:#311B92
+    classDef sel fill:#C8E6C9,stroke:#2E7D32,color:#1B5E20

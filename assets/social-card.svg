@@ -1,0 +1,55 @@
+<svg viewBox="0 0 1280 640" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="coreGradD2" cx="50%" cy="50%" r="50%">
+      <stop offset="0%"  stop-color="#FFFBEB"/>
+      <stop offset="40%" stop-color="#FDE047"/>
+      <stop offset="100%" stop-color="#FB923C"/>
+    </radialGradient>
+  </defs>
+
+  <!-- brand background -->
+  <rect width="1280" height="640" fill="#0F172A"/>
+
+  <!-- ===== logo motif (from assets/logo.svg, scaled into 288x288 at x=104,y=176) ===== -->
+  <svg x="104" y="176" width="288" height="288" viewBox="0 0 256 256">
+    <g stroke="#60A5FA" stroke-width="1.5" opacity="0.45" fill="none">
+      <polyline points="128,46 178,70 210,128 178,186 128,210 78,186 46,128 78,70 128,46"/>
+      <line x1="128" y1="46"  x2="210" y2="128"/>
+      <line x1="178" y1="70"  x2="178" y2="186"/>
+      <line x1="210" y1="128" x2="128" y2="210"/>
+      <line x1="178" y1="186" x2="78"  y2="186"/>
+      <line x1="128" y1="210" x2="46"  y2="128"/>
+      <line x1="78"  y1="186" x2="78"  y2="70"/>
+      <line x1="46"  y1="128" x2="128" y2="46"/>
+      <line x1="78"  y1="70"  x2="178" y2="70"/>
+    </g>
+    <g stroke="#FDE047" stroke-linecap="round" opacity="0.9">
+      <line x1="128" y1="128" x2="128" y2="54"  stroke-width="2.5"/>
+      <line x1="128" y1="128" x2="128" y2="202" stroke-width="2.5"/>
+      <line x1="128" y1="128" x2="54"  y2="128" stroke-width="2.5"/>
+      <line x1="128" y1="128" x2="202" y2="128" stroke-width="2.5"/>
+      <line x1="128" y1="128" x2="78"  y2="78"  stroke-width="1.8"/>
+      <line x1="128" y1="128" x2="178" y2="78"  stroke-width="1.8"/>
+      <line x1="128" y1="128" x2="78"  y2="178" stroke-width="1.8"/>
+      <line x1="128" y1="128" x2="178" y2="178" stroke-width="1.8"/>
+    </g>
+    <g fill="#60A5FA" stroke="#1E3A5F" stroke-width="2">
+      <rect x="120" y="38"  width="16" height="16" rx="3"/>
+      <rect x="120" y="202" width="16" height="16" rx="3"/>
+      <rect x="38"  y="120" width="16" height="16" rx="3"/>
+      <rect x="202" y="120" width="16" height="16" rx="3"/>
+      <rect x="62"  y="62"  width="16" height="16" rx="3"/>
+      <rect x="178" y="62"  width="16" height="16" rx="3"/>
+      <rect x="62"  y="178" width="16" height="16" rx="3"/>
+      <rect x="178" y="178" width="16" height="16" rx="3"/>
+    </g>
+    <circle cx="128" cy="128" r="40" fill="#FDE047" opacity="0.18"/>
+    <circle cx="128" cy="128" r="22" fill="url(#coreGradD2)"/>
+    <circle cx="128" cy="128" r="9"  fill="#FFFBEB"/>
+  </svg>
+
+  <!-- ===== wordmark + tagline ===== -->
+  <text x="452" y="296" font-family="Helvetica, Arial, sans-serif" font-size="118" font-weight="bold" fill="#FDE047" letter-spacing="2">FLARE</text>
+  <text x="456" y="360" font-family="Helvetica, Arial, sans-serif" font-size="38" font-weight="bold" fill="#F8FAFC">Fast LLM Analytical Roofline Explorer</text>
+  <text x="456" y="410" font-family="Helvetica, Arial, sans-serif" font-size="26" fill="#94A3B8">Vendor-neutral analytical modeling for LLM inference performance</text>
+</svg>

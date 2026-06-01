@@ -1,0 +1,34 @@
+flowchart LR
+    subgraph full["Full attention (MHA / GQA / MLA): every query attends to all S past tokens"]
+        direction TB
+        fq["query at step S"]:::q
+        fpast["past tokens<br/>(positions 1..S-1)"]:::tok
+        fcache[("KV cache<br/>grows linearly with S<br/>(up to model max)")]:::cache
+        fattn["attention<br/>O(S) per query<br/>full receptive field"]:::attn
+
+        fpast -. "all stored" .-> fcache
+        fq --> fattn
+        fcache ==> |"read all S"| fattn
+    end
+
+    subgraph swa["Sliding-window attention: each query attends to last W tokens only"]
+        direction TB
+        sq["query at step S"]:::q
+        spast["past tokens<br/>(only last <b><i><font color='#0D47A1'>W</font></i></b> visible)"]:::tok
+        sevict["older tokens<br/>(positions ≤ S-W)<br/>evicted"]:::evict
+        scache[("KV cache<br/>capped at <b><i><font color='#0D47A1'>W</font></i></b><br/>(rolling buffer)")]:::cache
+        sattn["attention<br/>O(<b><i><font color='#0D47A1'>W</font></i></b>) per query<br/>local receptive field"]:::attn
+
+        spast -. "kept" .-> scache
+        sevict -. "dropped" .-> sevict
+        sq --> sattn
+        scache ==> |"read last W"| sattn
+    end
+
+    full ~~~ swa
+
+    classDef tok fill:#B3D9FF,stroke:#1976D2,stroke-width:2px,color:#0D47A1
+    classDef q fill:#FFCDD2,stroke:#C62828,color:#B71C1C
+    classDef cache fill:#F8BBD0,stroke:#AD1457,stroke-width:3px,color:#880E4F
+    classDef attn fill:#FFE0B2,stroke:#E65100,stroke-width:2px,color:#BF360C
+    classDef evict fill:#EEEEEE,stroke:#9E9E9E,stroke-dasharray:5 5,color:#616161

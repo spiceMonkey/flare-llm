@@ -1,0 +1,56 @@
+<svg viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="coreGradD2" cx="50%" cy="50%" r="50%">
+      <stop offset="0%"  stop-color="#FFFBEB"/>
+      <stop offset="40%" stop-color="#FDE047"/>
+      <stop offset="100%" stop-color="#FB923C"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="256" height="256" fill="#0F172A" rx="48"/>
+
+  <!-- all-to-all mesh chords between satellites (switch-fabric feel) -->
+  <!-- coords: N(128,46) NE(178,70) E(210,128) SE(178,186) S(128,210) SW(78,186) W(46,128) NW(78,70) -->
+  <g stroke="#60A5FA" stroke-width="1.5" opacity="0.45" fill="none">
+    <!-- skip-1 chords (adjacent already on perimeter, draw perimeter too) -->
+    <polyline points="128,46 178,70 210,128 178,186 128,210 78,186 46,128 78,70 128,46"/>
+    <!-- skip-2 chords -->
+    <line x1="128" y1="46"  x2="210" y2="128"/>
+    <line x1="178" y1="70"  x2="178" y2="186"/>
+    <line x1="210" y1="128" x2="128" y2="210"/>
+    <line x1="178" y1="186" x2="78"  y2="186"/>
+    <line x1="128" y1="210" x2="46"  y2="128"/>
+    <line x1="78"  y1="186" x2="78"  y2="70"/>
+    <line x1="46"  y1="128" x2="128" y2="46"/>
+    <line x1="78"  y1="70"  x2="178" y2="70"/>
+  </g>
+
+  <!-- interconnect rays from core (brighter, on top of mesh) -->
+  <g stroke="#FDE047" stroke-linecap="round" opacity="0.9">
+    <line x1="128" y1="128" x2="128" y2="54"  stroke-width="2.5"/>
+    <line x1="128" y1="128" x2="128" y2="202" stroke-width="2.5"/>
+    <line x1="128" y1="128" x2="54"  y2="128" stroke-width="2.5"/>
+    <line x1="128" y1="128" x2="202" y2="128" stroke-width="2.5"/>
+    <line x1="128" y1="128" x2="78"  y2="78"  stroke-width="1.8"/>
+    <line x1="128" y1="128" x2="178" y2="78"  stroke-width="1.8"/>
+    <line x1="128" y1="128" x2="78"  y2="178" stroke-width="1.8"/>
+    <line x1="128" y1="128" x2="178" y2="178" stroke-width="1.8"/>
+  </g>
+
+  <!-- 8 satellite cluster nodes -->
+  <g fill="#60A5FA" stroke="#1E3A5F" stroke-width="2">
+    <rect x="120" y="38"  width="16" height="16" rx="3"/>
+    <rect x="120" y="202" width="16" height="16" rx="3"/>
+    <rect x="38"  y="120" width="16" height="16" rx="3"/>
+    <rect x="202" y="120" width="16" height="16" rx="3"/>
+    <rect x="62"  y="62"  width="16" height="16" rx="3"/>
+    <rect x="178" y="62"  width="16" height="16" rx="3"/>
+    <rect x="62"  y="178" width="16" height="16" rx="3"/>
+    <rect x="178" y="178" width="16" height="16" rx="3"/>
+  </g>
+
+  <!-- flare core -->
+  <circle cx="128" cy="128" r="40" fill="#FDE047" opacity="0.18"/>
+  <circle cx="128" cy="128" r="22" fill="url(#coreGradD2)"/>
+  <circle cx="128" cy="128" r="9"  fill="#FFFBEB"/>
+</svg>
