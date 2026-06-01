@@ -10,9 +10,11 @@ A five-stage roofline pipeline (memory → FLOPs → traffic → comm → latenc
 
 **Four-pillar composition** (`model × system × partition × framework`), parameterized by a workload point (sequence length, batch size). The split keeps "which deployment shape" (partition) cleanly separated from "which serving stack runs it" (framework), so a single (model, system, partition) can be evaluated under multiple stacks (TRT-LLM, Dynamo+TRT, SGLang, vLLM, …) by swapping just the framework JSON.
 
-This README is a navigation guide; the methodology lives in [`documentation/modeling/`](documentation/modeling/), starting with [`decode.md`](documentation/modeling/decode.md).
+This README is a navigation guide; the methodology is published as the [Decode Modeling book](https://spicemonkey.github.io/flare-llm/) (see **Tutorial** below), starting with [decode](https://spicemonkey.github.io/flare-llm/decode.html).
 
 **Tutorial:** [**Decode Modeling**](https://spicemonkey.github.io/flare-llm/) — a walkthrough of the decode-phase derivation (decode + attention + memory hierarchy), with a pointer to the upstream collective-communication tutorial.
+
+**API reference:** [`documentation/api/`](documentation/api/) — generated reference for the public `llm_perf` classes and functions (specs, calculators, core models, loaders, utilities).
 
 ---
 
@@ -28,14 +30,14 @@ A disaggregated prefill/decode pipeline with a distributed KV cache. Each device
 
 | Layer | Variants | Doc |
 |---|---|---|
-| **Attention** | MHA, GQA, MQA, MLA (DeepSeek) | [`attention.md`](documentation/modeling/attention.md) |
-| **Memory hierarchy** | single-tier HBM, multi-tier HBM + SRAM, hypothetical 3D-stacked | [`sram.md`](documentation/modeling/sram.md), [`dram3d.md`](documentation/modeling/dram3d.md) |
-| **Collectives** | ring / tree (DBT) / Rabenseifner / PAT / hierarchical / torus / INC (NVLS, Quantum SHARP, hw_a2a) | [`collectives/`](documentation/modeling/collectives/) |
-| **Fabric topology** | crossbar (NVSwitch / IB / PCIe), torus (TPU ICI), full mesh, k-D mesh | [`collectives/02_topology_mapping.md`](documentation/modeling/collectives/02_topology_mapping.md) |
-| **Parallelism axes** | DP / PP / TP / EP / SP, with orthogonal or co-located TP+EP layout | [`decode.md`](documentation/modeling/decode.md) |
-| **Serving stacks** | 7 calibrated framework JSONs: `default`, `trt`, `dynamo_trt`, `dynamo_sglang`, `dynamo_vllm`, `sglang`, `vllm` | [`framework.md`](documentation/modeling/framework.md) |
-| **KV handoff** | co-located matched, co-located repack, disaggregated transfer | [`e2e.md`](documentation/modeling/e2e.md) |
-| **SLO feasibility** | floor check, TPOT bound on B, TTFT bound on PP, goodput-optimal partition sweep | [`slo.md`](documentation/modeling/slo.md) |
+| **Attention** | MHA, GQA, MQA, MLA (DeepSeek) | [attention](https://spicemonkey.github.io/flare-llm/attention.html) |
+| **Memory hierarchy** | single-tier HBM, multi-tier HBM + SRAM, hypothetical 3D-stacked | [sram](https://spicemonkey.github.io/flare-llm/sram.html), [dram3d](https://spicemonkey.github.io/flare-llm/) |
+| **Collectives** | ring / tree (DBT) / Rabenseifner / PAT / hierarchical / torus / INC (NVLS, Quantum SHARP, hw_a2a) | [collectives](https://spicemonkey.github.io/flare-llm/collective_comm.html) |
+| **Fabric topology** | crossbar (NVSwitch / IB / PCIe), torus (TPU ICI), full mesh, k-D mesh | [collectives](https://spicemonkey.github.io/flare-llm/collective_comm.html) |
+| **Parallelism axes** | DP / PP / TP / EP / SP, with orthogonal or co-located TP+EP layout | [decode](https://spicemonkey.github.io/flare-llm/decode.html) |
+| **Serving stacks** | 7 calibrated framework JSONs: `default`, `trt`, `dynamo_trt`, `dynamo_sglang`, `dynamo_vllm`, `sglang`, `vllm` | [book](https://spicemonkey.github.io/flare-llm/) |
+| **KV handoff** | co-located matched, co-located repack, disaggregated transfer | [book](https://spicemonkey.github.io/flare-llm/) |
+| **SLO feasibility** | floor check, TPOT bound on B, TTFT bound on PP, goodput-optimal partition sweep | [book](https://spicemonkey.github.io/flare-llm/) |
 
 ---
 
@@ -46,18 +48,14 @@ A disaggregated prefill/decode pipeline with a distributed KV cache. Each device
 ├── README.md
 ├── notebooks/         — quickstart + Pareto-frontier case study
 ├── documentation/
-│   └── modeling/      — methodology derivations + symbol reference
-│       └── collectives/   — mirrored from spiceMonkey/collective-comm
-├── llm_perf/
-│   ├── calculators/   — InferenceCalculator, PrefillCalculator, E2ECalculator
-│   ├── core/          — memory_model, decode_model, prefill_model + primitives
-│   │   └── primitives/collective_cost.py   — mirrored from spiceMonkey/collective-comm
-│   ├── database/      — model / system / tuner / framework JSON specs
-│   ├── specs/         — typed dataclasses (LlmModelSpec, SystemSpec, …)
-│   └── io/, utils/    — loaders, equations, HF adapter, DRAM3D helper
-├── tests/             — unit + regression tests
-├── sandbox/           — one-off experiments
-└── scripts/           — supported CLI tools
+│   └── api/           — generated API reference
+└── llm_perf/
+    ├── calculators/   — InferenceCalculator, PrefillCalculator, E2ECalculator
+    ├── core/          — memory_model, decode_model, prefill_model + primitives
+    │   └── primitives/collective_cost.py   — mirrored from spiceMonkey/collective-comm
+    ├── database/      — model / system / tuner / framework JSON specs
+    ├── specs/         — typed dataclasses (LlmModelSpec, SystemSpec, …)
+    └── io/, utils/    — loaders, equations, HF adapter, DRAM3D helper
 ```
 
 ---
@@ -123,8 +121,8 @@ Workload: GPT-1.8T MoE @ FP4 on GB200 NVL72.
 
 ## Utilities
 
-- **HuggingFace Adapter** — `python scripts/convert_hf_model.py` converts any HF `config.json` (incl. MoE / GQA) into the `llm_perf.model` schema. See [`utils/hf_model_adapter.py`](llm_perf/utils/hf_model_adapter.py).
-- **DRAM3D Bandwidth Calculator** — derives HBM bandwidth from die-interface parameters to evaluate future memory classes (HBM3E / HBM4 / HBM4E). See [`utils/dram3d.py`](llm_perf/utils/dram3d.py) and [`modeling/dram3d.md`](documentation/modeling/dram3d.md).
+- **HuggingFace Adapter** — converts any HF `config.json` (incl. MoE / GQA) into the `llm_perf.model` schema. See [`utils/hf_model_adapter.py`](llm_perf/utils/hf_model_adapter.py).
+- **DRAM3D Bandwidth Calculator** — derives HBM bandwidth from die-interface parameters to evaluate future memory classes (HBM3E / HBM4 / HBM4E). See [`utils/dram3d.py`](llm_perf/utils/dram3d.py) and the [Decode Modeling book](https://spicemonkey.github.io/flare-llm/).
 
 ---
 
