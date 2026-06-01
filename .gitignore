@@ -17,6 +17,10 @@ sandbox/
 # Explaining docs — kept local until ready to publish
 documentation/explaining/
 
+# Modeling docs — source kept private; the mdBook site is built from a
+# private source and deployed as rendered HTML (see deploy-book.yml).
+documentation/modeling/
+
 # Notebooks — publish only quickstart + pareto_basic; keep the rest local
 notebooks/*.ipynb
 !notebooks/quickstart.ipynb
