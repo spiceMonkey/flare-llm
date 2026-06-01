@@ -51,6 +51,8 @@ assets/*.png
 # Mermaid sources + render helper — kept local
 assets/mermaid/
 
-# Scripts — publish only the documented HF conversion CLI
-scripts/*.py
-!scripts/convert_hf_model.py
+# Scripts — kept local (tooling, not published)
+scripts/
+
+# Tests — kept local (not published)
+tests/
