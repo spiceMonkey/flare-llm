@@ -47,6 +47,8 @@ assets/*.png
 !assets/attention_mla_intuition.png
 !assets/attention_swa_intuition.png
 !assets/social-card.png
+!assets/validation_gpt_oss_120b_gb200_dynamo_trt.png
+!assets/validation_dsr1_gb200_dynamo_trt.png
 
 # Mermaid sources + render helper — kept local
 assets/mermaid/
