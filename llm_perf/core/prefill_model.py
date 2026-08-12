@@ -251,6 +251,7 @@ def compute_prefill_comm(
     tp_algorithm = fw.tp_algorithm_prefill.lower()
     ep_algorithm = fw.ep_algorithm_prefill.lower()
     torus_alg = fw.torus_algorithm.lower()
+    align_policy = fw.torus_align_policy.lower()
     inc_enabled = fw.inc_enabled
 
     if tp_algorithm == "auto" or ep_algorithm == "auto":
@@ -264,7 +265,7 @@ def compute_prefill_comm(
         return cost_collective(
             system.get_tier_chain(coll), op, M, G,
             algorithm=alg, torus_algorithm=torus_alg,
-            inc_enabled=inc_enabled,
+            inc_enabled=inc_enabled, align_policy=align_policy,
         )
 
     # PP: token-scaled activation hop. Per-rank payload uses H/D_kv (matches

@@ -27,6 +27,10 @@ def _load_json(path: str | Path) -> Dict[str, Any]:
 TP_ALGORITHM_VALUES = ("ring", "tree", "tree_pipelined", "inc", "auto")
 EP_ALGORITHM_VALUES = ("ring", "inc", "auto")
 TORUS_ALGORITHM_VALUES = ("ring", "swing", "auto")
+# Sub-torus admission policy — see dispatch._align_to_dims. No "auto":
+# the two policies model different placement assumptions, not two
+# implementations of one thing, so there is nothing to cost-minimize over.
+TORUS_ALIGN_POLICY_VALUES = ("prefix", "greedy")
 
 # Whitelists for attention dispatch + TP/EP physical overlay.
 ATTENTION_MODE_VALUES = ("tp", "dp")
@@ -60,6 +64,7 @@ def framework_spec_from_json_dict(cfg: Dict[str, Any]) -> FrameworkSpec:
           "ep_algorithm_decode": "auto",
           "ep_algorithm_prefill": "auto",
           "torus_algorithm": "auto",
+          "torus_align_policy": "prefix",
           "n_TP_collectives": 2,
           "n_EP_collectives": 2,
           "n_SP_collectives": 1,
@@ -104,6 +109,9 @@ def framework_spec_from_json_dict(cfg: Dict[str, Any]) -> FrameworkSpec:
     ep_decode = _algo("ep_algorithm_decode", _defaults.ep_algorithm_decode, EP_ALGORITHM_VALUES)
     ep_prefill = _algo("ep_algorithm_prefill", _defaults.ep_algorithm_prefill, EP_ALGORITHM_VALUES)
     torus_alg = _algo("torus_algorithm", _defaults.torus_algorithm, TORUS_ALGORITHM_VALUES)
+    torus_align = _algo(
+        "torus_align_policy", _defaults.torus_align_policy, TORUS_ALIGN_POLICY_VALUES
+    )
 
     attention_mode = _algo("attention_mode", _defaults.attention_mode, ATTENTION_MODE_VALUES)
     if "layout" in cfg and "tp_ep_layout" not in cfg:
@@ -168,6 +176,7 @@ def framework_spec_from_json_dict(cfg: Dict[str, Any]) -> FrameworkSpec:
         ep_algorithm_decode=ep_decode,
         ep_algorithm_prefill=ep_prefill,
         torus_algorithm=torus_alg,
+        torus_align_policy=torus_align,
         n_TP_collectives=int(cfg.get("n_TP_collectives", _defaults.n_TP_collectives)),
         n_EP_collectives=int(cfg.get("n_EP_collectives", _defaults.n_EP_collectives)),
         n_SP_collectives=int(cfg.get("n_SP_collectives", _defaults.n_SP_collectives)),

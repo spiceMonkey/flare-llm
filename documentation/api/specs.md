@@ -1,7 +1,7 @@
 # API Reference — Specs
 
 **Author:** Yue Lu  
-**Date:** June 2026  
+**Date:** August 2026  
 
 Typed dataclass inputs. The composition is model x system x partition x tuner x framework, plus optional overhead/disagg specs for end-to-end runs.
 
@@ -417,6 +417,7 @@ Sourced from `decode.md §7.1, §7.2` (host overhead) and `attention.md §3.5` (
 | `ep_algorithm_decode` | `str` | `'ring'` |
 | `ep_algorithm_prefill` | `str` | `'ring'` |
 | `torus_algorithm` | `str` | `'ring'` |
+| `torus_align_policy` | `str` | `'prefix'` |
 | `n_TP_collectives` | `int` | `2` |
 | `n_EP_collectives` | `int` | `2` |
 | `n_SP_collectives` | `int` | `1` |

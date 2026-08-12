@@ -1,7 +1,7 @@
 # API Reference — Core
 
 **Author:** Yue Lu  
-**Date:** June 2026  
+**Date:** August 2026  
 
 Pure analytical model functions. Each takes (model, system, partition, tuner, framework) and returns a results dataclass; no global state.
 
