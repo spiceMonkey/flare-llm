@@ -78,7 +78,7 @@ Broader coverage lives in `benchmark/validate/coverage_sweep.py`, which runs all
 ```
 .
 ├── README.md
-├── notebooks/         — quickstart + Pareto-frontier case study
+├── notebooks/         — quickstart + Pareto-frontier case studies
 ├── benchmark/
 │   ├── inferenceX/    — vendored InferenceX measurement snapshot
 │   └── validate/      — per-cut predicted-vs-measured TPOT drivers
@@ -151,6 +151,23 @@ print(f"tok/s/GPU  = {e2e.throughput_per_gpu:.1f}")
 Enumerates every valid `(PP, TP, EP, SP)` partition, sweeps `B` from 1 to the KV-paging max, and extracts the upper-right envelope in (interactivity, throughput/GPU) space. At baseline GB200 NVL72 with `PP_MAX = 8`: 260 valid partitions → 37 frontier points, dominated by `PP=8 TP=8 EP=1 SP=1`. Raise `PP_MAX` to study the unbounded-PP frontier (winners shift toward `PP=32 TP=2`-style shapes).
 
 Workload: GPT-1.8T MoE @ FP4 on GB200 NVL72.
+
+---
+
+## Case Study — `notebooks/pareto_tpu_vs_gb200.ipynb`
+
+![TPU v5p pod vs GB200 NVL72 Pareto frontiers](assets/pareto_tpu_vs_gb200.png)
+
+Two fabrics with opposite design points, same workload: GPT-1.8T MoE @ FP4, `S_decode = 8192`. A TPU v5p pod (4096 chips, 3D torus 16³, 459 TF and 2.77 TB/s HBM per chip, 150 GB/s/port Inter-Chip Interconnect) against a GB200 NVL72 (72 GPUs, single-tier NVLink crossbar, 2250 TF and 8 TB/s HBM per GPU, 900 GB/s/port). Both axes are per-device or per-user, so the 4096-vs-72 device gap doesn't distort the comparison — but aggregate throughput is not shown, and it scales with cluster size.
+
+| Fabric | Valid partitions | Peak throughput/device | Peak interactivity | Winner at peak throughput |
+|---|---|---|---|---|
+| TPU v5p pod | 631 | 429 tok/s/device | 297 tok/s/user | `PP=8 TP=4 EP=1 B=256` |
+| GB200 NVL72 | 65 | 916 tok/s/device | 260 tok/s/user | `PP=6 TP=2 EP=1 B=256` |
+
+The frontiers cross. GB200 delivers ~2.1× the throughput per device at the batch-heavy end, on the strength of 2.9× the HBM bandwidth per chip; but its frontier falls away steeply past ~130 tok/s/user, while the torus pod stays nearly flat out to ~300. Above the crossover near 120 tok/s/user, the lower-bandwidth chip is the better per-device buy.
+
+Each fabric is also swept under two collective-algorithm variants — ring everywhere versus the per-collective optimizer (double binary tree, DBT, on the crossbar; dimension-decomposed torus routing on the pod). **The algorithm choice moves up to 25% of time-per-output-token in the interior of the cloud (44% of TPU points and 23% of GB200 points shift by more than 0.5%) yet barely moves the frontier**, because the envelope-winning partitions are the ones with almost no collective traffic to optimize — communication accounts for 0.7–3% of stage time along the GB200 frontier. The one real exception is the GB200 interactive tail, where DBT on the `TP=8` all-reduce extends the envelope from 236 to 260 tok/s/user. The lesson generalizes: collective-algorithm tuning pays off where a deployment is already communication-bound, and the Pareto-optimal deployments mostly aren't.
 
 ---
 
