@@ -43,7 +43,7 @@ A disaggregated prefill/decode pipeline with a distributed KV cache. Each device
 
 ## Validation — Predicted vs. Measured TPOT
 
-FLARE's decode predictions are cross-validated against measured production-stack Time-Per-Output-Token (TPOT) from the [InferenceX™](https://github.com/SemiAnalysisAI/InferenceX) public benchmark dataset (SemiAnalysis LLC, Apache-2.0; snapshot vendored under [`benchmark/inferenceX/`](benchmark/inferenceX/), fetched 2026-05-09, 4,952 rows across 8 models). Each driver under [`benchmark/validate/`](benchmark/validate/) pins one (model, hardware, framework) cut, sweeps concurrency *B*, and overlays the model's cost-component breakdown on the measured scatter — so the plot shows not just *whether* the prediction lands, but *which primitive* sets the floor at each operating point.
+FLARE's decode predictions are cross-validated against measured production-stack Time-Per-Output-Token (TPOT) from the [InferenceX™](https://github.com/SemiAnalysisAI/InferenceX) public benchmark dataset (SemiAnalysis LLC, Apache-2.0; snapshot vendored under [`benchmark/inferenceX/`](benchmark/inferenceX/), fetched 2026-05-09, 4,952 rows across 8 models). Each published driver under [`benchmark/validate/`](benchmark/validate/) pins one (model, hardware, framework) cut, sweeps concurrency *B*, and overlays the model's cost-component breakdown on the measured scatter — so the plot shows not just *whether* the prediction lands, but *which primitive* sets the floor at each operating point.
 
 Two per-cut calibration constants are used: *bw_eta* (sustained-to-nameplate HBM bandwidth, a function of chip generation × access pattern) and *c*<sub>seq</sub> (per-sequence host-side serving work, a function of the serving stack). Everything else is first-principles. Each example below is reproducible with the single command shown.
 
@@ -55,7 +55,7 @@ Two per-cut calibration constants are used: *bw_eta* (sustained-to-nameplate HBM
 python benchmark/validate/gpt_oss_120b_gb200_dynamo_trt.py
 ```
 
-120B MoE at FP4, TP=4 EP=1 on GB200 NVL72 under Dynamo+TRT-LLM, ISL/OSL = 1024/1024. **MAE 13.6% over 7 measured points (B = 1…128).** The interesting feature is the flat left half: through *B* ≈ 16 the deployment is *kernel-dispatch-bound* — the ~1.9 ms *t*<sub>kernel</sub> floor exceeds all GPU work, so TPOT is invariant to batch. Weight traffic only takes over past that, which is exactly where the measured points begin to rise.
+120B MoE at FP4, TP=4 EP=1 on GB200 NVL72 under Dynamo+TRT-LLM, ISL/OSL = 1024/1024. **Mean absolute error (MAE) 13.6% over 7 measured points (B = 1…128).** The interesting feature is the flat left half: through *B* ≈ 16 the deployment is *kernel-dispatch-bound* — the ~1.9 ms *t*<sub>kernel</sub> floor exceeds all GPU work, so TPOT is invariant to batch. Weight traffic only takes over past that, which is exactly where the measured points begin to rise.
 
 ### Large MoE — DeepSeek-R1 on GB200 NVL72
 
@@ -67,7 +67,7 @@ python benchmark/validate/dsr1_gb200_dynamo_trt.py --cut colo_tp_attn
 
 671B / 37B-active MoE + MLA at FP4 on GB200 NVL72 under Dynamo+TRT-LLM, in the **co-located TP+EP layout** (TP = EP = 8, TP attention, 4 replicas across 32 GPUs). **MAE 19.6% over 14 measured points spanning B = 4…564** — the widest single-cut coverage in the dataset, crossing the dispatch-bound plateau, the memory-bound ramp, and the expert-collective regime where *t*<sub>comm</sub> becomes material.
 
-Broader coverage lives in `benchmark/validate/coverage_sweep.py`, which runs all 8 InferenceX models across every single-island system and stack (794 rows, 44 model × hardware × framework cells) with no per-cut tuning.
+Broader coverage lives in `benchmark/validate/coverage_sweep.py`, which runs all 8 InferenceX models across every single-island system and stack (794 rows, 44 model × hardware × framework cells) with no per-cut tuning. Untuned, it averages ~41% MAE, with individual cells ranging from roughly 14% to 60%. The loose cells share one signature — consistent under-prediction that grows with batch size, which is the not-yet-calibrated per-step host floor rather than a limit of the roofline. The two examples above are what the model does once that constant is fitted per stack; the sweep is what it does before.
 
 > Benchmark data © 2026 SemiAnalysis LLC, licensed under Apache-2.0. This is an **unofficial** analysis derived from the InferenceX public API — the canonical source is [SemiAnalysisAI/InferenceX](https://github.com/SemiAnalysisAI/InferenceX). See [`benchmark/inferenceX/NOTICE`](benchmark/inferenceX/NOTICE).
 
