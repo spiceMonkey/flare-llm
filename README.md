@@ -67,8 +67,6 @@ python benchmark/validate/dsr1_gb200_dynamo_trt.py --cut colo_tp_attn
 
 671B / 37B-active MoE + MLA at FP4 on GB200 NVL72 under Dynamo+TRT-LLM, in the **co-located TP+EP layout** (TP = EP = 8, TP attention, 4 replicas across 32 GPUs). **MAE 19.6% over 14 measured points spanning B = 4…564** — the widest single-cut coverage in the dataset, crossing the dispatch-bound plateau, the memory-bound ramp, and the expert-collective regime where *t*<sub>comm</sub> becomes material.
 
-Broader coverage lives in `benchmark/validate/coverage_sweep.py`, which runs all 8 InferenceX models across every single-island system and stack (794 rows, 44 model × hardware × framework cells) with no per-cut tuning. Untuned, it averages ~41% MAE, with individual cells ranging from roughly 14% to 60%. The loose cells share one signature — consistent under-prediction that grows with batch size, which is the not-yet-calibrated per-step host floor rather than a limit of the roofline. The two examples above are what the model does once that constant is fitted per stack; the sweep is what it does before.
-
 > Benchmark data © 2026 SemiAnalysis LLC, licensed under Apache-2.0. This is an **unofficial** analysis derived from the InferenceX public API — the canonical source is [SemiAnalysisAI/InferenceX](https://github.com/SemiAnalysisAI/InferenceX). See [`benchmark/inferenceX/NOTICE`](benchmark/inferenceX/NOTICE).
 
 ---

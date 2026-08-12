@@ -229,9 +229,8 @@ def topology_tag(sys_id: str) -> str:
     hierarchical specs (e.g. b200.multibox / gb200.multibox).
     Empty string if the spec can't be loaded.
 
-    Used by `coverage_sweep.py` and per-stack drivers to make the
-    plot subtitle visually distinguish single-box from multi-box
-    deployments at a glance.
+    Used by the per-stack drivers to make the plot subtitle visually
+    distinguish single-box from multi-box deployments at a glance.
     """
     try:
         sys_spec = load_system_from_db(sys_id)
