@@ -21,10 +21,11 @@ documentation/explaining/
 # private source and deployed as rendered HTML (see deploy-book.yml).
 documentation/modeling/
 
-# Notebooks — publish only quickstart + pareto_basic; keep the rest local
+# Notebooks — publish only quickstart + the two Pareto case studies; keep the rest local
 notebooks/*.ipynb
 !notebooks/quickstart.ipynb
 !notebooks/pareto_basic.ipynb
+!notebooks/pareto_tpu_vs_gb200.ipynb
 
 # HuggingFace raw configs — kept local (conversion inputs, not library data)
 archives/
@@ -37,6 +38,7 @@ assets/*.png
 !assets/logo.png
 !assets/cluster_architecture.png
 !assets/pareto_basic.png
+!assets/pareto_tpu_vs_gb200.png
 !assets/pareto_basic_kernel_toggle.png
 !assets/attention_dsa_intuition.png
 !assets/attention_gqa.png
