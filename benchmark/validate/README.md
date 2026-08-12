@@ -4,17 +4,16 @@ Cross-validate the llm_perf analytical model against measured production-stack p
 
 Each driver in this folder targets one `(model, hardware, framework)` cut. It loads the matching measured rows from `benchmark/inferenceX/data/flat/`, runs the framework on the same deployment shape, prints a per-(TP, B) table of time-per-output-token (TPOT) error, and writes a TPOT-vs-B plot with the framework's component breakdown (compute / mem / comm / LM / serving / total) overlaid against the InferenceX scatter.
 
-The published set is the two per-cut drivers the root README walks through, plus the sweep that covers the whole dataset without per-cut tuning.
+The published set is the two per-cut drivers the root README walks through.
 
 ## Drivers
 
 | Driver | Model spec | System | Framework | Cuts |
 |---|---|---|---|---|
 | `gpt_oss_120b_gb200_dynamo_trt.py` | `gpt_oss_120b` | `gb200.72gpu` | dynamo-trt | TP=4 EP=1 dec=4 — mean absolute error (MAE) 13.6% over 7 points |
-| `dsr1_gb200_dynamo_trt.py` | `deepseek_r1_0528` | `gb200.72gpu` | dynamo-trt | EXACT (TP=36 EP=1), CO-LOCATED (TP=EP={8,16,32}), ORTHO (TP=8 EP=8 dec=32) |
-| `coverage_sweep.py` | **all 8 InferenceX models** | all single-island system specs | all single-island stacks | comprehensive coverage sweep — 794 rows × 44 (model × hw × fw) cells, ~41% overall MAE, no per-cut tuning. `--plot` for per-cell plots; `--model X` / `--hardware Y` / `--framework Z` to filter |
+| `dsr1_gb200_dynamo_trt.py` | `deepseek_r1_0528` | `gb200.72gpu` | dynamo-trt | EXACT (TP=36 EP=1), CO-LOCATED (TP=EP={8,16,32}), ORTHO (TP=8 EP=8 dec=32) — 19.6% MAE over 14 points on the co-located TP-attention cut |
 
-The two per-cut drivers are calibrated and land at 13.6% and 19.6% MAE on the cuts the root README shows. `coverage_sweep.py` is the honest breadth number: run uncalibrated across every cell, the model averages ~41%, and individual cells range from roughly 14% to 60%. The loose cells share a signature — consistent under-prediction that grows with batch size, which is the not-yet-calibrated per-step host floor rather than a failure of the roofline itself.
+Both are calibrated per cut: `bw_eta` and `c_seq` are fitted for the (model, hardware, framework) cell, and everything else is first-principles. Accuracy on an *uncalibrated* cell is materially worse — the dominant residual is a consistent under-prediction that grows with batch size, which is the not-yet-calibrated per-step host floor rather than a failure of the roofline itself.
 
 ## Running
 
@@ -33,7 +32,7 @@ python benchmark/validate/dsr1_gb200_dynamo_trt.py --cut colo_tp_attn
 python benchmark/validate/dsr1_gb200_dynamo_trt.py --check 35
 
 # Override output directory (default: benchmark/results/):
-python benchmark/validate/coverage_sweep.py --model GLM-5 --plot --out-dir /tmp/plots
+python benchmark/validate/dsr1_gb200_dynamo_trt.py --out-dir /tmp/plots
 ```
 
 ## Common CLI args (registered by `common.add_common_cli`)
