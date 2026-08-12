@@ -1,7 +1,7 @@
 # API Reference — Calculators
 
 **Author:** Yue Lu  
-**Date:** June 2026  
+**Date:** August 2026  
 
 End-to-end entry points. Each composes the specs, runs the five-stage pipeline, and returns a results dataclass.
 

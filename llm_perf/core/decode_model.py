@@ -413,6 +413,7 @@ def compute_comm(
     tp_algorithm = fw.tp_algorithm_decode.lower()
     ep_algorithm = fw.ep_algorithm_decode.lower()
     torus_alg = fw.torus_algorithm.lower()
+    align_policy = fw.torus_align_policy.lower()
     inc_enabled = fw.inc_enabled
 
     if tp_algorithm == "auto" or ep_algorithm == "auto":
@@ -426,7 +427,7 @@ def compute_comm(
         return cost_collective(
             system.get_tier_chain(coll), op, M, G,
             algorithm=alg, torus_algorithm=torus_alg,
-            inc_enabled=inc_enabled,
+            inc_enabled=inc_enabled, align_policy=align_policy,
         )
 
     # PP: shard-preserving hop of B tokens × (H/D_kv) activation bytes.

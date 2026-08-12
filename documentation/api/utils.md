@@ -1,7 +1,7 @@
 # API Reference — Utils
 
 **Author:** Yue Lu  
-**Date:** June 2026  
+**Date:** August 2026  
 
 Helpers: HuggingFace model adapter, DRAM bandwidth calculator, constants, validation, and plotting.
 

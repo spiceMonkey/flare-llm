@@ -67,6 +67,7 @@ def optimize_collective_algorithms(
     H = model.H
     b = model.bytes_per_param
     inc_enabled = framework.inc_enabled
+    align_policy = framework.torus_align_policy.lower()
 
     new_fields = {}
 
@@ -79,6 +80,7 @@ def optimize_collective_algorithms(
             M=tuner.B_decode * H * b,
             G=G_TP(partition),
             inc_enabled=inc_enabled,
+            align_policy=align_policy,
         )
     # Decode EP A2A: M = B_decode · k · H · b, G = EP.
     if framework.ep_algorithm_decode == "auto":
@@ -88,6 +90,7 @@ def optimize_collective_algorithms(
             M=tuner.B_decode * k_active * H * b,
             G=G_EP(partition),
             inc_enabled=inc_enabled,
+            align_policy=align_policy,
         )
 
     # ─── Prefill ────────────────────────────────────────────────────────
@@ -102,6 +105,7 @@ def optimize_collective_algorithms(
             M=tokens_prefill * H * b,
             G=G_TP(partition),
             inc_enabled=inc_enabled,
+            align_policy=align_policy,
         )
     # Prefill EP A2A: M = tokens · k · H · b.
     if framework.ep_algorithm_prefill == "auto":
@@ -111,6 +115,7 @@ def optimize_collective_algorithms(
             M=tokens_prefill * k_active * H * b,
             G=G_EP(partition),
             inc_enabled=inc_enabled,
+            align_policy=align_policy,
         )
 
     if not new_fields:
@@ -124,6 +129,7 @@ def _resolve(
     M: float,
     G: int,
     inc_enabled: bool,
+    align_policy: str = "prefix",
 ) -> str:
     """Pick the algorithm per the policy in this module's docstring.
 
@@ -132,7 +138,9 @@ def _resolve(
     2. Else if SW options exist → return `min(cost)` among them.
     3. Else (empty option set, e.g. G ≤ 1 or empty chain) → "ring" sentinel.
     """
-    options = enumerate_options(tier_chain, op, M, G, inc_enabled=inc_enabled)
+    options = enumerate_options(
+        tier_chain, op, M, G, inc_enabled=inc_enabled, align_policy=align_policy
+    )
     if not options:
         return "ring"
     if any(name == "inc" for name, _ in options):

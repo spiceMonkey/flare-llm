@@ -44,6 +44,10 @@ from .collective_cost import (
 # Accepted `op` values.
 _OPS = ("all_reduce", "all_gather", "moe_a2a", "p2p")
 
+# Accepted `align_policy` values — how a torus chain admits a group of G
+# ranks as a sub-torus. See `_align_to_dims` for the semantics.
+_ALIGN_POLICIES = ("prefix", "greedy")
+
 
 def _span_tiers_scaled(
     tiers: List[TierSpec], G: int
@@ -80,6 +84,7 @@ def cost_collective(
     algorithm: str = "ring",
     torus_algorithm: str = "ring",
     inc_enabled: bool = True,
+    align_policy: str = "prefix",
 ) -> float:
     """Cost a collective of group size `G` bytes `M` over `tiers`, in seconds.
 
@@ -97,12 +102,20 @@ def cost_collective(
         crossed tier declares `inc != "none"` to the INC primitives
         (n_α collapse + BW-eff doubling for AR). When False, force software
         ring/tree on the same chain. Inert on torus and on mixed chains.
+      align_policy: "prefix" (default) or "greedy" — which sub-torus layouts
+        a torus chain admits for a group of `G` ranks (see `_align_to_dims`).
+        Group sizes that fail the policy fall back to a flat-ring bound with
+        a `UserWarning`. Inert on crossbar chains.
 
     Returns:
       Collective time in seconds. Returns 0.0 for G <= 1 or empty tier list.
     """
     if op not in _OPS:
         raise ValueError(f"Unknown op: {op!r}; allowed: {_OPS}")
+    if align_policy not in _ALIGN_POLICIES:
+        raise ValueError(
+            f"Unknown align_policy: {align_policy!r}; allowed: {_ALIGN_POLICIES}"
+        )
     if G <= 1 or not tiers:
         return 0.0
 
@@ -164,7 +177,7 @@ def cost_collective(
             raise ValueError(
                 f"Unsupported torus_algorithm: {torus_algorithm!r}"
             )
-        return _torus_cost(op, M, G, crossed)
+        return _torus_cost(op, M, G, crossed, align_policy)
 
     # Genuinely mixed crossbar/torus (or mesh-mixed): fall back to crossbar-
     # flatten so the interface stays live and numerically bounded; emit a
@@ -188,6 +201,7 @@ def enumerate_options(
     M: float,
     G: int,
     inc_enabled: bool = True,
+    align_policy: str = "prefix",
 ) -> List[Tuple[str, float]]:
     """Enumerate admissible (algorithm_name, cost_seconds) pairs for a collective.
 
@@ -218,12 +232,19 @@ def enumerate_options(
         (sharp_class does not accelerate A2A).
       - When `inc_enabled=False`, no "inc" entries are returned.
 
+    `align_policy` is forwarded to the torus path so the optimizer prices the
+    same sub-torus layouts the dispatcher will later use. Inert on crossbar.
+
     Returns:
       Ordered list of (name, cost_seconds) pairs. Empty for G <= 1 or empty
       tier list (no work to enumerate). The optimizer picks `min(.., key=cost)`.
     """
     if op not in _OPS:
         raise ValueError(f"Unknown op: {op!r}; allowed: {_OPS}")
+    if align_policy not in _ALIGN_POLICIES:
+        raise ValueError(
+            f"Unknown align_policy: {align_policy!r}; allowed: {_ALIGN_POLICIES}"
+        )
     if G <= 1 or not tiers:
         return []
 
@@ -244,7 +265,7 @@ def enumerate_options(
     # INC is structurally absent (TorusTier and MeshTier have no inc field).
     # p2p is a single hop on torus too.
     if classes == {"torus"}:
-        cost = _torus_cost(op, M, G, crossed)
+        cost = _torus_cost(op, M, G, crossed, align_policy)
         name = "p2p" if op == "p2p" else "torus-dim-ring"
         return [(name, cost)]
 
@@ -616,16 +637,23 @@ def _inc_crossbar_cost(
 # Torus path (Phase B primitives)
 # ────────────────────────────────────────────────────────────
 
-def _torus_cost(op: str, M: float, G: int, crossed: List[TierSpec]) -> float:
+def _torus_cost(
+    op: str,
+    M: float,
+    G: int,
+    crossed: List[TierSpec],
+    align_policy: str = "prefix",
+) -> float:
     """Cost a collective on a torus-routed tier chain.
 
     Accepts both `TorusTier` and k-D-mesh `MeshTier` (full=False); they share
     the same dim-decomposed primitives. Multi-tier chains concatenate their
     `dims` tuples into the effective k-D structure. Dim-alignment is checked
-    against prefix-products of the concatenated dims; misalignment falls back
-    to a flat-ring conservative bound with a `UserWarning`. If any tier is a
-    k-D mesh (no wraparound), `torus_a2a` is called with
-    `wraparound=False` (halved bisection → $D_\\mathrm{max}/4$ on A2A).
+    against the concatenated dims under `align_policy` (see `_align_to_dims`);
+    misalignment falls back to a flat-ring conservative bound with a
+    `UserWarning`. If any tier is a k-D mesh (no wraparound), `torus_a2a` is
+    called with `wraparound=False` (halved bisection → $D_\\mathrm{max}/4$
+    on A2A).
     """
     full_dims: Tuple[int, ...] = tuple(
         d for t in crossed for d in t.dims  # type: ignore[attr-defined]
@@ -640,11 +668,11 @@ def _torus_cost(op: str, M: float, G: int, crossed: List[TierSpec]) -> float:
     alpha_s = alpha_us * US_TO_SECONDS
     bw_Bps = bw_GBps * GB_TO_BYTES
 
-    subdims, aligned = _align_to_dims(G, full_dims)
+    subdims, aligned = _align_to_dims(G, full_dims, align_policy)
     if not aligned:
         warnings.warn(
-            f"Torus collective G={G} misaligned with dims={full_dims}; "
-            f"using conservative flat-ring bound. "
+            f"Torus collective G={G} misaligned with dims={full_dims} under "
+            f"align_policy={align_policy!r}; using conservative flat-ring bound. "
             f"See collectives/02_topology_mapping.md §3 for dim-aligned layouts.",
             UserWarning,
             stacklevel=3,
@@ -667,21 +695,68 @@ def _torus_cost(op: str, M: float, G: int, crossed: List[TierSpec]) -> float:
     raise AssertionError(f"unreachable op={op!r}")  # caller validated
 
 
-def _align_to_dims(G: int, dims: Tuple[int, ...]) -> Tuple[Tuple[int, ...], bool]:
-    """Return (subdims, aligned) — the prefix-aligned sub-torus for `G` ranks.
+def _align_to_dims(
+    G: int,
+    dims: Tuple[int, ...],
+    policy: str = "prefix",
+) -> Tuple[Tuple[int, ...], bool]:
+    """Return (subdims, aligned) — the sub-torus carrying `G` ranks, if any.
 
-    Dim-aligned means `G == prod(dims[:k])` for some k ≥ 1. That lets the
-    dim-by-dim ring AR walk exactly `k` ring dims. If no prefix matches,
-    returns the full dims with aligned=False so the caller can fall back.
+    Aligned means the G ranks can be laid out as a sub-torus of `dims`, which
+    lets the dim-by-dim ring walk `len(subdims)` ring dims at
+    2·Σ(D_i − 1)·α instead of the flat-ring 2·(G − 1)·α. When no sub-torus
+    fits, returns the full dims with aligned=False so the caller can fall
+    back to the conservative flat-ring bound.
+
+    Two policies differ in which layouts they admit:
+
+      "prefix" (default) — `G == prod(dims[:k])` for some k ≥ 1. Only whole
+        leading axes count, so on a (16,16,16) pod exactly G ∈ {16, 256,
+        4096} align. Conservative: every admitted layout is a contiguous
+        sub-torus of full axes, needing no partitioning of an axis.
+
+      "greedy" — factor G into a subsequence of the axis extents, splitting
+        the final axis when it divides evenly (G=64 on (16,16,16) → (16,4);
+        G=32 → (16,2)). Admits any G dividing prod(dims), modeling a job
+        placed on a sub-box of the torus rather than on whole axes.
+
+    Both policies agree wherever "prefix" aligns — "greedy" strictly widens
+    the admitted set, so switching to it can only lower predicted cost.
     """
-    prefix = 1
-    acc: List[int] = []
-    for d in dims:
-        acc.append(d)
-        prefix *= d
-        if prefix == G:
-            return tuple(acc), True
-        if prefix > G:
-            return dims, False
-    # G exceeds prod(dims) — use full dims and flag as misaligned.
-    return dims, prefix == G
+    if policy == "prefix":
+        prefix = 1
+        acc: List[int] = []
+        for d in dims:
+            acc.append(d)
+            prefix *= d
+            if prefix == G:
+                return tuple(acc), True
+            if prefix > G:
+                return dims, False
+        # G exceeds prod(dims) — use full dims and flag as misaligned.
+        return dims, prefix == G
+
+    if policy == "greedy":
+        sub: List[int] = []
+        remaining = G
+        for d in dims:
+            if remaining == 1:
+                break
+            if remaining % d == 0:
+                # Whole axis consumed; keep factoring into the next one.
+                sub.append(d)
+                remaining //= d
+            elif d % remaining == 0:
+                # Final axis splits evenly — take a sub-ring of `remaining`.
+                sub.append(remaining)
+                remaining = 1
+                break
+            else:
+                # G shares no clean factorization with this axis.
+                return dims, False
+        return (tuple(sub), True) if remaining == 1 else (dims, False)
+
+    raise ValueError(
+        f"Unsupported align_policy: {policy!r}; allowed: "
+        f"{sorted(_ALIGN_POLICIES)}"
+    )

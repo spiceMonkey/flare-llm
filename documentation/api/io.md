@@ -1,7 +1,7 @@
 # API Reference — IO
 
 **Author:** Yue Lu  
-**Date:** June 2026  
+**Date:** August 2026  
 
 Spec loaders. `load_*_from_db` reads the bundled JSON database by id; `load_*_spec` / `*_spec_from_json_dict` read an arbitrary path or dict.
 
@@ -169,6 +169,7 @@ Expected format:
       "ep_algorithm_decode": "auto",
       "ep_algorithm_prefill": "auto",
       "torus_algorithm": "auto",
+      "torus_align_policy": "prefix",
       "n_TP_collectives": 2,
       "n_EP_collectives": 2,
       "n_SP_collectives": 1,

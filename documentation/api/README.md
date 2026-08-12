@@ -1,7 +1,7 @@
 # API Reference
 
 **Author:** Yue Lu  
-**Date:** June 2026  
+**Date:** August 2026  
 
 Auto-generated reference for the public `llm_perf` API, extracted from the source by `scripts/gen_api_docs.py`. Regenerate after changing any public signature: `python scripts/gen_api_docs.py`.
 

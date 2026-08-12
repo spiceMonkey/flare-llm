@@ -173,6 +173,16 @@ class FrameworkSpec:
     ep_algorithm_prefill: str = "ring"
     torus_algorithm: str = "ring"
 
+    # Sub-torus admission policy for collectives on torus / k-D-mesh fabrics.
+    # Decides which group sizes G can be laid out as a sub-torus and so walk
+    # the dim-decomposed ring; the rest fall back to a conservative flat-ring
+    # bound. "prefix" (default) admits only whole leading axes — on a
+    # (16,16,16) pod that is G ∈ {16, 256, 4096}. "greedy" also admits
+    # layouts that split the final axis (G=64 → (16,4)), modeling a job
+    # placed on a sub-box rather than on whole axes. Inert on crossbar
+    # fabrics. See `core/primitives/dispatch._align_to_dims`.
+    torus_align_policy: str = "prefix"
+
     # ── Per-layer collective call counts (decode.md §5.5) ──────────────
     # How many NCCL API calls fire per transformer layer per microbatch.
     # Defaults match the canonical TP-attention transformer:
