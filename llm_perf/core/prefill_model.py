@@ -21,6 +21,7 @@ from .primitives import (
     cost_collective,
     p2p_hop,
     assign_tier_per_axis,
+    axis_stride,
     tier_at,
     D_attn,
     D_exp,
@@ -69,7 +70,7 @@ class PrefillLatencyResults:
     t_prefill_local: float          # max(compute_eff, mem)
     t_prefill_comm: float
     t_kernel_per_stage: float           # per-stage CPU dispatch budget = (L/PP) · k · τ_launch
-    t_pipeline_warmup: float        # (PP-1) * t_stage
+    t_pipeline_warmup: float        # (PP-1) * t_stage, where t_stage includes the stage's unhidden comm
     t_LM_prefill: float             # LM head one-shot on stage PP-1 (prefill.md §3.4)
     t_prefill: float                # full hardware prefill latency
 
@@ -266,6 +267,7 @@ def compute_prefill_comm(
             system.get_tier_chain(coll), op, M, G,
             algorithm=alg, torus_algorithm=torus_alg,
             inc_enabled=inc_enabled, align_policy=align_policy,
+            stride=axis_stride(partition, fw, coll),
         )
 
     # PP: token-scaled activation hop. Per-rank payload uses H/D_kv (matches
@@ -396,21 +398,14 @@ def compute_prefill_latency(
 
     # Abstract sharding factors (notation.md §1) for the LM head and chunked
     # prefill formulas. d_kv composes with SP for KV-attention divisors.
-    d_attn_pf = D_attn(partition, fw)
     d_kv_pf = D_kv(partition, fw)
     d_emb_pf = D_emb(partition)
-    if model.moe is not None:
-        d_exp_pf_moe = D_exp(partition, fw, layer_kind="moe", n_exp_cap=max(1, model.moe.n_experts))
-    else:
-        d_exp_pf_moe = D_exp(partition, fw, layer_kind="dense")
-    d_exp_pf_dense = D_exp(partition, fw, layer_kind="dense")
 
     S = tuner.S_input
     B_pf = tuner.B_prefill
     C = tuner.chunk_size
 
     H = model.H
-    H_kv = model.H_kv()
     L = model.L
 
     # SW dispatch budget per stage. Prefill is one forward pass per request
@@ -511,16 +506,14 @@ def compute_prefill_latency(
     t_prefill_local = _compose_SW(t_prefill_local_gpu)
     t_prefill_comm = comm.t_prefill_comm
 
-    # Pipeline warmup: (PP-1) stages must fill before first token emerges
-    # Each stage takes approximately t_prefill_local (prefill is typically compute-bound)
-    t_pipeline_warmup = (PP - 1) * t_prefill_local if PP > 1 else 0.0
+    # The prompt crosses every pipeline stage before the first token can be
+    # sampled, and each stage pays its own collectives and PP hop:
+    #     t_prefill = PP · t_stage + t_LM
+    # `t_pipeline_warmup` is the (PP − 1) stages after the first.
+    t_prefill_stage = t_prefill_local + max(0.0, t_prefill_comm - rho * t_prefill_local)
+    t_pipeline_warmup = (PP - 1) * t_prefill_stage if PP > 1 else 0.0
 
-    t_prefill = (
-        t_prefill_local
-        + max(0.0, t_prefill_comm - rho * t_prefill_local)
-        + t_pipeline_warmup
-        + t_LM_prefill
-    )
+    t_prefill = t_prefill_stage + t_pipeline_warmup + t_LM_prefill
 
     # ── Batched prefill (§4) ─────────────────────────────
 
@@ -561,12 +554,12 @@ def compute_prefill_latency(
         comm_batched = compute_prefill_comm(
             model, system, partition, tuner, fw, tokens_per_step=B_pf * S,
         )
-        t_prefill_batched = (
+        # Same traversal as the single-request case, at the batched stage time.
+        t_batched_stage = (
             t_batched_local
             + max(0.0, comm_batched.t_prefill_comm - rho * t_batched_local)
-            + t_pipeline_warmup
-            + t_LM_prefill
         )
+        t_prefill_batched = max(1, PP) * t_batched_stage + t_LM_prefill
     else:
         t_prefill_batched = t_prefill
 
@@ -575,25 +568,16 @@ def compute_prefill_latency(
     if C > 0 and S > 0:
         n_chunks = math.ceil(S / C)
 
-        # Effective FFN dim for linear FLOPs
-        if model.moe is not None:
-            I_eff = model.moe.k_active * model.moe.I_moe
-        else:
-            I_eff = model.I_dense
-
-        # Linear FLOPs per chunk (constant across chunks). Use D_attn for
-        # projections, D_exp (MoE-aware) for FFN. For pure dense models the
-        # MoE divisor collapses to TP via D_exp(layer_kind="dense").
-        d_exp_for_chunk = d_exp_pf_moe if model.moe is not None else d_exp_pf_dense
-        F_linear_per_chunk = (L / PP) * (
-            (4 * H**2 + 4 * H * H_kv) * C / d_attn_pf
-            + 6 * H * I_eff * C / d_exp_for_chunk
-        )
+        # Linear FLOPs per chunk (constant across chunks): the same shared
+        # per-token primitive the unchunked pass uses (projections, dense and
+        # MoE FFN, router; attention-variant and layout aware), × C tokens.
+        F_linear_per_chunk = linear_flops_per_token(model, partition, fw) * C
 
         # Weight traffic per chunk (same each chunk — full weight read)
         T_theta_chunk = traffic.T_theta_device
-        # KV write per chunk: C new entries (D_kv * SP divisor matches §1.4 / §3.1)
-        T_kv_write_chunk = (L / PP) * (2 * C * H_kv * model.bytes_per_param) / (d_kv_pf * SP)
+        # KV write per chunk: C new entries (variant-aware, same primitive
+        # as the unchunked pass).
+        T_kv_write_chunk = kv_bytes_per_seq(model, partition, fw, C)
 
         # Chunk-level comm: evaluate collectives at C tokens per step.
         # α (latency term) is unchanged per chunk; β (payload) scales with C,
@@ -603,19 +587,32 @@ def compute_prefill_latency(
         )
         t_chunk_comm = comm_chunk.t_prefill_comm
 
+        if model.mla is not None:
+            from .primitives.mla_flops import mla_score_value_flops_per_layer_per_device
+
         total_chunked = 0.0
+        t_chunk_k = 0.0
         for k in range(1, n_chunks + 1):
-            # Attention FLOPs for chunk k: attends to kC accumulated KV positions.
-            # Sharded by D_kv·SP per prefill.md §1.5 / §5.1.
-            F_attn_chunk_k = (L / PP) * (4 * C * k * C * H) / (d_kv_pf * SP)
+            # Attention FLOPs for chunk k: C query positions attend to kC
+            # accumulated positions. Sharded by D_kv·SP per prefill.md §1.5 /
+            # §5.1. MLA models use the variant-specific score/value cost at
+            # context length kC, as the unchunked pass does at S.
+            if model.mla is not None:
+                F_sv_per_tok = mla_score_value_flops_per_layer_per_device(
+                    model, partition, fw, k * C, fw.mla_mode
+                )
+                F_attn_chunk_k = (L / PP) * F_sv_per_tok * C / SP
+            else:
+                F_attn_chunk_k = (L / PP) * (4 * C * k * C * H) / (d_kv_pf * SP)
             F_chunk_k = F_linear_per_chunk + F_attn_chunk_k
 
             t_chunk_compute_k = F_chunk_k / R_gpu
 
-            # Memory: weights + KV write + KV read (kC entries for attention).
-            # Per-tier sum (sram.md §2.1): KV-write + KV-read folded into a
-            # single per-request KV term for placement purposes. Uses D_kv·SP.
-            T_kv_read_k = (L / PP) * (2 * k * C * H_kv * model.bytes_per_param) / (d_kv_pf * SP)
+            # Memory: weights + KV write (this chunk) + KV read of the
+            # (k−1)·C positions earlier chunks already stored. Per-tier sum
+            # (sram.md §2.1): write + read folded into a single per-request
+            # KV term for placement purposes.
+            T_kv_read_k = kv_bytes_per_seq(model, partition, fw, (k - 1) * C)
             T_kv_chunk_k = T_kv_write_chunk + T_kv_read_k
             t_chunk_mem_k = _t_mem(T_theta_chunk, T_kv_chunk_k, B=1)
 
@@ -629,9 +626,13 @@ def compute_prefill_latency(
             t_chunk_k = t_chunk_local_k + max(0.0, t_chunk_comm - rho * t_chunk_local_k)
             total_chunked += t_chunk_k
 
-        # LM head fires once after the last chunk (one projection per request,
-        # not per chunk), mirroring prefill.md §3.4.
-        t_prefill_chunked = total_chunked + t_LM_prefill
+        # Chunks follow each other through the pipeline one stage apart, so
+        # the first stage sees them back to back (the sum above) and the last
+        # chunk then crosses the remaining PP − 1 stages. The LM head fires
+        # once after the last chunk (one projection per request, not per
+        # chunk), mirroring prefill.md §3.4.
+        t_chunk_tail = (PP - 1) * t_chunk_k if PP > 1 else 0.0
+        t_prefill_chunked = total_chunked + t_chunk_tail + t_LM_prefill
     else:
         n_chunks = 0
         t_prefill_chunked = t_prefill  # no chunking → same as unchunked

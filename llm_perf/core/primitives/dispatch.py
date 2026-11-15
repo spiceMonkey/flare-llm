@@ -22,7 +22,7 @@ bound with a `UserWarning` (explicit hybrid compositions are a follow-up).
 from __future__ import annotations
 
 import warnings
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 from ...specs.system_spec import TierSpec, span_tiers
 from ...utils import GB_TO_BYTES, US_TO_SECONDS
@@ -85,6 +85,7 @@ def cost_collective(
     torus_algorithm: str = "ring",
     inc_enabled: bool = True,
     align_policy: str = "prefix",
+    stride: int = 1,
 ) -> float:
     """Cost a collective of group size `G` bytes `M` over `tiers`, in seconds.
 
@@ -106,6 +107,15 @@ def cost_collective(
         a torus chain admits for a group of `G` ranks (see `_align_to_dims`).
         Group sizes that fail the policy fall back to a flat-ring bound with
         a `UserWarning`. Inert on crossbar chains.
+      stride: device slots each rank of the group occupies under the nested
+        layout (see `partition_layout.axis_stride`). The group physically
+        spans `G · stride` devices, so that product — not `G` — decides
+        which tiers the collective crosses, and an inner island of `ports`
+        devices holds only `ports // stride` of the group's ranks. Example:
+        expert parallelism over tensor-parallel groups of 8 on 8-GPU boxes
+        has stride 8, so every EP peer sits in another box. Default 1
+        (ranks are adjacent devices) reproduces the unstrided cost exactly.
+        Inert on torus chains, where an outer axis takes its own dimension.
 
     Returns:
       Collective time in seconds. Returns 0.0 for G <= 1 or empty tier list.
@@ -120,14 +130,21 @@ def cost_collective(
         return 0.0
 
     # Walk tiers innermost-first, collecting those the collective crosses.
-    # Matches `span_tiers` semantics: stop once cumulative reach ≥ G.
+    # Matches `span_tiers` semantics: stop once cumulative reach covers the
+    # devices the group physically spans (G ranks, `stride` slots apart).
+    stride = max(1, int(stride))
+    span = G * stride
     crossed: List[TierSpec] = []
     reach = 1
     for tier in tiers:
         reach *= max(1, tier.ports)
         crossed.append(tier)
-        if reach >= G:
+        if reach >= span:
             break
+
+    # Ranks of this group that share one inner island. With stride 1 this is
+    # the inner tier's port count (the pre-stride behavior).
+    G_pod = max(1, max(1, crossed[0].ports) // stride)
 
     classes = {_routing_class(t) for t in crossed}
 
@@ -152,15 +169,23 @@ def cost_collective(
         # crossed tier; outer = remaining crossed tier(s) flattened. Single-
         # tier still uses the flat path. The `algorithm` knob maps to the
         # outer phase's choice (inner is always ring — only shipped).
+        if len(crossed) > 1 and G_pod <= 1:
+            # Every peer is in a different inner island: the collective runs
+            # entirely on the outer tier(s); the inner fabric carries nothing.
+            alpha_us = sum(t.alpha_us * t.eta_alpha for t in crossed[1:])
+            bw_GBps = min(t.bw_per_port_GBps * t.eta_beta for t in crossed[1:])
+            return _crossbar_cost(
+                op, M, G, alpha_us * US_TO_SECONDS, bw_GBps * GB_TO_BYTES, algorithm
+            )
         if len(crossed) > 1 and op in ("all_reduce", "all_gather"):
-            return _hierarchical_crossbar_cost(op, M, G, crossed, algorithm)
+            return _hierarchical_crossbar_cost(op, M, G, crossed, algorithm, G_pod)
         # Multi-tier crossbar MoE A2A: per-destination-class accounting
         # (collectives/03_hierarchical_topologies.md §2). A2A doesn't telescope — cost itemizes by
         # destination class (intra-pod / outer). The `algorithm` knob is
         # ignored (only pairwise direct-send is shipped; tree is deprecated).
         if len(crossed) > 1 and op == "moe_a2a":
-            return _hierarchical_a2a_cost(M, G, crossed)
-        alpha_us, bw_GBps, _ = _span_tiers_scaled(tiers, G)
+            return _hierarchical_a2a_cost(M, G, crossed, G_pod)
+        alpha_us, bw_GBps, _ = _span_tiers_scaled(tiers, span)
         return _crossbar_cost(
             op, M, G, alpha_us * US_TO_SECONDS, bw_GBps * GB_TO_BYTES, algorithm
         )
@@ -189,7 +214,7 @@ def cost_collective(
         UserWarning,
         stacklevel=2,
     )
-    alpha_us, bw_GBps, _ = _span_tiers_scaled(tiers, G)
+    alpha_us, bw_GBps, _ = _span_tiers_scaled(tiers, span)
     return _crossbar_cost(
         op, M, G, alpha_us * US_TO_SECONDS, bw_GBps * GB_TO_BYTES, algorithm
     )
@@ -202,6 +227,7 @@ def enumerate_options(
     G: int,
     inc_enabled: bool = True,
     align_policy: str = "prefix",
+    stride: int = 1,
 ) -> List[Tuple[str, float]]:
     """Enumerate admissible (algorithm_name, cost_seconds) pairs for a collective.
 
@@ -234,6 +260,8 @@ def enumerate_options(
 
     `align_policy` is forwarded to the torus path so the optimizer prices the
     same sub-torus layouts the dispatcher will later use. Inert on crossbar.
+    `stride` has the same meaning as in `cost_collective` (device slots per
+    rank of the group); inert on torus.
 
     Returns:
       Ordered list of (name, cost_seconds) pairs. Empty for G <= 1 or empty
@@ -249,16 +277,18 @@ def enumerate_options(
         return []
 
     # Walk tiers innermost-first, collecting those the collective crosses.
-    # Same semantics as cost_collective.
+    # Same semantics as cost_collective (strided span, ranks per island).
+    stride = max(1, int(stride))
+    span = G * stride
     crossed: List[TierSpec] = []
     reach = 1
     for tier in tiers:
         reach *= max(1, tier.ports)
         crossed.append(tier)
-        if reach >= G:
+        if reach >= span:
             break
+    G_pod = max(1, max(1, crossed[0].ports) // stride)
 
-    topologies = {t.topology for t in crossed}
     classes = {_routing_class(t) for t in crossed}
 
     # Pure torus / k-D mesh: dim-decomposed-ring is the only shipped algorithm;
@@ -272,7 +302,14 @@ def enumerate_options(
     # Pure crossbar (or mixed — falls into crossbar-flatten path with a warn at
     # cost_collective time; here we silently mirror the dispatcher's behavior).
     options: List[Tuple[str, float]] = []
-    alpha_us, bw_GBps, _ = _span_tiers_scaled(tiers, G)
+    # Every peer in a different inner island ⇒ the collective runs on the
+    # outer tier(s) alone (same rule as cost_collective).
+    outer_only = len(crossed) > 1 and classes == {"crossbar"} and G_pod <= 1
+    if outer_only:
+        alpha_us = sum(t.alpha_us * t.eta_alpha for t in crossed[1:])
+        bw_GBps = min(t.bw_per_port_GBps * t.eta_beta for t in crossed[1:])
+    else:
+        alpha_us, bw_GBps, _ = _span_tiers_scaled(tiers, span)
     alpha_s = alpha_us * US_TO_SECONDS
     bw_Bps = bw_GBps * GB_TO_BYTES
 
@@ -287,26 +324,27 @@ def enumerate_options(
     use_hierarchical = (
         len(crossed) > 1
         and classes == {"crossbar"}
+        and not outer_only
         and op in ("all_reduce", "all_gather")
     )
 
     if op == "all_gather":
         if use_hierarchical:
             options.append(
-                ("ring", _hierarchical_crossbar_cost(op, M, G, crossed, "ring"))
+                ("ring", _hierarchical_crossbar_cost(op, M, G, crossed, "ring", G_pod))
             )
         else:
             options.append(("ring", _crossbar_cost(op, M, G, alpha_s, bw_Bps, "ring")))
     elif op == "all_reduce":
         if use_hierarchical:
             options.append(
-                ("ring", _hierarchical_crossbar_cost(op, M, G, crossed, "ring"))
+                ("ring", _hierarchical_crossbar_cost(op, M, G, crossed, "ring", G_pod))
             )
             options.append(
-                ("tree", _hierarchical_crossbar_cost(op, M, G, crossed, "tree"))
+                ("tree", _hierarchical_crossbar_cost(op, M, G, crossed, "tree", G_pod))
             )
             options.append(
-                ("tree_pipelined", _hierarchical_crossbar_cost(op, M, G, crossed, "tree_pipelined"))
+                ("tree_pipelined", _hierarchical_crossbar_cost(op, M, G, crossed, "tree_pipelined", G_pod))
             )
         else:
             options.append(("ring", _crossbar_cost(op, M, G, alpha_s, bw_Bps, "ring")))
@@ -315,8 +353,8 @@ def enumerate_options(
     elif op == "moe_a2a":
         # MoE A2A: multi-tier crossbar uses per-destination-class accounting
         # (collectives/03_hierarchical_topologies.md §2); single-tier uses flat pairwise.
-        if len(crossed) > 1 and classes == {"crossbar"}:
-            options.append(("ring", _hierarchical_a2a_cost(M, G, crossed)))
+        if len(crossed) > 1 and classes == {"crossbar"} and not outer_only:
+            options.append(("ring", _hierarchical_a2a_cost(M, G, crossed, G_pod)))
         else:
             options.append(("ring", _crossbar_cost(op, M, G, alpha_s, bw_Bps, "ring")))
 
@@ -413,7 +451,12 @@ def _crossbar_cost(
 # ────────────────────────────────────────────────────────────
 
 def _hierarchical_crossbar_cost(
-    op: str, M: float, G: int, crossed: List[TierSpec], outer_alg: str
+    op: str,
+    M: float,
+    G: int,
+    crossed: List[TierSpec],
+    outer_alg: str,
+    G_inner: Optional[int] = None,
 ) -> float:
     """Hierarchical crossbar AR / AG / RS for multi-tier chains.
 
@@ -440,7 +483,11 @@ def _hierarchical_crossbar_cost(
             "_hierarchical_crossbar_cost called with single-tier chain"
         )
 
-    G_inner = max(1, inner_tier.ports)
+    # Ranks per inner island: the inner tier's port count unless the caller
+    # passes the strided value (`cost_collective`'s `G_pod`).
+    if G_inner is None:
+        G_inner = max(1, inner_tier.ports)
+    G_inner = max(1, min(G_inner, G))
     L = max(1, G // G_inner)  # outer-tier rank count
 
     alpha_inner_s = (
@@ -523,7 +570,7 @@ def _hierarchical_crossbar_cost(
 
 
 def _hierarchical_a2a_cost(
-    M: float, G: int, crossed: List[TierSpec]
+    M: float, G: int, crossed: List[TierSpec], G_inner: Optional[int] = None
 ) -> float:
     """Hierarchical A2A per-destination-class accounting (collectives/03_hierarchical_topologies.md §2).
 
@@ -551,7 +598,11 @@ def _hierarchical_a2a_cost(
             "_hierarchical_a2a_cost called with single-tier chain"
         )
 
-    G_inner = max(1, inner_tier.ports)
+    # Ranks per inner island: the inner tier's port count unless the caller
+    # passes the strided value (`cost_collective`'s `G_pod`).
+    if G_inner is None:
+        G_inner = max(1, inner_tier.ports)
+    G_inner = max(1, min(G_inner, G))
 
     alpha_inner_s = (
         inner_tier.alpha_us * inner_tier.eta_alpha * US_TO_SECONDS

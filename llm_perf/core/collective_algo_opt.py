@@ -37,7 +37,7 @@ from ..specs.model_spec import LlmModelSpec
 from ..specs.partition_spec import PartitionSpec
 from ..specs.system_spec import SystemSpec, TierSpec
 from ..specs.tuner_spec import TuningSpec
-from .primitives import G_EP, G_TP, enumerate_options
+from .primitives import G_EP, G_TP, axis_stride, decode_microbatch, enumerate_options
 
 
 def optimize_collective_algorithms(
@@ -72,25 +72,29 @@ def optimize_collective_algorithms(
     new_fields = {}
 
     # ─── Decode ─────────────────────────────────────────────────────────
-    # Decode TP AR: M = B_decode · H · b, G = TP.
+    # Decode collectives carry one pipeline microbatch (== B_decode at PP = 1).
+    mb_decode = max(1.0, decode_microbatch(tuner.B_decode, partition.PP))
+    # Decode TP AR: M = mb · H · b, G = TP.
     if framework.tp_algorithm_decode == "auto":
         new_fields["tp_algorithm_decode"] = _resolve(
             tier_chain=system.get_tier_chain("TP"),
             op="all_reduce",
-            M=tuner.B_decode * H * b,
+            M=mb_decode * H * b,
             G=G_TP(partition),
             inc_enabled=inc_enabled,
             align_policy=align_policy,
+            stride=axis_stride(partition, framework, "TP"),
         )
-    # Decode EP A2A: M = B_decode · k · H · b, G = EP.
+    # Decode EP A2A: M = mb · k · H · b, G = EP.
     if framework.ep_algorithm_decode == "auto":
         new_fields["ep_algorithm_decode"] = _resolve(
             tier_chain=system.get_tier_chain("EP"),
             op="moe_a2a",
-            M=tuner.B_decode * k_active * H * b,
+            M=mb_decode * k_active * H * b,
             G=G_EP(partition),
             inc_enabled=inc_enabled,
             align_policy=align_policy,
+            stride=axis_stride(partition, framework, "EP"),
         )
 
     # ─── Prefill ────────────────────────────────────────────────────────
@@ -106,6 +110,7 @@ def optimize_collective_algorithms(
             G=G_TP(partition),
             inc_enabled=inc_enabled,
             align_policy=align_policy,
+            stride=axis_stride(partition, framework, "TP"),
         )
     # Prefill EP A2A: M = tokens · k · H · b.
     if framework.ep_algorithm_prefill == "auto":
@@ -116,6 +121,7 @@ def optimize_collective_algorithms(
             G=G_EP(partition),
             inc_enabled=inc_enabled,
             align_policy=align_policy,
+            stride=axis_stride(partition, framework, "EP"),
         )
 
     if not new_fields:
@@ -130,6 +136,7 @@ def _resolve(
     G: int,
     inc_enabled: bool,
     align_policy: str = "prefix",
+    stride: int = 1,
 ) -> str:
     """Pick the algorithm per the policy in this module's docstring.
 
@@ -139,7 +146,8 @@ def _resolve(
     3. Else (empty option set, e.g. G ≤ 1 or empty chain) → "ring" sentinel.
     """
     options = enumerate_options(
-        tier_chain, op, M, G, inc_enabled=inc_enabled, align_policy=align_policy
+        tier_chain, op, M, G, inc_enabled=inc_enabled, align_policy=align_policy,
+        stride=stride,
     )
     if not options:
         return "ring"

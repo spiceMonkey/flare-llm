@@ -18,8 +18,8 @@ Footprint vs. traffic
   weights traffic depends on which experts the current batch actually
   selects: at small B, only ~B·k_active expert-touch events fire and
   most expert weights sit idle in HBM that step; at large enough B,
-  expectation-of-touched-experts → N_exp and traffic converges to the
-  full footprint. Used by `compute_traffic`.
+  the touched fraction → 1 and traffic converges to the full footprint,
+  which it never exceeds. Used by `compute_traffic`.
 
 The decode roofline gates per-step compute against `T_θ / BW_HBM`, so
 using the footprint as the traffic surrogate (the historical default,
@@ -172,9 +172,9 @@ def moe_weight_traffic_bytes(
     model: LlmModelSpec,
     partition: PartitionSpec,
     framework: FrameworkSpec,
-    B: int,
+    B: float,
 ) -> float:
-    """Per-device per-step **traffic** (T_θ) for the MoE-layer slice.
+    """Per-device per-stage-pass **traffic** (T_θ) for the MoE-layer slice.
 
     Differs from `moe_weight_bytes` (the footprint) in the expert-FFN
     term: only the experts the current batch actually touches contribute
@@ -183,23 +183,30 @@ def moe_weight_traffic_bytes(
     identical to the footprint formula.
 
         T_theta_moe(B) =
-            (L_moe / PP) · (attn_per_device + 3HI_moe · E[touched/rank]) · b
+            (L_moe / PP) · (attn_per_device + 3HI_moe · (N_exp/D_exp) · f_touched(B)) · b
 
-    where the expected number of unique experts touched on a single rank
-    per step, under the *uniform routing* assumption, is:
+    `N_exp/D_exp` is the expert population a rank holds (the footprint
+    term; it may be fractional when experts are TP-sliced), and
+    `f_touched` is the fraction of experts the batch reaches. Under the
+    *uniform routing* assumption each token picks `k_active` distinct
+    experts out of `N_exp`, so a given expert is missed by one token with
+    probability `1 − k_active/N_exp` and by all `B` tokens with that to
+    the power `B`:
 
-        E[touched/rank] = N_per · (1 - (1 - 1/N_per) ** t_per)
+        f_touched(B) = 1 − (1 − k_active / N_exp) ** B
 
-      with  N_per = N_exp / D_exp_moe      (experts held on this rank)
-            t_per = B · k_active / D_exp_moe   (tokens routed to this rank)
+    Every rank holding a slice of a touched expert reads its slice, so the
+    same fraction applies to every rank whatever the TP/EP sharding — the
+    traffic can never exceed the footprint. At small B (B·k_active ≪ N_exp)
+    f_touched ≈ B·k_active/N_exp and traffic scales linearly with B; at
+    large B it converges to the footprint formula. `B` is the batch one
+    stage pass processes (the decode microbatch), and may be fractional.
 
-    At small B (B·k_active ≪ N_exp) → E[touched/rank] ≈ t_per and
-    traffic scales linearly with B. At large B → E[touched/rank] → N_per
-    and traffic converges to the footprint formula. The uniform-routing
-    assumption is a known source of model inaccuracy: real production
-    routers can exhibit hot-spotting (some experts touched more often
-    than others) and load-balancing-loss anti-correlation; modeling that
-    requires per-deployment routing statistics not generally available.
+    The uniform-routing assumption is a known source of model inaccuracy:
+    real production routers can exhibit hot-spotting (some experts touched
+    more often than others) and load-balancing-loss anti-correlation;
+    modeling that requires per-deployment routing statistics not generally
+    available.
 
     Returns 0.0 for dense-only models.
     """
@@ -216,28 +223,20 @@ def moe_weight_traffic_bytes(
     b = model.bytes_per_param
     PP = partition.PP
     d_exp_moe = D_exp(partition, framework, layer_kind="moe", n_exp_cap=N_exp)
-    B = max(1, int(B))
+    B = max(1.0, float(B))
 
     P_attn_dev = _per_layer_attn_params_per_device(model, partition, framework)
 
-    # Per-rank expert population and per-rank expert-touch event count.
-    N_per_rank = max(1.0, N_exp / d_exp_moe)
-    t_per_rank = B * k_active / d_exp_moe
-
-    # Expected unique experts touched on this rank, under uniform routing.
-    # Closed form: N · (1 - (1 - 1/N)^t). Use the log-domain stable form
-    # for the small-1/N regime; otherwise direct evaluation.
-    if N_per_rank > 1.0:
-        # log((1 - 1/N)) is well-defined and negative for N > 1.
-        prob_miss = math.exp(t_per_rank * math.log(1.0 - 1.0 / N_per_rank))
-        E_touched = N_per_rank * (1.0 - prob_miss)
+    # Fraction of experts reached by the batch under uniform routing.
+    # log1p/expm1 keep the small-(k/N) and small-B regimes accurate.
+    if k_active >= N_exp:
+        f_touched = 1.0
     else:
-        # Single expert per rank — always touched if any token routes here.
-        E_touched = 1.0 if t_per_rank > 0.0 else 0.0
+        f_touched = -math.expm1(B * math.log1p(-k_active / N_exp))
 
-    # Expert-FFN traffic uses E[touched/rank] in place of N_exp/D_exp.
+    # Expert-FFN traffic is the touched fraction of the rank's expert footprint.
     return (L_moe / PP) * (
-        P_attn_dev + (3 * H * I_moe) * E_touched
+        P_attn_dev + (3 * H * I_moe * N_exp / d_exp_moe) * f_touched
     ) * b
 
 

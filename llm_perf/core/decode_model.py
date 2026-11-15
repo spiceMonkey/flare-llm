@@ -38,12 +38,14 @@ from .primitives import (
     cost_collective,
     p2p_hop,
     assign_tier_per_axis,
+    axis_stride,
     tier_at,
     D_kv,
     D_emb,
     G_TP,
     G_EP,
     N_replica,
+    decode_microbatch,
 )
 
 
@@ -193,9 +195,9 @@ class FlopsResults:
 
 @dataclass
 class TrafficResults:
-    T_theta: float          # per-device weight traffic per step (B-independent for dense; B-aware for MoE)
+    T_theta: float          # per-device weight traffic per stage pass (batch-independent for dense; microbatch-aware for MoE)
     T_kv_token: float       # per-device, per-token KV traffic (one active sequence's KV-history read, all stage layers); matches decode.md §2.3 T_{KV,token}
-    T_kv_device: float      # per-device, per-step KV traffic aggregated over B sequences: B * T_kv_token; matches decode.md §2.3 T_{KV,device}(B)
+    T_kv_device: float      # per-device, per-stage-pass KV traffic aggregated over the microbatch: mb * T_kv_token (mb = B at PP = 1); matches decode.md §2.3 T_{KV,device}
     T_token_eff: float      # effective per-token (B=1) traffic
     T_step_eff: float       # effective per-step (batched) traffic = T_theta + T_kv_device
 
@@ -215,7 +217,7 @@ class CommResults:
 
 @dataclass
 class LatencyResults:
-    t_compute: float          # raw roofline compute time = F_step / R_gpu
+    t_compute: float          # raw roofline compute time for one stage pass = F_step / R_gpu
     t_compute_eff: float      # Tensor-Core-derated compute time (= t_compute / η_TC)
     eta_TC: float             # Tensor Core efficiency factor at this mb (1.0 = peak)
     t_mem: float
@@ -225,7 +227,7 @@ class LatencyResults:
     t_kernel: float               # per-round CPU dispatch budget = L · k · τ_launch
     t_LM: float               # LM head one-shot latency on stage PP-1 (decode.md §6.2)
     t_step_user: float
-    pp_bubble_factor: float
+    pp_bubble_factor: float   # diagnostic: stages per in-flight microbatch, max(1, PP/B); 1.0 = pipeline full
     TPS_single: float
     TTPS: float
     B: int
@@ -247,6 +249,12 @@ class LatencyResults:
     # internally; readers comparing the t_step_seq curve against t_step,user
     # in plots see the overlap gate's hidden portion as the gap.
     t_step_seq: float = 0.0
+    # Pipeline composition (decode.md §7.2). `microbatch` is the sequences
+    # per stage pass (B/PP when the pipeline is full, 1 below that);
+    # `pp_traversal_factor` is the stage passes a token pays (= PP).
+    # t_step_base = pp_traversal_factor · t_stage_with_kernel(microbatch) + t_LM.
+    pp_traversal_factor: float = 1.0
+    microbatch: float = 1.0
 
 
 # ────────────────────────────────────────────────────────────
@@ -265,7 +273,8 @@ def compute_flops(
     PP = partition.PP
     SP = partition.SP
     S = tuner.S_decode
-    B = tuner.B_decode
+    # Per-pass batch: the microbatch one stage processes (== B at PP = 1).
+    B = decode_microbatch(tuner.B_decode, PP)
 
     # Per-token FLOPs decomposed by which per-rank batch divisor applies.
     # - Attention projection (Q/K/V/O) and attention score/value: under
@@ -327,7 +336,10 @@ def compute_traffic(
     tuner: TuningSpec,
     framework: FrameworkSpec,
 ) -> TrafficResults:
-    """Per-step HBM traffic per device (weights + KV cache read).
+    """Per-stage-pass HBM traffic per device (weights + KV cache read).
+
+    "Per pass" means one microbatch crossing one pipeline stage; a token
+    pays this once on each of the PP stages (see `decode_microbatch`).
 
     Dense weights (attention, dense-FFN) are read every step → traffic
     equals footprint. MoE expert weights are read only for the experts
@@ -337,7 +349,8 @@ def compute_traffic(
     and the uniform-routing assumption.
     """
     S = tuner.S_decode
-    B = tuner.B_decode
+    # Per-pass batch: the microbatch one stage processes (== B at PP = 1).
+    B = decode_microbatch(tuner.B_decode, partition.PP)
 
     # Parameter traffic (embedding is outside the forward path by convention).
     # Dense weights: read every step. MoE: uses B-aware expectation of touched
@@ -384,7 +397,8 @@ def compute_comm(
     PP = partition.PP
     SP = partition.SP
     S = tuner.S_decode
-    B = max(1, tuner.B_decode)
+    # Collective payloads carry one microbatch (== B at PP = 1).
+    B = max(1.0, decode_microbatch(tuner.B_decode, PP))
     b = model.bytes_per_param
 
     fw = framework
@@ -428,9 +442,12 @@ def compute_comm(
             system.get_tier_chain(coll), op, M, G,
             algorithm=alg, torus_algorithm=torus_alg,
             inc_enabled=inc_enabled, align_policy=align_policy,
+            # Nested layout: an outer axis's ranks sit a whole inner block
+            # apart, which decides the fabric tier the collective runs on.
+            stride=axis_stride(partition, framework, coll),
         )
 
-    # PP: shard-preserving hop of B tokens × (H/D_kv) activation bytes.
+    # PP: shard-preserving hop of one microbatch × (H/D_kv) activation bytes.
     # A single-stage pipeline has no inter-stage forward.
     #
     # Cost the hop at the *correct* fabric tier under nested-layout rule
@@ -561,11 +578,15 @@ def compute_latency(
     """Per-token latency and throughput (seconds, tokens/s).
 
     The per-stage roofline gives the cost of one pipeline stage processing
-    the current batch. For a user observing inter-token latency we apply a
-    pipeline-bubble correction when B < PP:
-        t_step_base = max(t_stage_GPU, t_kernel) · max(1, PP / B) + t_LM
+    one microbatch of `mb = decode_microbatch(B, PP)` sequences. A token is
+    not produced until its microbatch has crossed all PP stages and the LM
+    head, so the inter-token time is the traversal sum, not one stage:
+        t_step_base = PP · max(t_stage_GPU(mb), t_kernel) + t_LM(mb)
         t_step_user = t_step_base + max(0, t_step_seq
                                           - ρ_seq · t_step_base)
+    Throughput is B tokens per t_step_user: the PP stages work on
+    different microbatches concurrently, which is what PP buys. It does
+    not shorten any one sequence's path through the L layers.
 
     `t_stage_GPU` is the GPU-side compute + comm time (with optional Tensor
     Core efficiency derate at small microbatch). `t_kernel` is the per-round
@@ -587,7 +608,8 @@ def compute_latency(
     # effective_peak_flops_TF docstring for the convention.
     R_gpu = effective_peak_flops_TF(system, model.bytes_per_param) * TB_TO_FLOPS
 
-    # Step-level roofline: B tokens computed, weights loaded once.
+    # Per-stage-pass roofline: mb tokens computed, the stage's weights
+    # loaded once. (`flops`, `traffic` and `comm` are already per pass.)
     # `t_mem` opens the legacy single-bandwidth term over device memory tiers
     # per sram.md §2.1: t_mem(B) = Σ_i (T_θ,i + B·T_KV,i) / BW_eff,i.
     # Resolves placement (greedy "auto" or operator-pinned) before summing.
@@ -604,19 +626,18 @@ def compute_latency(
     t_compute = flops.F_step_device / R_gpu
 
     # Tensor Core efficiency derate at small microbatch.
-    # mb = B / PP (microbatch size in steady-state inflight pipeline).
     # η_TC ramps from ~0 at mb=1 (FP8 below the wgmma M=64 floor) to ~1
     # at mb ≥ 4·tile (compute-bound peak). curve=None ⇒ η_TC=1 (legacy).
-    mb = max(1, B) / max(1, PP)
+    mb = max(1.0, decode_microbatch(B, PP))
     eta_TC = _eta_TC_at_mb(system.device.tensor_core_efficiency, mb)
     t_compute_eff = t_compute / eta_TC if eta_TC > 0 else float("inf")
 
     # B-dependent HBM sustained bandwidth derate (decode.md §6.2; Phase F:
     # curve lives on DeviceSpec. Opt-in via system.device.bw_efficiency,
     # otherwise η_β(B) = 1 and t_mem is unchanged).
-    eta_beta_B = _eta_beta_at_B(system.device.bw_efficiency, max(1, B))
+    eta_beta_B = _eta_beta_at_B(system.device.bw_efficiency, mb)
     t_mem = t_mem_from_placement(
-        placement, B=max(1, B), tiers=tiers,
+        placement, B=mb, tiers=tiers,
         eta_beta_curve_factor=eta_beta_B,
     )
     t_local = max(t_compute_eff, t_mem)
@@ -643,6 +664,10 @@ def compute_latency(
     #   ρ_kernel = 0 → t_stage + t_kernel (no overlap, costs add)
     t_stage_with_kernel = t_stage + max(0.0, t_kernel - rho_kernel * t_stage)
 
+    # A token crosses every stage once: PP stage passes per token.
+    pp_traversal_factor = float(max(1, PP))
+    # Diagnostic only — stages per in-flight microbatch (1.0 = pipeline
+    # full, > 1 = some stages idle). It no longer multiplies the step time.
     pp_bubble_factor = max(1.0, PP / max(1, B))
 
     # Top-tier memory bandwidth (also used by B* below). Multi-tier devices use
@@ -650,16 +675,16 @@ def compute_latency(
     BW_top = tiers[0].bandwidth_GBps * tiers[0].eta_beta * GB_TO_BYTES
 
     # LM head one-shot on stage PP-1 (decode.md §6.2 / §7.2):
-    #   F_LM,step = 2·B·H·V / D_emb
-    #   T_LM,step = HVb/D_emb (weights, sharded by D_emb) + B·V·b (logits, replicated)
+    #   F_LM = 2·mb·H·V / D_emb
+    #   T_LM = HVb/D_emb (weights, sharded by D_emb) + mb·V·b (logits, replicated)
     #   t_LM = max(F_LM/R_gpu, T_LM/BW_top)
-    # Added outside γ_pp because the LM head fires once per step regardless of
-    # bubble depth (it is not pipelined across PP stages). D_emb = TP across all
-    # three tp_ep_layout/attention_mode configurations (notation.md §1).
+    # Added outside the PP traversal because a token passes the LM head once,
+    # after the last stage. D_emb = TP across all three
+    # tp_ep_layout/attention_mode configurations (notation.md §1).
     V = model.vocab_size
     d_emb = D_emb(partition)
     b = model.bytes_per_param
-    B_eff = max(1, B)
+    B_eff = mb
     F_lm = 2.0 * B_eff * model.H * V / d_emb
     T_lm = (model.H * V * b) / d_emb + B_eff * V * b
     t_lm_compute = F_lm / R_gpu if R_gpu > 0 else 0.0
@@ -680,7 +705,7 @@ def compute_latency(
     # the same overlap composition against the per-step hardware window.
     t_step_seq = (framework.c_orch_us + framework.c_seq_us * max(1, B)) * 1e-6
     rho_seq = framework.seq_overlap_factor
-    t_step_base = t_stage_with_kernel * pp_bubble_factor + t_LM
+    t_step_base = t_stage_with_kernel * pp_traversal_factor + t_LM
     t_step_user = t_step_base + max(0.0, t_step_seq - rho_seq * t_step_base)
     TPOT = t_step_user
     # t_step_seq is the GROSS per-step host work (= c_orch + c_seq · B).
@@ -703,8 +728,10 @@ def compute_latency(
     # gives the exact two-tier form when weights and KV live on separate
     # tiers; the single-tier formula here matches that special case W=K=tier-0.
     # B* uses the per-token KV term (decode.md §4 B^star formula uses T_{KV,token}).
+    # The roofline crossover is in microbatch terms; B = PP · mb when the
+    # pipeline is full, so the replica-level crossover is PP times that.
     denom = flops.F_token_device * BW_top - traffic.T_kv_token * R_gpu
-    B_star = (traffic.T_theta * R_gpu / denom) if denom > 0 else float("inf")
+    B_star = (pp_traversal_factor * traffic.T_theta * R_gpu / denom) if denom > 0 else float("inf")
 
     # Speculative-decoding extension (decode.md §8). Compose verify-step
     # quantities by scaling compute and comm payloads by n_tok_verify;
@@ -745,7 +772,7 @@ def compute_latency(
         t_LM_verify = max(t_lm_compute_verify, t_lm_mem)
         # t_step_seq fires once per verify step too; apply the same overlap
         # gate against the verify-step hardware window.
-        t_step_base_verify = t_stage_with_kernel_verify * pp_bubble_factor + t_LM_verify
+        t_step_base_verify = t_stage_with_kernel_verify * pp_traversal_factor + t_LM_verify
         t_step_user_verify = t_step_base_verify + max(0.0, t_step_seq - rho_seq * t_step_base_verify)
         TPOT_spec = t_step_user_verify / N_tok_per_step
     else:
@@ -764,6 +791,8 @@ def compute_latency(
         t_LM=t_LM,
         t_step_user=t_step_user,
         pp_bubble_factor=pp_bubble_factor,
+        pp_traversal_factor=pp_traversal_factor,
+        microbatch=mb,
         TPS_single=TPS_single,
         TTPS=TTPS,
         B=B,

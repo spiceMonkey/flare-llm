@@ -23,7 +23,8 @@ class E2EResults:
     TTFT_chunked: float         # TTFT with chunked prefill
 
     # TPOT (seconds)
-    TPOT: float                 # t_step_user(B) / B
+    TPOT: float                 # user-observed inter-token time: t_step_user(B), or the
+                                # speculative-decoding value t_step_user_verify / N_tok_per_step
 
     # Throughput
     throughput_per_gpu: float   # tokens/s per GPU
@@ -90,9 +91,14 @@ class E2ECalculator:
         # First decode step latency
         t_first_token = dec.t_step_user
 
-        # KV cache volume (cluster-aggregate, prefill.md §6.2)
+        # KV cache volume (cluster-aggregate, prefill.md §6.2). Latent-attention
+        # models store one shared latent per token per layer, not per-head K/V.
         S = self.tuner.S_input
-        M_KV_total = 2 * self.model.L * S * self.model.H_kv() * self.model.bytes_per_param
+        b = self.model.bytes_per_param
+        if self.model.mla is not None:
+            M_KV_total = self.model.L * S * self.model.mla.kv_bytes_per_token_per_layer(b)
+        else:
+            M_KV_total = 2 * self.model.L * S * self.model.H_kv() * b
 
         # KV handoff: branch on DisaggSpec.disaggregated (prefill.md §6.3 / §6.4)
         t_handoff, t_repack = self._compute_handoff(M_KV_total, t_prefill)
@@ -101,11 +107,16 @@ class E2ECalculator:
         TTFT = t_sched + t_prefill + t_handoff + t_first_token
         TTFT_chunked = t_sched + t_prefill_chunked + t_handoff + t_first_token
 
-        # TPOT (e2e.md §3)
-        TPOT = dec.TPOT
+        # TPOT (e2e.md §3). With speculative decoding enabled the decode model
+        # reports the per-accepted-token time separately; use it, and scale
+        # throughput by the same ratio (N_tok_per_step tokens per verify step).
+        # The draft model's own cost is not modelled, so this is an upper
+        # bound on the speculative gain.
+        speculative = dec.N_tok_per_step > 1.0 and dec.TPOT_spec > 0.0
+        TPOT = dec.TPOT_spec if speculative else dec.TPOT
 
         # Throughput (e2e.md §5)
-        TTPS = dec.TTPS
+        TTPS = dec.TTPS * (dec.TPOT / dec.TPOT_spec) if speculative else dec.TTPS
         throughput_per_gpu = TTPS / self.system.num_devices if self.system.num_devices > 0 else 0.0
         interactivity = 1.0 / TPOT if TPOT > 0 else 0.0
 

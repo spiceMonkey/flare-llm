@@ -7,7 +7,7 @@ re-derive them inline.
 Constraints applied (all must hold):
   - pp * tp * ep * sp <= num_devices
   - pp <= pp_max  (default 32; the typical production cap where deeper
-    PP starts running into bubble / TTFT / microbatch-floor headwinds)
+    PP starts running into per-token-latency / TTFT / microbatch-floor headwinds)
   - tp <= n_kv  (each TP rank must hold ≥ 1 KV head)
   - tp <= n_experts and ep <= n_experts  (MoE only — sharding cannot
     exceed expert count)
@@ -95,7 +95,7 @@ def enumerate_partitions(
         when sweeping cluster size at fixed system spec.
     pp_max : int
         Maximum PP. Default 32 (typical production cap — deeper PP starts
-        running into bubble / TTFT / microbatch-floor headwinds even with
+        running into per-token-latency / TTFT / microbatch-floor headwinds even with
         inflight batching, but 32 leaves room to explore the cliff).
     pp_choices, sp_choices : list of int, optional
         Override the enumeration ladders. Defaults are the standard ladders

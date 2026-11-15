@@ -47,23 +47,28 @@ class LlmPerfEquations:
             ),
         },
         "t_stage": {
-            "description": "Per-PP-stage step time with overlap (pre-bubble).",
+            "description": "Time for one microbatch to cross one PP stage, with comm overlap.",
             "latex": r"t_{\text{stage}} = t_{\text{local}} + \max(0, t_{\text{comm}} - \rho\, t_{\text{local}})",
             "expr": " t_local + max(0, t_comm - rho * t_local) ",
         },
+        "microbatch": {
+            "description": "Sequences per stage pass: the B in-flight sequences circulate as min(B, PP) microbatches.",
+            "latex": r"mb = \max\!\left(1,\; \frac{B}{PP}\right)",
+            "expr": " max(1.0, B / PP) ",
+        },
         "pp_bubble_factor": {
-            "description": "Pipeline-bubble multiplier for user-observed step time.",
+            "description": "Diagnostic: pipeline stages per in-flight microbatch (1 = full pipeline). Not a step-time multiplier.",
             "latex": r"\text{pp\_bubble\_factor} = \max\!\left(1,\; \frac{PP}{B}\right)",
             "expr": " max(1.0, PP / max(1, B)) ",
         },
         "t_step_user": {
-            "description": "User-observed per-step decode time (bubble-corrected).",
-            "latex": r"t_{\text{step,user}} = t_{\text{stage}} \cdot \max\!\left(1,\; \frac{PP}{B}\right)",
-            "expr": " t_stage * max(1.0, PP / max(1, B)) ",
+            "description": "User-observed per-step decode time: a token crosses all PP stages, then the LM head.",
+            "latex": r"t_{\text{step,user}} = PP \cdot t_{\text{stage}}(mb) + t_{\text{LM}}(mb)",
+            "expr": " PP * t_stage + t_LM ",
         },
         "TPOT": {
             "description": "Time per output token (user-observed): equals step time, not t_stage/B.",
-            "latex": r"\text{TPOT}(B) = t_{\text{step,user}}(B) = t_{\text{stage}}(B) \cdot \max\!\left(1,\; \frac{PP}{B}\right)",
+            "latex": r"\text{TPOT}(B) = t_{\text{step,user}}(B) = PP \cdot t_{\text{stage}}(mb) + t_{\text{LM}}(mb)",
             "expr": " t_step_user ",
         },
         "TPS_single": {

@@ -82,6 +82,7 @@ from .dispatch import cost_collective, enumerate_options
 from .partition_layout import (
     DEFAULT_ORDER as NESTED_LAYOUT_ORDER,
     assign_tier_per_axis,
+    axis_stride,
     tier_at,
 )
 from .sharding_factors import (
@@ -92,6 +93,7 @@ from .sharding_factors import (
     G_TP,
     G_EP,
     N_replica,
+    decode_microbatch,
 )
 
 __all__ = [
@@ -158,6 +160,7 @@ __all__ = [
     # nested-layout helper
     "NESTED_LAYOUT_ORDER",
     "assign_tier_per_axis",
+    "axis_stride",
     "tier_at",
     # sharding factors (notation.md §1)
     "D_attn",
@@ -167,4 +170,5 @@ __all__ = [
     "G_TP",
     "G_EP",
     "N_replica",
+    "decode_microbatch",
 ]

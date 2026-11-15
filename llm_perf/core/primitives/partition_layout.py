@@ -57,6 +57,35 @@ def _axis_size_for_reach(partition: PartitionSpec, framework: FrameworkSpec, axi
     return 1  # axis == "EP" — absorbed into the merged TP axis above
 
 
+def axis_stride(partition: PartitionSpec, framework: FrameworkSpec, axis: str) -> int:
+    """Device slots each rank of `axis`'s collective group occupies.
+
+    Under the nested layout an axis's group is built out of whole blocks of
+    the axes inside it: a tensor-parallel rank is one sequence-parallel
+    group, an expert-parallel rank is one TP×SP block, a pipeline stage is
+    one EP×TP×SP block. The stride is the size of that block, so a group of
+    `G` ranks physically spans `G · stride` devices. `cost_collective` uses
+    it to decide which fabric tiers the collective crosses and how many of
+    the group's ranks share an inner island.
+
+    Co-located layouts overlay EP on the TP device set, so the EP stride is
+    the TP stride (`SP`), not `SP · TP`.
+    """
+    SP = max(1, partition.SP)
+    TP = max(1, partition.TP)
+    EP = max(1, partition.EP)
+    co_located = framework.tp_ep_layout == "co_located"
+    if axis == "SP":
+        return 1
+    if axis == "TP":
+        return SP
+    if axis == "EP":
+        return SP if co_located else SP * TP
+    if axis == "PP":
+        return SP * max(TP, EP) if co_located else SP * TP * EP
+    raise ValueError(f"Unknown axis: {axis!r}")
+
+
 def assign_tier_per_axis(
     partition: PartitionSpec,
     framework: FrameworkSpec,

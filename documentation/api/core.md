@@ -1,7 +1,7 @@
 # API Reference — Core
 
 **Author:** Yue Lu  
-**Date:** August 2026  
+**Date:** November 2026  
 
 Pure analytical model functions. Each takes (model, system, partition, tuner, framework) and returns a results dataclass; no global state.
 
@@ -109,6 +109,8 @@ Public surface (preserved from the pre-refactor four-file split):
 | `t_step_user_verify` | `float` | `0.0` |
 | `TPOT_spec` | `float` | `0.0` |
 | `t_step_seq` | `float` | `0.0` |
+| `pp_traversal_factor` | `float` | `1.0` |
+| `microbatch` | `float` | `1.0` |
 
 ### `effective_peak_flops_TF(system: SystemSpec, bytes_per_param: float) -> float`
 
@@ -133,7 +135,9 @@ Per-device decode FLOPs per token (and per step).
 
 ### `compute_traffic(model: LlmModelSpec, partition: PartitionSpec, tuner: TuningSpec, framework: FrameworkSpec) -> TrafficResults`
 
-Per-step HBM traffic per device (weights + KV cache read).
+Per-stage-pass HBM traffic per device (weights + KV cache read).
+
+"Per pass" means one microbatch crossing one pipeline stage; a token pays this once on each of the PP stages (see `decode_microbatch`).
 
 Dense weights (attention, dense-FFN) are read every step → traffic equals footprint. MoE expert weights are read only for the experts the current batch actually touches → traffic uses an expectation- of-touched-experts correction that converges to the footprint at large B. See `core/primitives/weight_quantities.py` for the formula and the uniform-routing assumption.
 
@@ -145,11 +149,12 @@ Per-stage decode communication time (seconds).
 
 Per-token latency and throughput (seconds, tokens/s).
 
-The per-stage roofline gives the cost of one pipeline stage processing the current batch. For a user observing inter-token latency we apply a
-pipeline-bubble correction when B < PP:
-    t_step_base = max(t_stage_GPU, t_kernel) · max(1, PP / B) + t_LM
+The per-stage roofline gives the cost of one pipeline stage processing one microbatch of `mb = decode_microbatch(B, PP)` sequences. A token is not produced until its microbatch has crossed all PP stages and the LM
+head, so the inter-token time is the traversal sum, not one stage:
+    t_step_base = PP · max(t_stage_GPU(mb), t_kernel) + t_LM(mb)
     t_step_user = t_step_base + max(0, t_step_seq
                                       - ρ_seq · t_step_base)
+Throughput is B tokens per t\_step\_user: the PP stages work on different microbatches concurrently, which is what PP buys. It does not shorten any one sequence's path through the L layers.
 
 `t_stage_GPU` is the GPU-side compute + comm time (with optional Tensor Core efficiency derate at small microbatch). `t_kernel` is the per-round CPU dispatch budget (kernel\_launch\_overhead.md §5). The two are composed via `kernel_overlap_factor` ρ\_kernel: ρ\_kernel=1 means SW is fully hidden by GPU work (just `max`), ρ\_kernel=0 means strict serialization. `t_step_seq` is the per-sequence serving runtime overhead (decode.md §7.3). Gross host work is `t_step_seq = c_seq_us · B · 1e-6`; composition via `seq_overlap_factor` ρ\_seq uses the same physics as ρ\_kernel — under CUDA-Graph replay (ρ\_seq = 1, default) the CPU runs ahead and host work hides behind GPU compute until it exceeds `t_step_base`.
 

@@ -157,3 +157,25 @@ def compose_check(partition: PartitionSpec, framework: FrameworkSpec) -> None:
                 f"physical GPU set in production deployments); got TP="
                 f"{partition.TP}, EP={partition.EP}"
             )
+
+
+def decode_microbatch(B: int, PP: int) -> float:
+    """Sequences one pipeline stage processes per pass (decode.md §7.2).
+
+    `B` is the number of sequences decoding concurrently on one replica.
+    Autoregressive decode cannot start a sequence's next token until its
+    previous token has left the last stage, so the `B` sequences circulate
+    through the `PP` stages as `min(B, PP)` microbatches, one per stage at
+    a time:
+
+        mb = B / PP   if B ≥ PP   (every stage busy, PP microbatches in flight)
+        mb = 1        if B < PP   (B single-sequence microbatches, PP − B stages idle)
+
+    Every per-pass quantity — FLOPs, weight and KV traffic, collective
+    payloads, the LM head — is evaluated at `mb`, not `B`. At PP = 1 this
+    is `B` exactly.
+    """
+    PP = max(1, PP)
+    if B >= PP:
+        return B / PP
+    return float(min(B, 1))

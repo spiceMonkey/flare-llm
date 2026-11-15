@@ -1,7 +1,7 @@
 # API Reference — Specs
 
 **Author:** Yue Lu  
-**Date:** August 2026  
+**Date:** November 2026  
 
 Typed dataclass inputs. The composition is model x system x partition x tuner x framework, plus optional overhead/disagg specs for end-to-end runs.
 

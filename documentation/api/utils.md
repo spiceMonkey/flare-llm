@@ -1,7 +1,7 @@
 # API Reference — Utils
 
 **Author:** Yue Lu  
-**Date:** August 2026  
+**Date:** November 2026  
 
 Helpers: HuggingFace model adapter, DRAM bandwidth calculator, constants, validation, and plotting.
 
@@ -129,7 +129,7 @@ Centralises the practical (PP, TP, EP, SP) constraints used across the `notebook
 Constraints applied (all must hold):
 - pp * tp * ep * sp <= num\_devices
 - pp <= pp\_max  (default 32; the typical production cap where deeper
-    PP starts running into bubble / TTFT / microbatch-floor headwinds)
+    PP starts running into per-token-latency / TTFT / microbatch-floor headwinds)
 - tp <= n\_kv  (each TP rank must hold ≥ 1 KV head)
 - tp <= n\_experts and ep <= n\_experts  (MoE only — sharding cannot
     exceed expert count)
@@ -159,7 +159,7 @@ num\_devices : int, optional
     when sweeping cluster size at fixed system spec.
 pp\_max : int
     Maximum PP. Default 32 (typical production cap — deeper PP starts
-    running into bubble / TTFT / microbatch-floor headwinds even with
+    running into per-token-latency / TTFT / microbatch-floor headwinds even with
     inflight batching, but 32 leaves room to explore the cliff).
 pp\_choices, sp\_choices : list of int, optional
     Override the enumeration ladders. Defaults are the standard ladders
