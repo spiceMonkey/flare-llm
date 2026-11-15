@@ -9,13 +9,13 @@ with the auto fields resolved; non-`auto` fields pass through unchanged.
 Pre-Phase-E this resolved into TuningSpec; the cost-model logic is
 unchanged, only the input/output type.)
 
-Resolution policy:
-  - If `framework.inc_enabled` is True AND INC is structurally available
-    for this op on this tier chain → pick `"inc"` directly (hardware
-    deployment priority; SW costs not compared, since a deployment
-    decision doesn't flip on a tuning-grade cost difference).
-  - Otherwise (INC unavailable for this op, or `inc_enabled=False`):
-    enumerate the SW alternatives and pick `argmin(cost)`.
+Resolution policy: enumerate every schedule the fabric admits for the op
+and pick `argmin(cost)`. In-network collectives (`"inc"`) are one of the
+candidates when `framework.inc_enabled` is True and a crossed tier offers
+them; they win when they are cheaper, which is nearly always inside one
+switch domain, and lose when a software schedule is faster (a runtime
+picks its algorithm per call from predicted time and is not forced onto
+the switch path). An exact tie goes to `"inc"`.
 
 Resolution scope:
   - tp_algorithm_decode  / tp_algorithm_prefill   (TP all-reduce)
@@ -142,10 +142,9 @@ def _resolve(
 ) -> str:
     """Pick the algorithm per the policy in this module's docstring.
 
-    1. If "inc" is among the enumerated options → return "inc" directly
-       (hardware-deployment priority; SW costs not compared).
-    2. Else if SW options exist → return `min(cost)` among them.
-    3. Else (empty option set, e.g. G ≤ 1 or empty chain) → "ring" sentinel.
+    1. Options exist → return `min(cost)` among them, "inc" included; an
+       exact tie goes to "inc".
+    2. Empty option set (e.g. G ≤ 1 or empty chain) → "ring" sentinel.
     """
     options = enumerate_options(
         tier_chain, op, M, G, inc_enabled=inc_enabled, align_policy=align_policy,
@@ -153,7 +152,5 @@ def _resolve(
     )
     if not options:
         return "ring"
-    if any(name == "inc" for name, _ in options):
-        return "inc"
-    name, _ = min(options, key=lambda no_pair: no_pair[1])
+    name, _ = min(options, key=lambda no_pair: (no_pair[1], no_pair[0] != "inc"))
     return name

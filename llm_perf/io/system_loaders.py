@@ -207,6 +207,16 @@ def _apply_oversubscription_cap(
     return min(eta_beta, 1.0 / oversubscription)
 
 
+def _parse_schedule_island_ports(prefix: str, tc: Dict[str, Any]) -> int:
+    """Parse the optional `schedule_island_ports` field (int ≥ 0; default 0 = off)."""
+    val = tc.get("schedule_island_ports", 0)
+    if isinstance(val, bool) or not isinstance(val, int) or val < 0:
+        raise ValueError(
+            f"{prefix}: 'schedule_island_ports' must be an int ≥ 0, got {val!r}"
+        )
+    return val
+
+
 def _parse_crossbar_tier(prefix: str, name: str, tc: Dict[str, Any]) -> CrossbarTier:
     validate_positive_int_fields(tc, ["ports"], prefix=prefix)
     validate_nonnegative_float_fields(tc, ["alpha_us"], prefix=prefix)
@@ -224,6 +234,7 @@ def _parse_crossbar_tier(prefix: str, name: str, tc: Dict[str, Any]) -> Crossbar
         inc=_parse_inc(prefix, tc),
         inc_alpha_us=_parse_inc_alpha_us(prefix, tc),
         oversubscription=oversub,
+        schedule_island_ports=_parse_schedule_island_ports(prefix, tc),
     )
 
 

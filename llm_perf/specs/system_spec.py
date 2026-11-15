@@ -180,6 +180,24 @@ class CrossbarTier:
     0.0 means "reuse alpha_us" (i.e., model assumes the tier's α already
     captures cut-through latency).
 
+    `schedule_island_ports` (default 0 = off) lets software on this
+    single-tier fabric also group its ranks into islands of that many ports
+    and run the hierarchical schedule (reduce-scatter in each island, a
+    sub-all-reduce across islands, all-gather in each island) that a
+    multi-tier chain of the same geometry is given; the dispatcher then
+    uses the cheaper of the flat and the grouped schedule. A switch that
+    reaches every rank in one hop can run any grouping, so this is a
+    schedule choice, not a hardware property. Set it on an idealized flat
+    reference fabric that is compared against a tiered one (to the tiered
+    fabric's inner radix): without it the flat fabric is only offered one
+    ring or tree over the whole group and can price above the fabric it is
+    meant to bound. Use the tiered fabric's inner radix and nothing
+    smaller: a smaller island would also regroup collectives that fit
+    inside one island of the tiered fabric, and the two fabrics would then
+    differ for reasons other than the tier boundary. Left at 0 on real
+    systems, where a pinned algorithm keeps its literal single-level
+    meaning.
+
     See documentation/modeling/collectives/04_in_network_collectives.md and
     documentation/modeling/collectives/04_in_network_collectives.md.
     """
@@ -194,6 +212,7 @@ class CrossbarTier:
     inc: str = "none"              # "none" | "sharp_class" | "hw_a2a"
     inc_alpha_us: float = 0.0      # switch-cut-through α on INC path; 0 = reuse alpha_us
     oversubscription: float = 1.0  # tier oversubscription ratio s ≥ 1; caps eta_beta at 1/s
+    schedule_island_ports: int = 0  # 0 = off; else island size for grouped (hierarchical) schedules
 
 
 @dataclass

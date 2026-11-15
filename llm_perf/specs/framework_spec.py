@@ -128,11 +128,12 @@ class FrameworkSpec:
     #                    per-head K, V from the latent each step.
     mla_mode: str = "absorbed"
 
-    # In-network collectives opt-out. When True (default), dispatcher
-    # routes AR/AG over any crossbar tier chain whose every tier
-    # declares inc != "none" to the INC primitives (n_alpha collapse +
-    # BW-eff doubling for AR). Set False to force software ring/tree
-    # fallback — useful for A/B measurements.
+    # In-network collectives opt-out. When True (default), every crossbar
+    # tier that declares inc != "none" offers the INC primitives (n_alpha
+    # collapse + BW-eff doubling for AR) as a candidate, per phase of the
+    # hierarchical schedule on multi-tier chains, and the dispatcher uses
+    # whichever of INC and the software schedule is cheaper. Set False to
+    # force software ring/tree — useful for A/B measurements.
     inc_enabled: bool = True
 
     # ── Collective algorithm selection (decode.md §5.5; §5.7) ──────────
@@ -140,8 +141,8 @@ class FrameworkSpec:
     # `core/primitives/dispatch.enumerate_options()`'s output for each op.
     # The framework's `optimize_collective_algorithms` resolves the
     # special value "auto" by enumerating cost-model options and picking
-    # `min(cost)` (with INC priority when `inc_enabled` AND structurally
-    # available — see `core/collective_algo_opt.py` policy).
+    # `min(cost)`; INC is one of the options when `inc_enabled` and the
+    # fabric offers it (see `core/collective_algo_opt.py` policy).
     #
     # Available options per op (from primitives/dispatch.py):
     #   TP all-reduce (tp_algorithm_*):
@@ -149,8 +150,9 @@ class FrameworkSpec:
     #     "tree"  — alpha-optimal at small M; literal P=1 binomial tree.
     #     "tree_pipelined" — pipelined variant of tree (lower alpha at large M).
     #     "inc"   — in-network reduction when fabric supports it (NVLS,
-    #               IB SHARP, etc.). Selected automatically by the optimizer
-    #               when `inc_enabled` and any crossed tier has inc != "none".
+    #               IB SHARP, etc.). Picked by the optimizer when it is the
+    #               cheapest option (`inc_enabled` and a crossed tier with
+    #               inc != "none").
     #     "auto"  — resolve via cost model (requires
     #               `optimize_collective_algorithms` before calculator.run()).
     #   EP MoE A2A (ep_algorithm_*):

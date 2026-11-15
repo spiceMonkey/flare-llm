@@ -31,6 +31,7 @@ from .collective_cost import (
     inc_a2a,
     inc_all_gather,
     inc_all_reduce,
+    inc_reduce_scatter,
     p2p_hop,
     pairwise_a2a,
     ring_all_gather,
@@ -95,15 +96,23 @@ def cost_collective(
       op: one of "all_reduce", "all_gather", "moe_a2a", "p2p".
       M: per-rank message size in bytes.
       G: collective group size (number of ranks).
-      algorithm: "ring" or "tree" — crossbar-path choice for AR / MoE-A2A.
-        Ignored for `all_gather` (always ring) and `p2p` (single hop), and
-        on torus tiers (see `torus_algorithm`).
+      algorithm: "ring", "tree" or "tree_pipelined" — software schedule on
+        the crossbar path for AR ("ring" only for MoE-A2A). Ignored for
+        `all_gather` (always ring) and `p2p` (single hop), and on torus
+        tiers (see `torus_algorithm`). "inc" asks for the in-network path
+        outright, with the cheapest software schedule on any phase whose
+        tier has no in-network support.
       torus_algorithm: "ring" (dim-by-dim) or "swing". "swing" raises
         `NotImplementedError` — reserved for a future Swing-AR primitive.
-      inc_enabled: when True, route AR/AG over a crossbar chain whose every
-        crossed tier declares `inc != "none"` to the INC primitives
-        (n_α collapse + BW-eff doubling for AR). When False, force software
-        ring/tree on the same chain. Inert on torus and on mixed chains.
+      inc_enabled: when True, in-network collectives (INC) are a candidate
+        on every crossbar tier that declares `inc != "none"` (`"hw_a2a"`
+        for MoE-A2A), and the cheaper of the INC path and the software
+        `algorithm` is returned — a runtime is never forced onto the
+        switch path when its software schedule is faster. On a multi-tier
+        chain INC is applied per phase of the hierarchical schedule
+        (collectives/03_hierarchical_topologies.md §3.1), so a tier
+        without it keeps its software phase. When False, software only.
+        Inert on torus and on mixed chains.
       align_policy: "prefix" (default) or "greedy" — which sub-torus layouts
         a torus chain admits for a group of `G` ranks (see `_align_to_dims`).
         Group sizes that fail the policy fall back to a flat-ring bound with
@@ -154,42 +163,24 @@ def cost_collective(
     # pre-refactor path. Full mesh routes through the same primitives because
     # cost formulas are identical (single hop, full bisection).
     if classes == {"crossbar"}:
-        # INC eligibility: every crossed tier must declare inc != "none"
-        # AND the caller must not have opted out. AR / AG / RS route via the
-        # SHARP-class switch ALU + multicast crossbar (collectives/04_in_network_collectives.md,
-        # §4.4) — needs `inc != "none"` on every tier. A2A routes via HW
-        # crossbar scatter-gather (§5.4) — needs `inc == "hw_a2a"` on every
-        # tier (NOT covered by sharp_class). p2p is a single hop, no INC.
-        if inc_enabled and all(_is_inc(t) for t in crossed):
-            if op in ("all_reduce", "all_gather"):
-                return _inc_crossbar_cost(op, M, G, crossed)
-            if op == "moe_a2a" and all(_is_hw_a2a(t) for t in crossed):
-                return _inc_crossbar_cost(op, M, G, crossed)
-        # Multi-tier crossbar AR / AG: route through the hierarchical RS →
-        # sub-AR → AG composition (collectives/03_hierarchical_topologies.md §2). Inner = first
-        # crossed tier; outer = remaining crossed tier(s) flattened. Single-
-        # tier still uses the flat path. The `algorithm` knob maps to the
-        # outer phase's choice (inner is always ring — only shipped).
-        if len(crossed) > 1 and G_pod <= 1:
-            # Every peer is in a different inner island: the collective runs
-            # entirely on the outer tier(s); the inner fabric carries nothing.
-            alpha_us = sum(t.alpha_us * t.eta_alpha for t in crossed[1:])
-            bw_GBps = min(t.bw_per_port_GBps * t.eta_beta for t in crossed[1:])
-            return _crossbar_cost(
-                op, M, G, alpha_us * US_TO_SECONDS, bw_GBps * GB_TO_BYTES, algorithm
-            )
-        if len(crossed) > 1 and op in ("all_reduce", "all_gather"):
-            return _hierarchical_crossbar_cost(op, M, G, crossed, algorithm, G_pod)
-        # Multi-tier crossbar MoE A2A: per-destination-class accounting
-        # (collectives/03_hierarchical_topologies.md §2). A2A doesn't telescope — cost itemizes by
-        # destination class (intra-pod / outer). The `algorithm` knob is
-        # ignored (only pairwise direct-send is shipped; tree is deprecated).
-        if len(crossed) > 1 and op == "moe_a2a":
-            return _hierarchical_a2a_cost(M, G, crossed, G_pod)
-        alpha_us, bw_GBps, _ = _span_tiers_scaled(tiers, span)
-        return _crossbar_cost(
-            op, M, G, alpha_us * US_TO_SECONDS, bw_GBps * GB_TO_BYTES, algorithm
+        # Software schedule named by the caller, and the in-network (INC)
+        # alternative where the fabric offers one. The cheaper of the two is
+        # used: INC is a capability of the fabric, not an obligation.
+        t_inc = (
+            _crossbar_inc_cost(op, M, G, crossed, G_pod, algorithm)
+            if inc_enabled else None
         )
+        if algorithm == "inc" and op != "p2p":
+            if t_inc is not None:
+                return t_inc
+            # "inc" requested on a chain with no in-network support for
+            # this op: fall back to the cheapest software schedule.
+            return min(
+                _crossbar_software_cost(tiers, op, M, G, crossed, G_pod, span, alg)
+                for alg in _software_algorithms(op)
+            )
+        t_sw = _crossbar_software_cost(tiers, op, M, G, crossed, G_pod, span, algorithm)
+        return t_sw if t_inc is None else min(t_sw, t_inc)
 
     # Pure torus (TorusTier or k-D mesh): dispatch to torus primitives.
     # k-D mesh tiers use the same dim-decomposed primitives but pass
@@ -254,10 +245,14 @@ def enumerate_options(
     that NCCL ships at bulk M.
 
     INC eligibility (collectives/04_in_network_collectives.md):
-      - AR / AG via "inc" requires every crossed tier to declare `inc != "none"`.
-      - MoE A2A via "inc" requires every crossed tier to declare `inc == "hw_a2a"`
-        (sharp_class does not accelerate A2A).
+      - AR / AG via "inc" needs a crossed tier that declares `inc != "none"`.
+        On a multi-tier chain INC is applied per phase of the hierarchical
+        schedule (collectives/03_hierarchical_topologies.md §3.1): a tier
+        without it keeps its (cheapest) software phase.
+      - MoE A2A via "inc" needs `inc == "hw_a2a"` (sharp_class does not
+        accelerate A2A).
       - When `inc_enabled=False`, no "inc" entries are returned.
+    "inc" is one more candidate: it is not assumed to be the cheapest.
 
     `align_policy` is forwarded to the torus path so the optimizer prices the
     same sub-torus layouts the dispatcher will later use. Inert on crossbar.
@@ -329,13 +324,20 @@ def enumerate_options(
         and op in ("all_reduce", "all_gather")
     )
 
+    def _flat(t_flat: float, alg: str) -> float:
+        # Single-tier crossbar that opts into grouped schedules (same rule
+        # as cost_collective); a no-op everywhere else.
+        if classes != {"crossbar"}:
+            return t_flat
+        return _with_schedule_islands(t_flat, op, M, G, crossed, stride, alg)
+
     if op == "all_gather":
         if use_hierarchical:
             options.append(
                 ("ring", _hierarchical_crossbar_cost(op, M, G, crossed, "ring", G_pod))
             )
         else:
-            options.append(("ring", _crossbar_cost(op, M, G, alpha_s, bw_Bps, "ring")))
+            options.append(("ring", _flat(_crossbar_cost(op, M, G, alpha_s, bw_Bps, "ring"), "ring")))
     elif op == "all_reduce":
         if use_hierarchical:
             options.append(
@@ -348,9 +350,8 @@ def enumerate_options(
                 ("tree_pipelined", _hierarchical_crossbar_cost(op, M, G, crossed, "tree_pipelined", G_pod))
             )
         else:
-            options.append(("ring", _crossbar_cost(op, M, G, alpha_s, bw_Bps, "ring")))
-            options.append(("tree", _crossbar_cost(op, M, G, alpha_s, bw_Bps, "tree")))
-            options.append(("tree_pipelined", _crossbar_cost(op, M, G, alpha_s, bw_Bps, "tree_pipelined")))
+            for alg in ("ring", "tree", "tree_pipelined"):
+                options.append((alg, _flat(_crossbar_cost(op, M, G, alpha_s, bw_Bps, alg), alg)))
     elif op == "moe_a2a":
         # MoE A2A: multi-tier crossbar uses per-destination-class accounting
         # (collectives/03_hierarchical_topologies.md §2); single-tier uses flat pairwise.
@@ -359,17 +360,14 @@ def enumerate_options(
         else:
             options.append(("ring", _crossbar_cost(op, M, G, alpha_s, bw_Bps, "ring")))
 
-    # INC variants — only on pure crossbar (CrossbarTier; full mesh has no
-    # `inc` field so it's automatically excluded by `_is_inc`).
-    if (
-        inc_enabled
-        and classes == {"crossbar"}
-        and all(_is_inc(t) for t in crossed)
-    ):
-        if op in ("all_reduce", "all_gather"):
-            options.append(("inc", _inc_crossbar_cost(op, M, G, crossed)))
-        elif op == "moe_a2a" and all(_is_hw_a2a(t) for t in crossed):
-            options.append(("inc", _inc_crossbar_cost(op, M, G, crossed)))
+    # INC variant — only on pure crossbar (CrossbarTier; full mesh has no
+    # `inc` field so it's automatically excluded by `_is_inc`). Priced as
+    # in `cost_collective(algorithm="inc")`: INC on every phase whose tier
+    # supports it, the cheapest software schedule on the others.
+    if inc_enabled and classes == {"crossbar"}:
+        t_inc = _crossbar_inc_cost(op, M, G, crossed, G_pod, "inc")
+        if t_inc is not None:
+            options.append(("inc", t_inc))
 
     return options
 
@@ -420,6 +418,163 @@ def _all_wraparound(crossed: List[TierSpec]) -> bool:
     return True
 
 
+def _software_algorithms(op: str) -> Tuple[str, ...]:
+    """Software schedules the crossbar path ships for `op`."""
+    if op == "all_reduce":
+        return ("ring", "tree", "tree_pipelined")
+    return ("ring",)
+
+
+def _inc_capable(tier: TierSpec, op: str) -> bool:
+    """Tier can run `op` in-network (A2A needs the hw_a2a class)."""
+    return _is_hw_a2a(tier) if op == "moe_a2a" else _is_inc(tier)
+
+
+def _crossbar_software_cost(
+    tiers: List[TierSpec],
+    op: str,
+    M: float,
+    G: int,
+    crossed: List[TierSpec],
+    G_pod: int,
+    span: int,
+    algorithm: str,
+) -> float:
+    """Software cost of `op` on a pure-crossbar chain (no INC anywhere)."""
+    # Multi-tier crossbar AR / AG: route through the hierarchical RS →
+    # sub-AR → AG composition (collectives/03_hierarchical_topologies.md §2). Inner = first
+    # crossed tier; outer = remaining crossed tier(s) flattened. Single-
+    # tier still uses the flat path. The `algorithm` knob maps to the
+    # outer phase's choice (inner is always ring — only shipped).
+    if len(crossed) > 1 and G_pod <= 1:
+        # Every peer is in a different inner island: the collective runs
+        # entirely on the outer tier(s); the inner fabric carries nothing.
+        alpha_us = sum(t.alpha_us * t.eta_alpha for t in crossed[1:])
+        bw_GBps = min(t.bw_per_port_GBps * t.eta_beta for t in crossed[1:])
+        return _crossbar_cost(
+            op, M, G, alpha_us * US_TO_SECONDS, bw_GBps * GB_TO_BYTES, algorithm
+        )
+    if len(crossed) > 1 and op in ("all_reduce", "all_gather"):
+        return _hierarchical_crossbar_cost(op, M, G, crossed, algorithm, G_pod)
+    # Multi-tier crossbar MoE A2A: per-destination-class accounting
+    # (collectives/03_hierarchical_topologies.md §2). A2A doesn't telescope — cost itemizes by
+    # destination class (intra-pod / outer). The `algorithm` knob is
+    # ignored (only pairwise direct-send is shipped; tree is deprecated).
+    if len(crossed) > 1 and op == "moe_a2a":
+        return _hierarchical_a2a_cost(M, G, crossed, G_pod)
+    alpha_us, bw_GBps, _ = _span_tiers_scaled(tiers, span)
+    t_flat = _crossbar_cost(
+        op, M, G, alpha_us * US_TO_SECONDS, bw_GBps * GB_TO_BYTES, algorithm
+    )
+    return _with_schedule_islands(t_flat, op, M, G, crossed, span // max(1, G), algorithm)
+
+
+def _with_schedule_islands(
+    t_flat: float,
+    op: str,
+    M: float,
+    G: int,
+    crossed: List[TierSpec],
+    stride: int,
+    algorithm: str,
+) -> float:
+    """Cheaper of the flat schedule and the grouped one on a single tier that
+    declares `schedule_island_ports` (see `CrossbarTier`).
+
+    The grouped schedule is the hierarchical composition of
+    collectives/03_hierarchical_topologies.md §2 with both phases on the same
+    switch: islands of `schedule_island_ports // stride` ranks, exactly the
+    split a tiered chain with that inner radix gets. Every term of that
+    composition is monotone in α and 1/BW, so a flat fabric that is no slower
+    than a tiered chain's tiers never prices above it. Returns `t_flat`
+    unchanged when the tier does not opt in, for A2A and p2p (no grouping
+    gain: every pair carries its own payload), and for groups that fit in one
+    island.
+    """
+    if len(crossed) != 1 or op not in ("all_reduce", "all_gather"):
+        return t_flat
+    tier = crossed[0]
+    g_island = int(getattr(tier, "schedule_island_ports", 0)) // max(1, stride)
+    if g_island < 2 or G <= g_island:
+        return t_flat
+    return min(
+        t_flat,
+        _hierarchical_crossbar_cost(op, M, G, [tier, tier], algorithm, g_island),
+    )
+
+
+def _crossbar_inc_cost(
+    op: str,
+    M: float,
+    G: int,
+    crossed: List[TierSpec],
+    G_pod: int,
+    algorithm: str,
+) -> Optional[float]:
+    """Cost of `op` with in-network collectives on a pure-crossbar chain.
+
+    Returns None when no phase of the collective can run in-network (no
+    capable tier, or `op` is a point-to-point hop).
+
+    Single tier: the INC primitive on that switch.
+
+    Multi-tier (collectives/03_hierarchical_topologies.md §3.1): INC is
+    installed per tier and replaces that tier's phase of the hierarchical
+    schedule — inner reduce-scatter and all-gather on the inner switch, the
+    outer sub-all-reduce (on its telescoped payload) on the outer tiers. A
+    tier without INC keeps its software phase: `algorithm` for the outer
+    all-reduce, or the cheapest software schedule when `algorithm="inc"`.
+    When every crossed tier is capable, one flat transaction through the
+    whole aggregation tree is the other candidate and the cheaper of the
+    two is returned: the flat form moves the whole payload at the narrowest
+    link, which costs several times more than the per-phase form once the
+    payload is large and the outer tier much slower than the inner one.
+    """
+    if op == "p2p":
+        return None
+    if len(crossed) == 1:
+        if not _inc_capable(crossed[0], op):
+            return None
+        return _inc_crossbar_cost(op, M, G, crossed)
+
+    inc_inner = _inc_capable(crossed[0], op)
+    inc_outer = all(_inc_capable(t, op) for t in crossed[1:])
+    if G_pod <= 1:
+        # Every peer is in a different inner island: the collective runs on
+        # the outer tier(s) alone, so only their INC capability matters.
+        if not inc_outer:
+            return None
+        return _inc_crossbar_cost(op, M, G, crossed[1:])
+    if not (inc_inner or inc_outer):
+        return None
+    candidates: List[float] = []
+    if inc_inner and inc_outer:
+        # One flat transaction through the k-tier aggregation tree
+        # (collectives/04_in_network_collectives.md §2.2): 2·Σα_switch and
+        # the whole payload at the narrowest link. Wins at small payloads,
+        # where three per-phase round trips cost more than one.
+        candidates.append(_inc_crossbar_cost(op, M, G, crossed))
+    if op == "moe_a2a":
+        candidates.append(_hierarchical_a2a_cost(
+            M, G, crossed, G_pod, inc_inner=inc_inner, inc_outer=inc_outer
+        ))
+        return min(candidates)
+    # Outer phase without INC needs a software schedule.
+    if inc_outer or op != "all_reduce":
+        outer_algs: Tuple[str, ...] = ("ring",)
+    elif algorithm == "inc":
+        outer_algs = _software_algorithms(op)
+    else:
+        outer_algs = (algorithm,)
+    candidates.extend(
+        _hierarchical_crossbar_cost(
+            op, M, G, crossed, alg, G_pod, inc_inner=inc_inner, inc_outer=inc_outer
+        )
+        for alg in outer_algs
+    )
+    return min(candidates)
+
+
 def _crossbar_cost(
     op: str, M: float, G: int, alpha_s: float, bw_Bps: float, algorithm: str
 ) -> float:
@@ -458,6 +613,8 @@ def _hierarchical_crossbar_cost(
     crossed: List[TierSpec],
     outer_alg: str,
     G_inner: Optional[int] = None,
+    inc_inner: bool = False,
+    inc_outer: bool = False,
 ) -> float:
     """Hierarchical crossbar AR / AG / RS for multi-tier chains.
 
@@ -474,6 +631,13 @@ def _hierarchical_crossbar_cost(
     All three preserve the flat-ring β coefficient (telescoping); the α-side
     compresses from $2(N-1)\\alpha$ to $2((G_\\mathrm{inner}{-}1)\\alpha_\\mathrm{inner}
     + (L{-}1)\\alpha_\\mathrm{outer})$ for AR.
+
+    `inc_inner` / `inc_outer` run that tier's phases in-network
+    (collectives/03_hierarchical_topologies.md §3.1): each INC phase pays
+    $2\\,\\alpha_\\mathrm{switch}$ per switch tier instead of its software
+    hop count, and the outer sub-AR also gets the all-reduce bandwidth lift.
+    The inner RS and AG keep their bandwidth term — they never had the
+    dual-touch penalty.
     """
     # Inner / outer split. Inner is the first crossed tier; outer is the rest.
     inner_tier = crossed[0]
@@ -513,17 +677,34 @@ def _hierarchical_crossbar_cost(
     alpha_outer_s = alpha_outer_us * US_TO_SECONDS
     bw_outer_Bps = bw_outer_GBps * GB_TO_BYTES
 
+    # Per-phase primitives. In-network phases use the switch latency
+    # (`inc_alpha_us`, or the tier's `alpha_us` when no override is set).
+    if inc_inner:
+        alpha_inner_s = _inc_alpha_us([inner_tier]) * US_TO_SECONDS
+        inner_rs, inner_ag = inc_reduce_scatter, inc_all_gather
+    else:
+        inner_rs, inner_ag = ring_reduce_scatter, ring_all_gather
+    if inc_outer:
+        alpha_outer_s = _inc_alpha_us(outer_tiers) * US_TO_SECONDS
+        outer_rs, outer_ag = inc_reduce_scatter, inc_all_gather
+    else:
+        outer_rs, outer_ag = ring_reduce_scatter, ring_all_gather
+
     if op == "all_reduce":
         # Inner RS + outer sub-AR + inner AG.
         # M = per-rank full vector (AR convention, unchanged upstream).
         # New AG/RS convention: M = per-rank pre-scatter input / gathered
         # output, so inner RS and inner AG both pass the full M.
-        t_inner_rs = ring_reduce_scatter(
+        t_inner_rs = inner_rs(
             M, G_inner, alpha_inner_s, bw_inner_Bps
         )
         # Outer sub-AR: payload per rank after inner RS = M / G_inner.
         M_outer = M / G_inner
-        if outer_alg == "ring":
+        if L <= 1:
+            t_outer = 0.0
+        elif inc_outer:
+            t_outer = inc_all_reduce(M_outer, alpha_outer_s, bw_outer_Bps)
+        elif outer_alg == "ring":
             t_outer = ring_all_reduce(
                 M_outer, L, alpha_outer_s, bw_outer_Bps
             )
@@ -539,7 +720,7 @@ def _hierarchical_crossbar_cost(
             raise ValueError(
                 f"Unsupported outer_alg for hierarchical AR: {outer_alg!r}"
             )
-        t_inner_ag = ring_all_gather(
+        t_inner_ag = inner_ag(
             M, G_inner, alpha_inner_s, bw_inner_Bps
         )
         return t_inner_rs + t_outer + t_inner_ag
@@ -549,10 +730,10 @@ def _hierarchical_crossbar_cost(
         # New AG convention: M = per-rank gathered output. After inner AG
         # each rank holds G_inner shards = M / L bytes; after outer AG
         # each rank holds the full M.
-        t_inner = ring_all_gather(
+        t_inner = inner_ag(
             M / L, G_inner, alpha_inner_s, bw_inner_Bps
         )
-        t_outer = ring_all_gather(
+        t_outer = outer_ag(
             M, L, alpha_outer_s, bw_outer_Bps
         )
         return t_inner + t_outer
@@ -562,10 +743,10 @@ def _hierarchical_crossbar_cost(
         # New RS convention: M = per-rank pre-scatter input. Outer RS
         # consumes M and produces M/L; inner RS consumes M/L and produces
         # M/(L·G_inner) = M/N.
-        t_outer = ring_reduce_scatter(
+        t_outer = outer_rs(
             M, L, alpha_outer_s, bw_outer_Bps
         )
-        t_inner = ring_reduce_scatter(
+        t_inner = inner_rs(
             M / L, G_inner, alpha_inner_s, bw_inner_Bps
         )
         return t_outer + t_inner
@@ -576,7 +757,12 @@ def _hierarchical_crossbar_cost(
 
 
 def _hierarchical_a2a_cost(
-    M: float, G: int, crossed: List[TierSpec], G_inner: Optional[int] = None
+    M: float,
+    G: int,
+    crossed: List[TierSpec],
+    G_inner: Optional[int] = None,
+    inc_inner: bool = False,
+    inc_outer: bool = False,
 ) -> float:
     """Hierarchical A2A per-destination-class accounting (collectives/03_hierarchical_topologies.md §2).
 
@@ -596,6 +782,12 @@ def _hierarchical_a2a_cost(
     of one single-direction A2A; the MoE Dispatch+Combine round-trip is
     accounted for by the caller as n_EP=2 collectives per MoE layer (matches
     `pairwise_a2a` and `inc_a2a` conventions).
+
+    `inc_inner` / `inc_outer` (a what-if: no shipping switch documents a
+    hardware all-to-all) collapse that destination class's scheduling rounds
+    into one switch transaction, $2\\,\\alpha_\\mathrm{switch}$, and leave
+    its bytes at the same per-port bound — the `inc_a2a` rule applied per
+    class.
     """
     inner_tier = crossed[0]
     outer_tiers = crossed[1:]
@@ -630,12 +822,22 @@ def _hierarchical_a2a_cost(
     if bw_inner_Bps <= 0 or (n_outer > 0 and bw_outer_Bps <= 0):
         return 0.0
 
-    t_intra = n_intra * (alpha_inner_s + chunk / bw_inner_Bps)
-    t_outer = (
-        n_outer * (alpha_outer_s + chunk / bw_outer_Bps)
-        if n_outer > 0
-        else 0.0
-    )
+    if inc_inner and n_intra > 0:
+        t_intra = (
+            2 * _inc_alpha_us([inner_tier]) * US_TO_SECONDS
+            + n_intra * chunk / bw_inner_Bps
+        )
+    else:
+        t_intra = n_intra * (alpha_inner_s + chunk / bw_inner_Bps)
+    if n_outer <= 0:
+        t_outer = 0.0
+    elif inc_outer:
+        t_outer = (
+            2 * _inc_alpha_us(outer_tiers) * US_TO_SECONDS
+            + n_outer * chunk / bw_outer_Bps
+        )
+    else:
+        t_outer = n_outer * (alpha_outer_s + chunk / bw_outer_Bps)
     return t_intra + t_outer  # single-direction A2A; caller scales by n_EP=2
 
 
@@ -643,10 +845,25 @@ def _hierarchical_a2a_cost(
 # INC path — crossbar tiers with switch-hosted reduction
 # ────────────────────────────────────────────────────────────
 
+def _inc_alpha_us(tiers: List[TierSpec]) -> float:
+    """Summed one-direction switch latency (μs) of an INC transaction over
+    `tiers`: `inc_alpha_us` (or `alpha_us` when the override is 0) per tier,
+    scaled by each tier's `eta_alpha`."""
+    total = 0.0
+    for t in tiers:
+        per_tier_alpha_us = t.inc_alpha_us if t.inc_alpha_us > 0.0 else t.alpha_us
+        total += per_tier_alpha_us * t.eta_alpha
+    return total
+
+
 def _inc_crossbar_cost(
     op: str, M: float, G: int, crossed: List[TierSpec]
 ) -> float:
-    """Route AR/AG/A2A on an INC-enabled crossbar chain through the INC primitives.
+    """Route AR/AG/A2A on an INC-enabled crossbar chain through the INC primitives
+    as ONE flat transaction over `crossed` (a single switch, or the outer
+    tiers of a group whose every rank sits in a different inner island).
+    Groups that fill inner islands and spill across them are composed per
+    phase in `_crossbar_inc_cost` instead.
 
     α aggregation: sum `inc_alpha_us` (or `alpha_us` when the override is 0)
     across every crossed tier, scaled by each tier's `eta_alpha`. This maps
