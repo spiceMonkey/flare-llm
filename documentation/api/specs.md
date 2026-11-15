@@ -166,6 +166,7 @@ Auto-materialized tiers use `eta_beta = 1.0` to keep `t_mem` numerically identic
 | `sram_bandwidth_TBps` | `Optional[float]` | `None` |
 | `tiers` | `List['MemoryTierSpec']` | `field(default_factory=list)` |
 | `peak_flops_eta` | `float` | `1.0` |
+| `peak_flops_TF_by_precision` | `Optional[Dict[float, float]]` | `None` |
 | `hbm_eta_beta` | `float` | `1.0` |
 | `tensor_core_efficiency` | `Optional[Dict[int, float]]` | `None` |
 | `bw_efficiency` | `Optional[Dict[int, float]]` | `None` |
@@ -192,6 +193,8 @@ Contention coefficients `eta_alpha` (≥ 1, inflates α) and `eta_beta` (∈ (0,
 0.0 means "reuse alpha\_us" (i.e., model assumes the tier's α already
 captures cut-through latency).
 
+`schedule_island_ports` (default 0 = off) lets software on this single-tier fabric also group its ranks into islands of that many ports and run the hierarchical schedule (reduce-scatter in each island, a sub-all-reduce across islands, all-gather in each island) that a multi-tier chain of the same geometry is given; the dispatcher then uses the cheaper of the flat and the grouped schedule. A switch that reaches every rank in one hop can run any grouping, so this is a schedule choice, not a hardware property. Set it on an idealized flat reference fabric that is compared against a tiered one (to the tiered fabric's inner radix): without it the flat fabric is only offered one ring or tree over the whole group and can price above the fabric it is meant to bound. Use the tiered fabric's inner radix and nothing smaller: a smaller island would also regroup collectives that fit inside one island of the tiered fabric, and the two fabrics would then differ for reasons other than the tier boundary. Left at 0 on real systems, where a pinned algorithm keeps its literal single-level meaning.
+
 See documentation/modeling/collectives/04\_in\_network\_collectives.md and documentation/modeling/collectives/04\_in\_network\_collectives.md.
 
 **Fields**
@@ -208,6 +211,7 @@ See documentation/modeling/collectives/04\_in\_network\_collectives.md and docum
 | `inc` | `str` | `'none'` |
 | `inc_alpha_us` | `float` | `0.0` |
 | `oversubscription` | `float` | `1.0` |
+| `schedule_island_ports` | `int` | `0` |
 
 ### class `TorusTier`
 

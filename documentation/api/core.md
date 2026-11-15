@@ -127,8 +127,7 @@ Examples on GB200 NVL72 (peak\_FP16 = 2250 TF/GPU, peak\_flops\_eta = 1.0):
 - FP8  (b=1.0): 4500 TF
 - FP4  (b=0.5): 9000 TF
 
-**Known limitation**: d-Matrix MXINT4 throughput is 4× MXINT8 rather
-than the 2× linear byte scaling predicts (block-sparse acceleration in the INT4 path). With FP16 baseline = 150 TF/chiplet, the framework computes 600 TF/chiplet for MXINT4, but the published peak is 1200 TF/chiplet — a 2× under-estimate on d-Matrix INT4 / FP4 only. Linear byte scaling holds for every other modeled architecture (NVIDIA Hopper / Blackwell, TPU v5p / v6e, Groq LPU).
+A device whose published peaks do not follow that rule carries them in `DeviceSpec.peak_flops_TF_by_precision` (bytes per parameter → TFLOPs), which then replaces the byte-ratio rule. d-Matrix Corsair is the case in the database: its vendor figures quadruple per halving of precision (75 / 300 / 1200 TFLOPs per chiplet at 16 / 8 / 4 bits), so the linear rule would under-state its 4-bit peak by 2× and over-state its 16-bit peak by 2×. An exact key is used as is; a precision between two keys is interpolated geometrically; one outside the table is byte-ratio scaled from the nearest key.
 
 ### `compute_flops(model: LlmModelSpec, partition: PartitionSpec, tuner: TuningSpec, framework: FrameworkSpec) -> FlopsResults`
 
@@ -347,6 +346,14 @@ Seconds to read one byte of weights, averaged over where weights live.
 
 `Σ_i (w_i / W) / BW_eff,i`: a read of weight bytes that are spread over the tiers like the resident weights are. Used for weight reads that are not part of the per-layer traffic (the LM head projection), so that a device whose weights sit mostly on a slow tier does not get them at the fast tier's bandwidth. On a single-tier device this is `1 / BW_eff`.
 
+### `spill_seconds_per_byte(nbytes: float, placement: PlacementResult, B: int, tiers: List[MemoryTierSpec]) -> float`
+
+Seconds to read one byte of a block that is placed *after* `placement`.
+
+The block of `nbytes` takes whatever capacity `placement` (weights plus the KV cache of `B` requests) left free, fastest tier first; bytes that fit nowhere land on the last tier, as in the permissive "auto" rule of `resolve_placement`. Returns `Σ_i (x_i / nbytes) / BW_eff,i` for the resulting split `x_i`.
+
+Used for the vocabulary matrix (input embedding / LM head) when it is given the lowest claim on fast memory: only the last pipeline stage reads it, once per token, while layer weights are read on every stage pass (sram.md §2).
+
 ### `t_mem_from_placement(placement: PlacementResult, B: int, tiers: List[MemoryTierSpec], eta_beta_curve_factor: float=1.0) -> float`
 
 Multi-tier decode roofline memory time per sram.md §2.1 (full α–β form):
@@ -374,13 +381,7 @@ Standalone pure function that resolves `"auto"` placeholders in `FrameworkSpec` 
 
 (Phase E: the algorithm fields moved from TuningSpec to FrameworkSpec. Pre-Phase-E this resolved into TuningSpec; the cost-model logic is unchanged, only the input/output type.)
 
-Resolution policy:
-- If `framework.inc_enabled` is True AND INC is structurally available
-    for this op on this tier chain → pick `"inc"` directly (hardware
-    deployment priority; SW costs not compared, since a deployment
-    decision doesn't flip on a tuning-grade cost difference).
-- Otherwise (INC unavailable for this op, or `inc_enabled=False`):
-    enumerate the SW alternatives and pick `argmin(cost)`.
+Resolution policy: enumerate every schedule the fabric admits for the op and pick `argmin(cost)`. In-network collectives (`"inc"`) are one of the candidates when `framework.inc_enabled` is True and a crossed tier offers them; they win when they are cheaper, which is nearly always inside one switch domain, and lose when a software schedule is faster (a runtime picks its algorithm per call from predicted time and is not forced onto the switch path). An exact tie goes to `"inc"`.
 
 Resolution scope:
 - tp\_algorithm\_decode  / tp\_algorithm\_prefill   (TP all-reduce)
@@ -402,5 +403,64 @@ framework: SW-stack spec — algorithm fields read from here, INC
 
 Returns:
 A new FrameworkSpec with all `auto` fields replaced by concrete names. Non-`auto` fields pass through unchanged.
+
+---
+
+## `llm_perf.core.kv_reuse`
+
+Fetch-versus-recompute break-even for a cached prompt (KV-cache reuse).
+
+A prompt whose key-value (KV) cache is already stored somewhere — host memory, a CXL pool, NVMe, another node — can be served either by recomputing it (a prefill pass) or by fetching the stored cache. Fetching wins on latency when moving the bytes is faster than running prefill over
+the same tokens:
+
+    M_KV / BW_fetch  <  t_prefill      <=>      BW_fetch  >  M_KV / t_prefill
+
+The right-hand side is the break-even bandwidth: how fast a cache tier must deliver into the serving devices before it is worth having, for a given model, hardware, partition and prompt length. Both of its terms are outputs of the framework, so no new spec is needed.
+
+Scope and limits:
+- Whole-prompt reuse: the cached entry covers all `S_input` tokens. A
+    shared prefix followed by a fresh suffix is not modeled here.
+- Latency only. Fetching also frees the prefill devices for other
+    requests; that throughput gain needs two-pool accounting and is not
+    credited, so on fast hardware this comparison understates the value of
+    reuse.
+- `fetch_bandwidth_GBps` is the delivered rate into the devices over the
+    whole path (media, link, host-to-device hop), per stream. Several
+    devices of one host loading at once share the host's uplink; pass the
+    per-stream rate they actually get.
+
+### class `KVReuseBreakEven`
+
+**Fields**
+
+| Field | Type | Default |
+|---|---|---|
+| `S_input` | `int` | — |
+| `M_KV` | `float` | — |
+| `t_recompute` | `float` | — |
+| `BW_break_even_GBps` | `float` | — |
+| `fetch_bandwidth_GBps` | `Optional[float]` | `None` |
+| `fetch_streams` | `int` | `1` |
+| `t_fetch` | `Optional[float]` | `None` |
+| `saving` | `Optional[float]` | `None` |
+| `fetch_wins` | `Optional[bool]` | `None` |
+
+### `kv_fetch_break_even(model: LlmModelSpec, system: SystemSpec, partition: PartitionSpec, tuner: TuningSpec, framework: Optional[FrameworkSpec]=None, *, fetch_bandwidth_GBps: Optional[float]=None, fetch_streams: int=1, fetch_alpha_us: float=0.0) -> KVReuseBreakEven`
+
+Break-even between fetching a cached prompt and recomputing it.
+
+Args:
+model, system, partition, tuner, framework: the usual five-spec
+    composition of the prefill deployment. `tuner.S_input` is the
+    prompt length; `tuner.B_prefill` and `tuner.chunk_size` are used as
+    in `PrefillCalculator` (the unchunked prefill time is compared).
+fetch\_bandwidth\_GBps: delivered fetch rate per stream. When given,
+    the result also carries the fetch time and the latency saving.
+fetch\_streams: device pairs (or drives, or links) fetching shards of
+    the cache in parallel.
+fetch\_alpha\_us: fixed cost per fetch (first-byte latency, lookup).
+
+Returns:
+KVReuseBreakEven. `BW_break_even_GBps` is the total delivered bandwidth (all streams together) a tier needs for fetching to match recomputation.
 
 ---
