@@ -10,10 +10,10 @@ The published set is the two per-cut drivers the root README walks through.
 
 | Driver | Model spec | System | Framework | Cuts |
 |---|---|---|---|---|
-| `gpt_oss_120b_gb200_dynamo_trt.py` | `gpt_oss_120b` | `gb200.72gpu` | dynamo-trt | TP=4 EP=1 dec=4 — mean absolute error (MAE) 13.6% over 7 points |
-| `dsr1_gb200_dynamo_trt.py` | `deepseek_r1_0528` | `gb200.72gpu` | dynamo-trt | EXACT (TP=36 EP=1), CO-LOCATED (TP=EP={8,16,32}), ORTHO (TP=8 EP=8 dec=32) — 19.6% MAE over 14 points on the co-located TP-attention cut |
+| `gpt_oss_120b_gb200_dynamo_trt.py` | `gpt_oss_120b` | `gb200.72gpu` | dynamo-trt | TP=4 EP=1 dec=4 — mean absolute error (MAE) 9.0% over 7 points |
+| `dsr1_gb200_dynamo_trt.py` | `deepseek_r1_0528` | `gb200.72gpu` | dynamo-trt | EXACT (TP=36 EP=1), CO-LOCATED (TP=EP={8,16,32}), ORTHO (TP=8 EP=8 dec=32) — 8.7% MAE over 14 points on the co-located TP-attention cut |
 
-Both are calibrated: `bw_eta` is fitted per (model, hardware, framework) cell, while `c_seq` and the per-kernel launch time come from the framework spec and are shared by every cut on that serving stack. Everything else is first-principles. `bw_eta` multiplies on top of the `hbm_eta_beta` the system spec already carries (0.7 on GB200), so the default 0.7 means 0.49× nameplate HBM bandwidth; it is a fitted residual, not a measured hardware constant. Accuracy on an *uncalibrated* cell is materially worse — the dominant residual is a consistent under-prediction that grows with batch size, which is the not-yet-calibrated per-step host floor rather than a failure of the roofline itself.
+Both are calibrated: `bw_eta` and the per-step host floor `c_orch` are fitted per (model, hardware, framework) cell, while `c_seq`, the per-kernel launch time and the additive host composition (`seq_overlap_factor = 0`) are shared by every cut on that serving stack. The measured `conc` is the client concurrency of the whole endpoint, so `load_measured` divides it by `decode_num_workers` to get the per-replica batch the model works in. Everything else is first-principles. `bw_eta` multiplies on top of the `hbm_eta_beta` the system spec already carries (0.7 on GB200), so the default 0.7 means 0.49× nameplate HBM bandwidth; it is a fitted residual, not a measured hardware constant. Accuracy on an *uncalibrated* cell is materially worse — the dominant residual is a consistent under-prediction that grows with batch size, which is the not-yet-calibrated per-step host floor rather than a failure of the roofline itself.
 
 ## Running
 
@@ -42,21 +42,23 @@ python benchmark/validate/dsr1_gb200_dynamo_trt.py --out-dir /tmp/plots
 | `--flops-eta` | per-driver | Multiply `device.peak_flops_TF` by this factor (sustained / nameplate) |
 | `--bw-eta` | per-driver | Multiply every memory tier's `bandwidth_GBps` by this factor, on top of the tier's own `eta_beta` from the system spec |
 | `--c-seq-us` | per-driver | Per-sequence serving runtime overhead, µs/seq (decode.md §7.2) |
+| `--c-orch-us` | per-driver | Per-step host floor, µs/step, independent of batch |
 | `--out-dir` | `benchmark/results/` | Where to write plots |
 | `--check MAE_PCT` | None | If set, exit non-zero when overall MAE exceeds this |
 
-The three calibration knobs (`--flops-eta`, `--bw-eta`, `--c-seq-us`) default to **per-driver** values — each script ships with `DEFAULT_BW_ETA` / `DEFAULT_C_SEQ_US` constants tuned to its specific (model, hardware, framework) cut so out-of-box runs land within reasonable MAE without users having to know the magic numbers. Override on the command line for sweeps; `--bw-eta 1.0 --c-seq-us 0` reverts to the system spec's own roofline (its `hbm_eta_beta` still applies).
+The four calibration knobs (`--flops-eta`, `--bw-eta`, `--c-seq-us`, `--c-orch-us`) default to **per-driver** values — each script ships with `DEFAULT_BW_ETA` / `DEFAULT_C_SEQ_US` / `DEFAULT_C_ORCH_US` constants tuned to its specific (model, hardware, framework) cut so out-of-box runs land within reasonable MAE without users having to know the magic numbers. Override on the command line for sweeps; `--bw-eta 1.0 --c-seq-us 0` reverts to the system spec's own roofline (its `hbm_eta_beta` still applies).
 
 Each driver may also expose its own filters (`--cut`, `--tp`, etc.) — see `--help`.
 
 ## How the per-driver defaults are structured
 
-The two calibration knobs sit on different axes:
+The calibration knobs sit on different axes:
 
 | Knob | Primary axis | Why |
 |---|---|---|
 | `c_seq` | **framework** (Dynamo+TRT, raw TRT, dynamo+sglang, vllm, …) | Host-side per-sequence work — block-table gather, sampling glue, scheduler — runs on the CPU between forward passes. The dominant variable is the serving stack (Python heaviness, graph-replay use, fused vs Python sampling), with weak HW dependence through CPU class and PCIe. |
 | `bw_eta` | **HW × framework** | Sustained HBM BW depends on chip generation (HBM3 vs HBM3e) and on access pattern (dense GEMM vs paged-KV vs MoE expert hopping). Different frameworks are kinder or harder on the controllers. |
+| `c_orch` | **cut** (model × framework) | Per-step host floor that does not depend on batch, fitted alongside `bw_eta`. Without it, and with host work assumed to hide fully behind the GPU step, `bw_eta` absorbs the host cost and its best-fit value falls as TP grows. |
 | `flops_eta` | HW (sparse vs dense ratios), model | Less commonly needed — most miscalibration shows up on `bw_eta`. |
 
 Empirical anchors observed across the validator suite:
@@ -72,9 +74,9 @@ Empirical anchors observed across the validator suite:
 
 | Chip | `bw_eta` range observed |
 |---|---|
-| HBM3e on Blackwell (B200/GB200) | 0.7–1.0 (better with Dynamo wrapping) |
+| HBM3e on Blackwell (B200/GB200) | 0.65–1.05 once the host floor is fitted separately |
 | HBM3e on Blackwell Ultra (B300/GB300) | similar; less data |
-| HBM3 on Hopper (H100/H200) | 0.55–0.7 |
+| HBM3 on Hopper (H100/H200) | 0.55–1.05; the low end is from fits that had no separate host floor |
 | Dense models on raw TRT | as low as 0.4 |
 
 ### Re-tuning the defaults
@@ -115,5 +117,5 @@ Plots land in `benchmark/results/` (ignored, like the unpublished drivers). File
 benchmark/results/
   dsr1_dynamo_trt_exact_tp36_ep1_dec36.png
   dsr1_dynamo_trt_colocated_tp8ep8.png
-  gpt_oss_120b_dynamo_trt_tp4_ep1_dec4_flops1p00_bw0p70_serv5us.png
+  gpt_oss_120b_dynamo_trt_tp4_ep1_dec4_flops1p00_bw0p65_serv5us.png
 ```

@@ -37,7 +37,7 @@ TP, EP, NUM = 4, 1, 4
 # faster than measured). Resolving this likely requires a fixed per-step
 # overhead term or precision-aware kernel-launch budget; documented as a
 # §5 Limitation.
-DEFAULT_BW_ETA = 0.7
+DEFAULT_BW_ETA = 0.65
 # 5 µs/seq — Dynamo+TRT stack default (matches dynamo_trt.json and the
 # DSr1 Dynamo+TRT validator). At panel-(a) max B=128, c_seq·B = 0.64 ms
 # vs t_step_base ~5-10 ms → fully hidden by the overlap gate (ρ_seq=1),
@@ -52,11 +52,21 @@ DEFAULT_C_SEQ_US = 5.0
 # under-count. Lifts panel-(a) small-B prediction (B=1..4) from
 # ~0.8 ms to ~1.8 ms, matching measured ~1.9 ms.
 DEFAULT_KERNEL_LAUNCH_US = 4.0
+# Host-side composition (recalibrated 2026-11 with the per-worker batch):
+#   - seq_overlap_factor = 0: host work adds to the GPU step instead of hiding
+#     behind it. With full overlap the fitted bw_eta has to absorb the host
+#     cost, and then drifts from cut to cut.
+#   - c_orch: per-step floor that does not depend on batch, fitted per cut
+#     alongside bw_eta. c_seq and kernel_launch_us stay shared by every
+#     Dynamo+TRT cut.
+DEFAULT_C_ORCH_US = 0.0
+DEFAULT_SEQ_OVERLAP = 0.0
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
-    add_common_cli(ap, default_bw_eta=DEFAULT_BW_ETA, default_c_seq_us=DEFAULT_C_SEQ_US)
+    add_common_cli(ap, default_bw_eta=DEFAULT_BW_ETA, default_c_seq_us=DEFAULT_C_SEQ_US,
+                   default_c_orch_us=DEFAULT_C_ORCH_US)
     args = ap.parse_args()
 
     measured = load_measured(
@@ -78,7 +88,8 @@ def main() -> int:
         num_devices=NUM, S_decode=ISL + OSL // 2,
         B_sweep=log_spaced_B(512),
         flops_eta=args.flops_eta, bw_eta=args.bw_eta,
-        c_seq_us=args.c_seq_us,
+        c_seq_us=args.c_seq_us, c_orch_us=args.c_orch_us,
+        seq_overlap_factor=DEFAULT_SEQ_OVERLAP,
         kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US,
     )
     rows = []
@@ -89,7 +100,8 @@ def main() -> int:
             attention_mode="tp", tp_ep_layout="orthogonal",
             num_devices=NUM, S_decode=ISL + OSL // 2, B=m.B,
             flops_eta=args.flops_eta, bw_eta=args.bw_eta,
-            c_seq_us=args.c_seq_us,
+            c_seq_us=args.c_seq_us, c_orch_us=args.c_orch_us,
+        seq_overlap_factor=DEFAULT_SEQ_OVERLAP,
             kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US,
         )
         rows.append((f"TP={TP} EP={EP}", m.B, m.tpot_ms, pred))
@@ -99,7 +111,7 @@ def main() -> int:
         framework=framework, measured=measured,
         title=f"gpt-oss-120b / GB200 / Dynamo-TRT — TP={TP} EP={EP} dec={NUM}",
         subtitle=f"PP=1 TP={TP} EP={EP} attention_mode=tp | ISL={ISL} OSL={OSL} FP4 | "
-                 f"sys={SYSTEM} | {topology_tag(SYSTEM)} | {eta_subtitle(args.flops_eta, args.bw_eta, args.c_seq_us)}",
+                 f"sys={SYSTEM} | {topology_tag(SYSTEM)} | {eta_subtitle(args.flops_eta, args.bw_eta, args.c_seq_us, args.c_orch_us)}",
         out_path=out,
     )
     print(f"  saved: {out.relative_to(args.out_dir.parent.parent)}\n")

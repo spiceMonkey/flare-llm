@@ -70,7 +70,7 @@ CO_LOCATED_WORKLOADS = [(1024, 1024), (8192, 1024)]
 # the bulk of the improvement: Dynamo+TRT absorbs per-seq host work into
 # the CUDA-graph launch, so the framework's per-seq overhead term
 # over-counts at large B (the offending TP=EP=16,32 cells run at B≥4000).
-DEFAULT_BW_ETA = 0.7143
+DEFAULT_BW_ETA = 0.75
 # 5 µs/seq — stack-realistic floor for Dynamo+TRT under CUDA-Graph replay.
 # Below the panel break-even at every measured operating point: at B=4300
 # (largest panel-(c) measured) c_seq·B = 21.5 ms < t_step_base ~25 ms,
@@ -92,6 +92,15 @@ DEFAULT_C_SEQ_US = 5.0
 # Same value used for Dynamo+SGLang (the orchestrator behavior dominates
 # the underlying runtime distinction).
 DEFAULT_KERNEL_LAUNCH_US = 4.0
+# Host-side composition (recalibrated 2026-11 with the per-worker batch):
+#   - seq_overlap_factor = 0: host work adds to the GPU step instead of hiding
+#     behind it. With full overlap the fitted bw_eta has to absorb the host
+#     cost, and then drifts from cut to cut.
+#   - c_orch: per-step floor that does not depend on batch, fitted per cut
+#     alongside bw_eta. c_seq and kernel_launch_us stay shared by every
+#     Dynamo+TRT cut.
+DEFAULT_C_ORCH_US = 2500.0
+DEFAULT_SEQ_OVERLAP = 0.0
 DEFAULT_MOE_A2A_PATTERN = "scatter"
 
 
@@ -116,7 +125,8 @@ def run_exact(args) -> tuple[list[tuple], int]:
         num_devices=bucket[2], S_decode=ISL + OSL // 2,
         B_sweep=log_spaced_B(2048),
         flops_eta=args.flops_eta, bw_eta=args.bw_eta,
-        c_seq_us=args.c_seq_us,
+        c_seq_us=args.c_seq_us, c_orch_us=args.c_orch_us,
+        seq_overlap_factor=DEFAULT_SEQ_OVERLAP,
         moe_a2a_pattern=DEFAULT_MOE_A2A_PATTERN,
         kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US,
         bytes_per_param=0.5,
@@ -130,7 +140,8 @@ def run_exact(args) -> tuple[list[tuple], int]:
             attention_mode="tp", tp_ep_layout="orthogonal",
             num_devices=bucket[2], S_decode=ISL + OSL // 2, B=m.B,
             flops_eta=args.flops_eta, bw_eta=args.bw_eta,
-            c_seq_us=args.c_seq_us,
+            c_seq_us=args.c_seq_us, c_orch_us=args.c_orch_us,
+        seq_overlap_factor=DEFAULT_SEQ_OVERLAP,
             moe_a2a_pattern=DEFAULT_MOE_A2A_PATTERN,
             kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US,
             bytes_per_param=0.5,
@@ -142,7 +153,7 @@ def run_exact(args) -> tuple[list[tuple], int]:
         framework=framework, measured=measured,
         title=f"DSR1 / GB200 / Dynamo-TRT — EXACT bucket: TP={bucket[0]} EP=1 dec={bucket[2]}",
         subtitle=f"PP=1 TP={bucket[0]} EP=1 attention_mode=tp | ISL={ISL} OSL={OSL} FP4 | "
-                 f"sys={SYSTEM} | {topology_tag(SYSTEM)} | {eta_subtitle(args.flops_eta, args.bw_eta, args.c_seq_us)}",
+                 f"sys={SYSTEM} | {topology_tag(SYSTEM)} | {eta_subtitle(args.flops_eta, args.bw_eta, args.c_seq_us, args.c_orch_us)}",
         out_path=out,
     )
     print(f"  saved: {out.relative_to(args.out_dir.parent.parent)}")
@@ -166,7 +177,8 @@ def _run_colocated_workload(args, tp_ep: int, isl: int, osl: int):
         num_devices=tp_ep, S_decode=S_decode,
         B_sweep=log_spaced_B(8192),
         flops_eta=args.flops_eta, bw_eta=args.bw_eta,
-        c_seq_us=args.c_seq_us,
+        c_seq_us=args.c_seq_us, c_orch_us=args.c_orch_us,
+        seq_overlap_factor=DEFAULT_SEQ_OVERLAP,
         moe_a2a_pattern=DEFAULT_MOE_A2A_PATTERN,
         kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US,
         bytes_per_param=0.5,
@@ -179,7 +191,8 @@ def _run_colocated_workload(args, tp_ep: int, isl: int, osl: int):
             attention_mode="dp", tp_ep_layout="co_located",
             num_devices=tp_ep, S_decode=S_decode, B=m.B,
             flops_eta=args.flops_eta, bw_eta=args.bw_eta,
-            c_seq_us=args.c_seq_us,
+            c_seq_us=args.c_seq_us, c_orch_us=args.c_orch_us,
+        seq_overlap_factor=DEFAULT_SEQ_OVERLAP,
             moe_a2a_pattern=DEFAULT_MOE_A2A_PATTERN,
             kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US,
             bytes_per_param=0.5,
@@ -218,7 +231,7 @@ def run_colocated(args) -> tuple[list[tuple], int]:
             framework=fw_prim, measured=meas_prim,
             title=f"DSR1 / GB200 / Dynamo-TRT — CO-LOCATED TP=EP={tp_ep} on {tp_ep}-GPU replica",
             subtitle=f"tp_ep_layout=co_located attention_mode=dp PP=1 TP={tp_ep} EP={tp_ep} SP=1 | "
-                     f"{prim_lbl} + {sec_lbl} FP4 | sys={SYSTEM} | {topology_tag(SYSTEM)} | {eta_subtitle(args.flops_eta, args.bw_eta, args.c_seq_us)}",
+                     f"{prim_lbl} + {sec_lbl} FP4 | sys={SYSTEM} | {topology_tag(SYSTEM)} | {eta_subtitle(args.flops_eta, args.bw_eta, args.c_seq_us, args.c_orch_us)}",
             out_path=out,
             primary_label=prim_lbl,
             secondary=(sec_lbl, fw_sec, meas_sec),
@@ -257,7 +270,8 @@ def run_colo_tp_attn(args) -> tuple[list[tuple], int]:
         num_devices=32, S_decode=ISL + OSL // 2,
         B_sweep=log_spaced_B(2048),
         flops_eta=args.flops_eta, bw_eta=args.bw_eta,
-        c_seq_us=args.c_seq_us,
+        c_seq_us=args.c_seq_us, c_orch_us=args.c_orch_us,
+        seq_overlap_factor=DEFAULT_SEQ_OVERLAP,
         moe_a2a_pattern=DEFAULT_MOE_A2A_PATTERN,
         kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US,
         bytes_per_param=0.5,
@@ -269,7 +283,8 @@ def run_colo_tp_attn(args) -> tuple[list[tuple], int]:
             attention_mode="tp", tp_ep_layout="co_located",
             num_devices=32, S_decode=ISL + OSL // 2, B=m.B,
             flops_eta=args.flops_eta, bw_eta=args.bw_eta,
-            c_seq_us=args.c_seq_us,
+            c_seq_us=args.c_seq_us, c_orch_us=args.c_orch_us,
+        seq_overlap_factor=DEFAULT_SEQ_OVERLAP,
             moe_a2a_pattern=DEFAULT_MOE_A2A_PATTERN,
             kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US,
             bytes_per_param=0.5,
@@ -282,7 +297,7 @@ def run_colo_tp_attn(args) -> tuple[list[tuple], int]:
         title="DSR1 / GB200 / Dynamo-TRT — CO-LOCATED TP-attn TP=EP=8 dec=32 (4 replicas)",
         subtitle=f"PP=1 TP=EP=8 attention_mode=tp tp_ep_layout=co_located | "
                  f"ISL={ISL} OSL={OSL} FP4 | "
-                 f"sys={SYSTEM} | {topology_tag(SYSTEM)} | {eta_subtitle(args.flops_eta, args.bw_eta, args.c_seq_us)}",
+                 f"sys={SYSTEM} | {topology_tag(SYSTEM)} | {eta_subtitle(args.flops_eta, args.bw_eta, args.c_seq_us, args.c_orch_us)}",
         out_path=out,
     )
     print(f"  saved: {out.relative_to(args.out_dir.parent.parent)}")
@@ -292,7 +307,8 @@ def run_colo_tp_attn(args) -> tuple[list[tuple], int]:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
     ap.add_argument("--cut", choices=["exact", "colocated", "colo_tp_attn", "all"], default="all")
-    add_common_cli(ap, default_bw_eta=DEFAULT_BW_ETA, default_c_seq_us=DEFAULT_C_SEQ_US)
+    add_common_cli(ap, default_bw_eta=DEFAULT_BW_ETA, default_c_seq_us=DEFAULT_C_SEQ_US,
+                   default_c_orch_us=DEFAULT_C_ORCH_US)
     args = ap.parse_args()
 
     all_rows: list[tuple] = []

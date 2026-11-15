@@ -54,7 +54,7 @@ DEFAULT_RESULTS_DIR = _REPO_ROOT / "benchmark" / "results"
 class MeasuredPoint:
     """One InferenceX measurement row (subset of fields used by drivers)."""
 
-    B: int                  # `conc` — steady-state in-flight requests (≈ per-step batch)
+    B: int                  # in-flight requests per decode worker: conc / decode_num_workers (≈ per-step batch of one replica)
     tpot_ms: float          # `mean_tpot` × 1000 — primary y-axis quantity
     isl: int
     osl: int
@@ -65,6 +65,8 @@ class MeasuredPoint:
     spec_method: str
     framework: str
     hardware: str
+    conc: int = 0           # `conc` — client concurrency across the whole deployment
+    num_workers: int = 1    # `decode_num_workers` — decode replicas sharing that concurrency
 
 
 def _to_bool(v: str) -> bool:
@@ -132,8 +134,16 @@ def load_measured(
                     continue
                 if not row.get("mean_tpot"):
                     continue  # drop incomplete runs
+                # `conc` is the load generator's concurrency for the whole
+                # endpoint. The model's B is the batch of ONE replica, so a
+                # deployment with several decode workers sees conc / workers
+                # each (assuming the router balances them).
+                conc = int(row["conc"])
+                workers = max(1, int(float(row.get("decode_num_workers") or 1)))
                 out.append(MeasuredPoint(
-                    B=int(row["conc"]),
+                    B=max(1, round(conc / workers)),
+                    conc=conc,
+                    num_workers=workers,
                     tpot_ms=float(row["mean_tpot"]) * 1000.0,
                     isl=int(row["isl"]),
                     osl=int(row["osl"]),
@@ -282,6 +292,7 @@ def run_framework(
     flops_eta: float = 1.0,
     bw_eta: float = 1.0,
     c_seq_us: float = 0.0,
+    c_orch_us: float = 0.0,
     moe_a2a_pattern: str = "gather",
     kernel_launch_us: float | None = None,
     bytes_per_param: float | None = None,
@@ -316,6 +327,7 @@ def run_framework(
         attention_mode=attention_mode,
         tp_ep_layout=tp_ep_layout,
         c_seq_us=c_seq_us,
+        c_orch_us=c_orch_us,
         moe_a2a_pattern=moe_a2a_pattern,
         # InferenceX measurements were not captured with SHARP-class INC
         # engaged; opt out explicitly so the cost model picks SW even when
@@ -390,6 +402,7 @@ def predict_at(
     flops_eta: float = 1.0,
     bw_eta: float = 1.0,
     c_seq_us: float = 0.0,
+    c_orch_us: float = 0.0,
     moe_a2a_pattern: str = "gather",
     kernel_launch_us: float | None = None,
     bytes_per_param: float | None = None,
@@ -405,6 +418,7 @@ def predict_at(
         num_devices=num_devices, S_decode=S_decode,
         B_sweep=[B],
         flops_eta=flops_eta, bw_eta=bw_eta, c_seq_us=c_seq_us,
+        c_orch_us=c_orch_us,
         moe_a2a_pattern=moe_a2a_pattern,
         kernel_launch_us=kernel_launch_us,
         bytes_per_param=bytes_per_param,
@@ -535,7 +549,7 @@ def plot_tpot_vs_B(
                    c="navy", marker="D", s=70*(l_scale**2), edgecolors="black", linewidths=0.5*l_scale,
                    zorder=10, label=prim_label)
         for m in measured:
-            ax.annotate(f"c={m.B}", (m.B, m.tpot_ms),
+            ax.annotate(f"c={m.conc}", (m.B, m.tpot_ms),
                         textcoords="offset points", xytext=(6, 4),
                         fontsize=6*f_scale, color="navy", alpha=0.7)
 
@@ -565,11 +579,11 @@ def plot_tpot_vs_B(
                            linewidths=0.5*l_scale, zorder=10,
                            label=f"InferenceX measured {sec_label} (n={len(sec_meas)})")
                 for m in sec_meas:
-                    ax.annotate(f"c={m.B}", (m.B, m.tpot_ms),
+                    ax.annotate(f"c={m.conc}", (m.B, m.tpot_ms),
                                 textcoords="offset points", xytext=dxy,
                                 fontsize=6*f_scale, color=color, alpha=0.7)
 
-    ax.set_xlabel("Concurrency (B)", fontsize=12*f_scale)
+    ax.set_xlabel("In-flight requests per decode worker (B); labels show client concurrency c", fontsize=12*f_scale)
     ax.set_ylabel("Time per decode step (ms)", fontsize=12*f_scale)
     ax.tick_params(axis="both", labelsize=10*f_scale)
     ax.set_xscale("log")
@@ -603,6 +617,7 @@ def add_common_cli(
     default_flops_eta: float = 1.0,
     default_bw_eta: float = 1.0,
     default_c_seq_us: float = 0.0,
+    default_c_orch_us: float = 0.0,
 ) -> None:
     """Register the standard CLI args every driver should support.
 
@@ -627,6 +642,9 @@ def add_common_cli(
     ap.add_argument("--c-seq-us", type=float, default=default_c_seq_us,
                     help=f"Per-sequence serving runtime overhead c_seq (µs/seq). "
                          f"Driver default: {default_c_seq_us}.")
+    ap.add_argument("--c-orch-us", type=float, default=default_c_orch_us,
+                    help=f"Per-step host floor c_orch (µs/step), independent of batch. "
+                         f"Driver default: {default_c_orch_us}.")
     ap.add_argument("--out-dir", type=Path, default=DEFAULT_RESULTS_DIR,
                     help="Where to write plots (default: benchmark/results/).")
     ap.add_argument("--check", type=float, default=None, metavar="MAE_PCT",
@@ -634,12 +652,14 @@ def add_common_cli(
                          "Use for CI smoke tests.")
 
 
-def eta_subtitle(flops_eta: float, bw_eta: float, c_seq_us: float) -> str:
+def eta_subtitle(flops_eta: float, bw_eta: float, c_seq_us: float, c_orch_us: float = 0.0) -> str:
     bits = []
     bits.append("peak FLOPs+BW" if (flops_eta == 1.0 and bw_eta == 1.0)
                 else f"flops_eta={flops_eta:.2f}, bw_eta={bw_eta:.2f}")
     bits.append(f"c_seq={c_seq_us:.0f} µs/seq" if c_seq_us > 0
                 else "c_seq=0 (off)")
+    if c_orch_us > 0:
+        bits.append(f"c_orch={c_orch_us / 1000:.1f} ms/step")
     return " | ".join(bits)
 
 
