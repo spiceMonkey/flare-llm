@@ -19,7 +19,7 @@ US_TO_S = 1e-6
 @dataclass
 class E2EResults:
     # TTFT (seconds) — unified across co-lo and disagg branches
-    TTFT: float                 # t_sched + t_prefill + t_handoff + t_step_user
+    TTFT: float                 # t_sched + t_prefill (+ t_handoff; + one decode step when a disaggregated decode worker emits token 1)
     TTFT_chunked: float         # TTFT with chunked prefill
 
     # TPOT (seconds)
@@ -88,13 +88,10 @@ class E2ECalculator:
             t_prefill = 0.0
             t_prefill_chunked = 0.0
 
-        # First decode step latency
-        t_first_token = dec.t_step_user
-
         # KV cache volume (cluster-aggregate, prefill.md §6.2). Latent-attention
         # models store one shared latent per token per layer, not per-head K/V.
         S = self.tuner.S_input
-        b = self.model.bytes_per_param
+        b = self.model.kv_bytes()
         if self.model.mla is not None:
             M_KV_total = self.model.L * S * self.model.mla.kv_bytes_per_token_per_layer(b)
         else:
@@ -103,9 +100,29 @@ class E2ECalculator:
         # KV handoff: branch on DisaggSpec.disaggregated (prefill.md §6.3 / §6.4)
         t_handoff, t_repack = self._compute_handoff(M_KV_total, t_prefill)
 
-        # TTFT assembly (unified, prefill.md §6.5 Phase 1+2; e2e.md §2)
-        TTFT = t_sched + t_prefill + t_handoff + t_first_token
-        TTFT_chunked = t_sched + t_prefill_chunked + t_handoff + t_first_token
+        # TTFT assembly (prefill.md §6.5; e2e.md §2). t_prefill ends with the
+        # LM head on the last prompt position, so the prefill pass itself
+        # yields token 1. What follows depends on who streams it:
+        #   - co-located: the same engine emits it; the repack into the
+        #     decode layout (t_handoff, usually zero) is the only extra.
+        #   - disaggregated, first_token="decode": the decode worker waits
+        #     for the KV cache, re-runs the last prompt position (one decode
+        #     step) and emits the token.
+        #   - disaggregated, first_token="prefill": the prefill worker emits
+        #     it at once; the transfer delays the second token instead and
+        #     is reported in t_handoff only.
+        if not dg.disaggregated:
+            t_after_prefill = t_handoff
+        elif dg.first_token == "prefill":
+            t_after_prefill = 0.0
+        elif dg.first_token == "decode":
+            t_after_prefill = t_handoff + dec.t_step_user
+        else:
+            raise ValueError(
+                f"DisaggSpec.first_token must be 'decode' or 'prefill', got {dg.first_token!r}"
+            )
+        TTFT = t_sched + t_prefill + t_after_prefill
+        TTFT_chunked = t_sched + t_prefill_chunked + t_after_prefill
 
         # TPOT (e2e.md §3). With speculative decoding enabled the decode model
         # reports the per-accepted-token time separately; use it, and scale

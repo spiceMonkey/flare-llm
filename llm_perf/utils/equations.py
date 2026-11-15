@@ -122,12 +122,12 @@ class LlmPerfEquations:
             "expr": " t_prefill_local + max(0, t_prefill_comm - rho * t_prefill_local) + t_pipeline_warmup ",
         },
         "TTFT_single": {
-            "description": "Time to first token (co-located single-request).",
-            "latex": r"TTFT = t_{\text{sched}} + t_{\text{prefill}} + t_{\text{step,user}}",
-            "expr": " t_sched + t_prefill + t_step_user ",
+            "description": "Time to first token (co-located single-request): token 1 is sampled from the prefill pass.",
+            "latex": r"TTFT = t_{\text{sched}} + t_{\text{prefill}} + t_{\text{handoff}}",
+            "expr": " t_sched + t_prefill + t_handoff ",
         },
         "TTFT_disagg": {
-            "description": "TTFT for disaggregated prefill architecture.",
+            "description": "TTFT for disaggregated prefill when the decode worker emits token 1 (vLLM / Dynamo style); when the prefill worker emits it, TTFT = t_sched + t_prefill.",
             "latex": r"TTFT_{\text{disagg}} = t_{\text{sched}} + t_{\text{prefill}} + t_{\text{KV,transfer}} + t_{\text{step,user}}",
             "expr": " t_sched + t_prefill + t_KV_transfer + t_step_user ",
         },

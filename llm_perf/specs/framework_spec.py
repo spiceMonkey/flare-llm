@@ -183,6 +183,14 @@ class FrameworkSpec:
     # fabrics. See `core/primitives/dispatch._align_to_dims`.
     torus_align_policy: str = "prefix"
 
+    # Sequence-parallel (ring attention) variant used by decode. Inert when
+    # SP = 1. "pass_q" (default) sends the new token's query round the ring
+    # and merges the partial attention outputs; "pass_kv" all-gathers the
+    # whole KV cache on every layer. The context-parallelism paper
+    # (arXiv:2411.01783) uses pass-Q for decode and pass-KV for full
+    # prefill; prefill here is always pass-KV.
+    sp_decode_mode: str = "pass_q"
+
     # ── Per-layer collective call counts (decode.md §5.5) ──────────────
     # How many NCCL API calls fire per transformer layer per microbatch.
     # Defaults match the canonical TP-attention transformer:

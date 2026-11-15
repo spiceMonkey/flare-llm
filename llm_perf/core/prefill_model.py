@@ -23,12 +23,13 @@ from .primitives import (
     assign_tier_per_axis,
     axis_stride,
     tier_at,
-    D_attn,
-    D_exp,
+    D_batch,
     D_kv,
     D_emb,
     G_TP,
     G_EP,
+    group_batch,
+    moe_expert_flops_per_token,
 )
 
 
@@ -222,7 +223,8 @@ def compute_prefill_comm(
     L = model.L
     S = tuner.S_input
     tokens = S if tokens_per_step is None else max(0, int(tokens_per_step))
-    b = model.bytes_per_param
+    b = model.act_bytes()       # collective payloads are activations
+    b_kv = model.kv_bytes()     # the pass-KV gather moves cache entries
     PP = partition.PP
     SP = partition.SP
 
@@ -324,7 +326,7 @@ def compute_prefill_comm(
     # (collective_cost.py §6: M = G·shard). Uses D_kv for the head/seq divisor
     # (matches prefill.md §3.2 / decode.md §5.4).
     if SP > 1:
-        msg_SP = tokens * (2 * H_kv / d_kv) * b
+        msg_SP = tokens * (2 * H_kv / d_kv) * b_kv
         t_SP = _cost("SP", "all_gather", msg_SP, SP)
     else:
         t_SP = 0.0
@@ -480,12 +482,13 @@ def compute_prefill_latency(
     # For chunked prefill it fires once after the last chunk (same one-shot).
     BW_top = tiers[0].bandwidth_GBps * tiers[0].eta_beta * GB_TO_BYTES
     V = model.vocab_size
-    b = model.bytes_per_param
-    B_pf_eff = max(1, B_pf)
+    # LM head rows per device group (the batch divided across EP groups
+    # under the orthogonal layout; == B_prefill otherwise).
+    B_pf_eff = max(1, group_batch(B_pf, partition, fw))
 
     def _t_LM(B_eff: int) -> float:
         F_lm = 2.0 * B_eff * H * V / max(1, d_emb_pf)
-        T_lm = (H * V * b) / max(1, d_emb_pf) + B_eff * V * b
+        T_lm = (H * V * model.bytes_per_param) / max(1, d_emb_pf) + B_eff * V * model.act_bytes()
         t_c = F_lm / R_gpu if R_gpu > 0 else 0.0
         t_m = T_lm / BW_top if BW_top > 0 else 0.0
         return max(t_c, t_m)
@@ -529,22 +532,37 @@ def compute_prefill_latency(
         F_attn_proj_pp = attn_proj_flops_per_token(model, partition, fw) * S
         F_ffn_pp = ffn_flops_per_token(model, partition, fw) * S
         F_attn_sv_pp = flops.F_prefill_device - F_attn_proj_pp - F_ffn_pp
+        #
+        # Orthogonal TP×EP additionally divides the requests across the EP
+        # device groups (`D_batch`): a group prefills its own B_pf/EP
+        # requests' attention, dense FFN and router, while the expert FFN
+        # sees every request's tokens routed to its shard.
+        Bg_pf = group_batch(B_pf, partition, fw)
         if fw.attention_mode == "dp" and partition.TP > 1:
-            B_attn = B_pf / partition.TP
+            B_attn = Bg_pf / partition.TP
         else:
-            B_attn = B_pf
-        F_batched_total = (
-            B_attn * F_attn_proj_pp
-            + B_pf * F_attn_sv_pp
-            + B_pf * F_ffn_pp
-        )
+            B_attn = Bg_pf
+        if D_batch(partition, fw) == 1:
+            F_batched_total = (
+                B_attn * F_attn_proj_pp
+                + B_pf * F_attn_sv_pp
+                + B_pf * F_ffn_pp
+            )
+        else:
+            F_moe_expert_pp = moe_expert_flops_per_token(model, partition, fw) * S
+            F_batched_total = (
+                B_attn * F_attn_proj_pp
+                + Bg_pf * F_attn_sv_pp
+                + Bg_pf * (F_ffn_pp - F_moe_expert_pp)
+                + B_pf * F_moe_expert_pp
+            )
         t_batched_compute = F_batched_total / R_gpu
         # η_TC at the batched payload (already computed above using B_pf · S).
         t_batched_compute_eff = t_batched_compute / eta_TC if eta_TC > 0 else float("inf")
         # Traffic: weights loaded once + B_pf * KV writes per request
         # (multi-tier sum; placement re-resolved at this B).
         t_batched_mem = _t_mem(
-            traffic.T_theta_device, traffic.T_kv_write_per_request, B=B_pf,
+            traffic.T_theta_device, traffic.T_kv_write_per_request, B=Bg_pf,
         )
         t_batched_local_gpu = max(t_batched_compute_eff, t_batched_mem)
         t_batched_local = _compose_SW(t_batched_local_gpu)
@@ -552,7 +570,7 @@ def compute_prefill_latency(
         # collective messages carry per-step activations whose payload grows
         # with tokens per step. α is unchanged; β (payload/BW) grows with B_pf.
         comm_batched = compute_prefill_comm(
-            model, system, partition, tuner, fw, tokens_per_step=B_pf * S,
+            model, system, partition, tuner, fw, tokens_per_step=Bg_pf * S,
         )
         # Same traversal as the single-request case, at the batched stage time.
         t_batched_stage = (

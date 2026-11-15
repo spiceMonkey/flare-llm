@@ -111,6 +111,7 @@ Public surface (preserved from the pre-refactor four-file split):
 | `t_step_seq` | `float` | `0.0` |
 | `pp_traversal_factor` | `float` | `1.0` |
 | `microbatch` | `float` | `1.0` |
+| `group_batch` | `float` | `1.0` |
 
 ### `effective_peak_flops_TF(system: SystemSpec, bytes_per_param: float) -> float`
 

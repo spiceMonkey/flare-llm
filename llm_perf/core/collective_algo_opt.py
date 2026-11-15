@@ -37,7 +37,7 @@ from ..specs.model_spec import LlmModelSpec
 from ..specs.partition_spec import PartitionSpec
 from ..specs.system_spec import SystemSpec, TierSpec
 from ..specs.tuner_spec import TuningSpec
-from .primitives import G_EP, G_TP, axis_stride, decode_microbatch, enumerate_options
+from .primitives import G_EP, G_TP, axis_stride, decode_microbatch, enumerate_options, group_batch
 
 
 def optimize_collective_algorithms(
@@ -65,7 +65,7 @@ def optimize_collective_algorithms(
     """
     k_active = model.moe.k_active if model.moe is not None else 1
     H = model.H
-    b = model.bytes_per_param
+    b = model.act_bytes()   # collective payloads are activations
     inc_enabled = framework.inc_enabled
     align_policy = framework.torus_align_policy.lower()
 
@@ -73,7 +73,7 @@ def optimize_collective_algorithms(
 
     # ─── Decode ─────────────────────────────────────────────────────────
     # Decode collectives carry one pipeline microbatch (== B_decode at PP = 1).
-    mb_decode = max(1.0, decode_microbatch(tuner.B_decode, partition.PP))
+    mb_decode = max(1.0, group_batch(decode_microbatch(tuner.B_decode, partition.PP), partition, framework))
     # Decode TP AR: M = mb · H · b, G = TP.
     if framework.tp_algorithm_decode == "auto":
         new_fields["tp_algorithm_decode"] = _resolve(
@@ -101,7 +101,9 @@ def optimize_collective_algorithms(
     # Prefill TP AR: M = tokens · H · b, where tokens = B_prefill · S_input.
     # When S_input = 0 (decode-only run), prefill cost paths are inert; pick
     # "ring" as a stable default.
-    tokens_prefill = tuner.B_prefill * tuner.S_input
+    # Batched prefill divides its requests across the EP device groups under
+    # the orthogonal layout, like decode (see `D_batch`).
+    tokens_prefill = group_batch(tuner.B_prefill, partition, framework) * tuner.S_input
     if framework.tp_algorithm_prefill == "auto":
         new_fields["tp_algorithm_prefill"] = _resolve(
             tier_chain=system.get_tier_chain("TP"),

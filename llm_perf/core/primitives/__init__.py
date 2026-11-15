@@ -72,6 +72,7 @@ from .kv_quantities import kv_bytes_per_seq
 from .linear_flops import (
     attn_proj_flops_per_token,
     ffn_flops_per_token,
+    moe_expert_flops_per_token,
     linear_flops_per_token,
 )
 from .mla_flops import (
@@ -94,6 +95,8 @@ from .sharding_factors import (
     G_EP,
     N_replica,
     decode_microbatch,
+    D_batch,
+    group_batch,
 )
 
 __all__ = [
@@ -151,6 +154,7 @@ __all__ = [
     "kv_bytes_per_seq",
     "attn_proj_flops_per_token",
     "ffn_flops_per_token",
+    "moe_expert_flops_per_token",
     "linear_flops_per_token",
     "mla_proj_flops_per_layer_per_device",
     "mla_score_value_flops_per_layer_per_device",
@@ -171,4 +175,6 @@ __all__ = [
     "G_EP",
     "N_replica",
     "decode_microbatch",
+    "D_batch",
+    "group_batch",
 ]

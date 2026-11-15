@@ -25,12 +25,14 @@ from ..specs.system_spec import SystemSpec
 from ..specs.partition_spec import PartitionSpec
 from ..specs.tuner_spec import TuningSpec
 from ..utils import GB_TO_BYTES, TB_TO_FLOPS
-from .memory_placement import resolve_placement, t_mem_from_placement
+from .memory_placement import PlacementResult, resolve_placement, t_mem_from_placement
 from .primitives import (
     attn_proj_flops_per_token,
     ffn_flops_per_token,
+    moe_expert_flops_per_token,
     dense_weight_bytes,
     moe_weight_bytes,
+    embedding_bytes,
     moe_weight_traffic_bytes,
     kv_bytes_per_seq,
     linear_flops_per_token,
@@ -46,6 +48,8 @@ from .primitives import (
     G_EP,
     N_replica,
     decode_microbatch,
+    D_batch,
+    group_batch,
 )
 
 
@@ -255,6 +259,9 @@ class LatencyResults:
     # t_step_base = pp_traversal_factor · t_stage_with_kernel(microbatch) + t_LM.
     pp_traversal_factor: float = 1.0
     microbatch: float = 1.0
+    # Sequences one device group handles per stage pass: microbatch / D_batch
+    # (orthogonal TP×EP divides the batch across the EP groups).
+    group_batch: float = 1.0
 
 
 # ────────────────────────────────────────────────────────────
@@ -309,15 +316,31 @@ def compute_flops(
     # the per-token projection is full-cost; multiplying by B then over-
     # counts by G_TP). We apply the B/G_TP divisor to the *projection*
     # contribution only; the score/value piece is left at × B.
+    #
+    # Orthogonal TP×EP additionally divides the batch across the EP device
+    # groups (`D_batch`): each group runs attention, dense FFN and the
+    # router for its own B/EP sequences, while the expert FFN sees tokens
+    # from the whole batch routed to its shard.
+    Bg = group_batch(B, partition, framework)
     if framework.attention_mode == "dp" and partition.TP > 1:
-        B_attn_proj = B / partition.TP
+        B_attn_proj = Bg / partition.TP
     else:
-        B_attn_proj = B
-    F_step_device = (
-        B_attn_proj * F_attn_proj_per_token
-        + B * F_attn_sv_per_token
-        + B * F_ffn_per_token
-    )
+        B_attn_proj = Bg
+    if D_batch(partition, framework) == 1:
+        F_step_device = (
+            B_attn_proj * F_attn_proj_per_token
+            + B * F_attn_sv_per_token
+            + B * F_ffn_per_token
+        )
+    else:
+        F_moe_expert_per_token = moe_expert_flops_per_token(model, partition, framework)
+        F_home_ffn_per_token = F_ffn_per_token - F_moe_expert_per_token
+        F_step_device = (
+            B_attn_proj * F_attn_proj_per_token
+            + Bg * F_attn_sv_per_token
+            + Bg * F_home_ffn_per_token
+            + B * F_moe_expert_per_token
+        )
 
     return FlopsResults(
         F_token_device=F_token_device,
@@ -362,9 +385,11 @@ def compute_traffic(
     # KV read traffic for one sequence of S context tokens (per-token / per-sequence,
     # per-device — decode.md §2.3 T_{KV,token}).
     T_kv_token = kv_bytes_per_seq(model, partition, framework, S)
-    # Device-aggregate per step: B sequences each read their own KV history
-    # (decode.md §2.3 T_{KV,device}(B) = B · T_{KV,token}).
-    T_kv_device = B * T_kv_token
+    # Device-aggregate per pass: each sequence the device's group serves
+    # reads its own KV history (decode.md §2.3 T_{KV,device} = B_g · T_{KV,token},
+    # with B_g = B / D_batch the group's share of the batch; B_g = B unless
+    # the orthogonal layout spreads the batch over EP groups).
+    T_kv_device = group_batch(B, partition, framework) * T_kv_token
 
     T_token_eff = T_theta + T_kv_token
     # Batched step: weights loaded once, KV read per sequence in the batch.
@@ -398,8 +423,11 @@ def compute_comm(
     SP = partition.SP
     S = tuner.S_decode
     # Collective payloads carry one microbatch (== B at PP = 1).
-    B = max(1.0, decode_microbatch(tuner.B_decode, PP))
-    b = model.bytes_per_param
+    # ... of the sequences this device group serves (orthogonal TP×EP
+    # divides the batch across EP groups; see `D_batch`).
+    B = max(1.0, group_batch(decode_microbatch(tuner.B_decode, PP), partition, framework))
+    b = model.act_bytes()       # collective payloads are activations
+    b_kv = model.kv_bytes()     # except the pass-KV gather, which moves cache entries
 
     fw = framework
 
@@ -508,12 +536,24 @@ def compute_comm(
     else:
         t_TP_AG = 0.0
 
-    # SP: 1-pass ring all-gather over the full KV (per-rank gathered
-    # output convention — collective_cost.py §6 calls this "M = G·shard").
-    # KV head-or-seq divisor uses D_kv from notation.md §1.
+    # SP (ring attention over a sequence-sharded KV cache). Two exact
+    # variants exist (Yang et al., "Context Parallelism for Scalable
+    # Million-Token Inference", arXiv:2411.01783):
+    #   pass-Q  — the new token's query visits every rank, each rank attends
+    #             over its own KV shard, and the partial outputs are merged
+    #             back. The payload is one query's worth of activations, so
+    #             the round trip is costed as an all-reduce of mb·(H/D_kv).
+    #             This is the variant that paper uses for decode.
+    #   pass-KV — every rank gathers the whole KV cache: an all-gather of
+    #             mb·S·(2·H_kv/D_kv) cache bytes per layer. Right for a full
+    #             prefill, far too expensive for a one-token query.
     if SP > 1:
-        msg_SP = B * S * (2 * H_kv / d_kv) * b
-        t_SP = _cost("SP", "all_gather", msg_SP, SP)
+        if fw.sp_decode_mode == "pass_kv":
+            msg_SP = B * S * (2 * H_kv / d_kv) * b_kv
+            t_SP = _cost("SP", "all_gather", msg_SP, SP)
+        else:
+            msg_SP = B * (H / d_kv) * b
+            t_SP = _cost("SP", "all_reduce", msg_SP, SP)
     else:
         t_SP = 0.0
         msg_SP = 0.0
@@ -615,13 +655,32 @@ def compute_latency(
     # Resolves placement (greedy "auto" or operator-pinned) before summing.
     # On a single-tier device with eta_beta=1.0 (PR1 legacy shim), this
     # collapses to T_step_eff / BW_mem — bitwise identical to pre-PR2.
+    #
+    # Where bytes live is decided by what must be *resident* — the full
+    # weight footprint (every expert, plus the embedding) and the KV cache
+    # of all B in-flight sequences — not by what one step happens to read.
+    # The per-step weight traffic is then charged to each tier in
+    # proportion to the weights that tier holds. On a single-tier device
+    # the proportion is exactly 1 and this reduces to T_theta / BW.
     tiers = system.device.get_tiers()
-    placement = resolve_placement(
-        T_theta_device=traffic.T_theta,
+    M_theta_resident = (
+        dense_weight_bytes(model, partition, framework)
+        + moe_weight_bytes(model, partition, framework)
+        + embedding_bytes(model, partition)
+    )
+    residency = resolve_placement(
+        T_theta_device=M_theta_resident,
         T_kv_per_request_device=traffic.T_kv_token,
-        B=max(1, B),
+        B=group_batch(max(1, B), partition, framework),
         tiers=tiers,
         placement=tuner.placement,
+    )
+    placement = PlacementResult(
+        weights_per_tier=[
+            traffic.T_theta * (w_i / M_theta_resident) if M_theta_resident > 0 else 0.0
+            for w_i in residency.weights_per_tier
+        ],
+        kv_per_request_per_tier=list(residency.kv_per_request_per_tier),
     )
     t_compute = flops.F_step_device / R_gpu
 
@@ -629,15 +688,18 @@ def compute_latency(
     # η_TC ramps from ~0 at mb=1 (FP8 below the wgmma M=64 floor) to ~1
     # at mb ≥ 4·tile (compute-bound peak). curve=None ⇒ η_TC=1 (legacy).
     mb = max(1.0, decode_microbatch(B, PP))
-    eta_TC = _eta_TC_at_mb(system.device.tensor_core_efficiency, mb)
+    # Sequences one device group handles per pass (== mb unless the
+    # orthogonal layout divides the batch across EP groups).
+    mb_dev = group_batch(mb, partition, framework)
+    eta_TC = _eta_TC_at_mb(system.device.tensor_core_efficiency, mb_dev)
     t_compute_eff = t_compute / eta_TC if eta_TC > 0 else float("inf")
 
     # B-dependent HBM sustained bandwidth derate (decode.md §6.2; Phase F:
     # curve lives on DeviceSpec. Opt-in via system.device.bw_efficiency,
     # otherwise η_β(B) = 1 and t_mem is unchanged).
-    eta_beta_B = _eta_beta_at_B(system.device.bw_efficiency, mb)
+    eta_beta_B = _eta_beta_at_B(system.device.bw_efficiency, mb_dev)
     t_mem = t_mem_from_placement(
-        placement, B=mb, tiers=tiers,
+        placement, B=mb_dev, tiers=tiers,
         eta_beta_curve_factor=eta_beta_B,
     )
     t_local = max(t_compute_eff, t_mem)
@@ -683,10 +745,10 @@ def compute_latency(
     # tp_ep_layout/attention_mode configurations (notation.md §1).
     V = model.vocab_size
     d_emb = D_emb(partition)
-    b = model.bytes_per_param
-    B_eff = mb
+    B_eff = mb_dev
     F_lm = 2.0 * B_eff * model.H * V / d_emb
-    T_lm = (model.H * V * b) / d_emb + B_eff * V * b
+    # Projection weights at the weight precision; logit rows are activations.
+    T_lm = (model.H * V * model.bytes_per_param) / d_emb + B_eff * V * model.act_bytes()
     t_lm_compute = F_lm / R_gpu if R_gpu > 0 else 0.0
     t_lm_mem = T_lm / BW_top if BW_top > 0 else 0.0
     t_LM = max(t_lm_compute, t_lm_mem)
@@ -793,6 +855,7 @@ def compute_latency(
         pp_bubble_factor=pp_bubble_factor,
         pp_traversal_factor=pp_traversal_factor,
         microbatch=mb,
+        group_batch=mb_dev,
         TPS_single=TPS_single,
         TTPS=TTPS,
         B=B,

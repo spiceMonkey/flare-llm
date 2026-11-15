@@ -14,6 +14,19 @@ class DisaggSpec:
     # Mode flag — False = co-located integrated, True = disaggregated prefill/decode
     disaggregated: bool = False
 
+    # Which worker emits the first output token under disaggregation. Inert
+    # when `disaggregated` is False (the one engine samples token 1 straight
+    # from its prefill pass).
+    #   "decode"  — the prefill worker runs with a one-token budget and hands
+    #               over the KV cache; the decode worker re-runs the last
+    #               prompt position and streams token 1. The transfer and one
+    #               decode step both land on TTFT. vLLM's disaggregated
+    #               prefill and NVIDIA Dynamo work this way.
+    #   "prefill" — the prefill worker streams the token it sampled and the
+    #               KV transfer delays the *second* token instead. DistServe
+    #               and Splitwise work this way.
+    first_token: str = "decode"
+
     # Co-located handoff (§6.3) — used when disaggregated=False
     colo_alpha_us: float = 0.0             # α_intra (scale-up startup)
     colo_repack_GBps: float = 0.0          # BW_intra; 0 → no repack modeled

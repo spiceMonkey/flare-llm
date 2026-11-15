@@ -83,6 +83,16 @@ Transformer / LLM architecture spec.
 | `bytes_per_param` | `float` | — |
 | `moe` | `Optional[MoESpec]` | `None` |
 | `mla` | `Optional[MLASpec]` | `None` |
+| `kv_bytes_per_elem` | `Optional[float]` | `None` |
+| `act_bytes_per_elem` | `Optional[float]` | `None` |
+
+#### `kv_bytes(self) -> float`
+
+Bytes per KV-cache element.
+
+#### `act_bytes(self) -> float`
+
+Bytes per activation / logit / collective-payload element.
 
 #### `d_head(self) -> float`
 
@@ -418,6 +428,7 @@ Sourced from `decode.md §7.1, §7.2` (host overhead) and `attention.md §3.5` (
 | `ep_algorithm_prefill` | `str` | `'ring'` |
 | `torus_algorithm` | `str` | `'ring'` |
 | `torus_align_policy` | `str` | `'prefix'` |
+| `sp_decode_mode` | `str` | `'pass_q'` |
 | `n_TP_collectives` | `int` | `2` |
 | `n_EP_collectives` | `int` | `2` |
 | `n_SP_collectives` | `int` | `1` |
@@ -468,6 +479,7 @@ The `disaggregated` flag selects which branch applies; the other branch's fields
 | Field | Type | Default |
 |---|---|---|
 | `disaggregated` | `bool` | `False` |
+| `first_token` | `str` | `'decode'` |
 | `colo_alpha_us` | `float` | `0.0` |
 | `colo_repack_GBps` | `float` | `0.0` |
 | `colo_repack_eta` | `float` | `1.0` |

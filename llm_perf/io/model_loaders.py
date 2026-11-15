@@ -130,7 +130,20 @@ def model_spec_from_json_dict(cfg: Dict[str, Any]) -> LlmModelSpec:
         bytes_per_param=float(cfg["bytes_per_param"]),
         moe=moe,
         mla=mla,
+        kv_bytes_per_elem=_optional_positive_float(cfg, "kv_bytes_per_elem"),
+        act_bytes_per_elem=_optional_positive_float(cfg, "act_bytes_per_elem"),
     )
+
+
+def _optional_positive_float(cfg: Dict[str, Any], key: str) -> Optional[float]:
+    """Read an optional positive float; absent or null means "not set"."""
+    v = cfg.get(key)
+    if v is None:
+        return None
+    v = float(v)
+    if v <= 0:
+        raise ValueError(f"model configuration: '{key}' must be positive, got {v!r}")
+    return v
 
 
 def load_model_spec(path: str | Path) -> LlmModelSpec:

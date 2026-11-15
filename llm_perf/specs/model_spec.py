@@ -98,13 +98,31 @@ class LlmModelSpec:
 
     # Context & numerical precision
     max_seq_len: int         # maximum sequence length (S_max)
-    bytes_per_param: float   # bytes per parameter (e.g. 2 for bf16)
+    bytes_per_param: float   # bytes per *weight* (e.g. 2 for bf16, 1 for FP8, 0.5 for FP4)
 
     # Optional MoE configuration
     moe: Optional[MoESpec] = None
 
     # Optional MLA configuration (DSv3-style multi-head latent attention)
     mla: Optional[MLASpec] = None
+
+    # Element widths of the tensors that are not weights. Weight
+    # quantization does not by itself narrow them: a serving stack stores
+    # the KV cache in its own dtype (e.g. vLLM's `--kv-cache-dtype`, whose
+    # default "auto" is the model dtype, with FP8 as an opt-in), and
+    # activations travel between layers and across collectives in the
+    # compute dtype. `None` means "same width as the weights", which is the
+    # historical single-precision behavior.
+    kv_bytes_per_elem: Optional[float] = None    # KV-cache entries (K, V, or the MLA latent)
+    act_bytes_per_elem: Optional[float] = None   # activations, logits, collective payloads
+
+    def kv_bytes(self) -> float:
+        """Bytes per KV-cache element."""
+        return self.bytes_per_param if self.kv_bytes_per_elem is None else self.kv_bytes_per_elem
+
+    def act_bytes(self) -> float:
+        """Bytes per activation / logit / collective-payload element."""
+        return self.bytes_per_param if self.act_bytes_per_elem is None else self.act_bytes_per_elem
 
     def d_head(self) -> float:
         """Head dimension d_head = H / n_q."""

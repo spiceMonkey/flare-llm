@@ -31,6 +31,7 @@ TORUS_ALGORITHM_VALUES = ("ring", "swing", "auto")
 # the two policies model different placement assumptions, not two
 # implementations of one thing, so there is nothing to cost-minimize over.
 TORUS_ALIGN_POLICY_VALUES = ("prefix", "greedy")
+SP_DECODE_MODE_VALUES = ("pass_q", "pass_kv")
 
 # Whitelists for attention dispatch + TP/EP physical overlay.
 ATTENTION_MODE_VALUES = ("tp", "dp")
@@ -112,6 +113,7 @@ def framework_spec_from_json_dict(cfg: Dict[str, Any]) -> FrameworkSpec:
     torus_align = _algo(
         "torus_align_policy", _defaults.torus_align_policy, TORUS_ALIGN_POLICY_VALUES
     )
+    sp_decode_mode = _algo("sp_decode_mode", _defaults.sp_decode_mode, SP_DECODE_MODE_VALUES)
 
     attention_mode = _algo("attention_mode", _defaults.attention_mode, ATTENTION_MODE_VALUES)
     if "layout" in cfg and "tp_ep_layout" not in cfg:
@@ -177,6 +179,7 @@ def framework_spec_from_json_dict(cfg: Dict[str, Any]) -> FrameworkSpec:
         ep_algorithm_prefill=ep_prefill,
         torus_algorithm=torus_alg,
         torus_align_policy=torus_align,
+        sp_decode_mode=sp_decode_mode,
         n_TP_collectives=int(cfg.get("n_TP_collectives", _defaults.n_TP_collectives)),
         n_EP_collectives=int(cfg.get("n_EP_collectives", _defaults.n_EP_collectives)),
         n_SP_collectives=int(cfg.get("n_SP_collectives", _defaults.n_SP_collectives)),

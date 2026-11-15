@@ -179,3 +179,37 @@ def decode_microbatch(B: int, PP: int) -> float:
     if B >= PP:
         return B / PP
     return float(min(B, 1))
+
+
+def D_batch(partition: PartitionSpec, framework: FrameworkSpec) -> int:
+    """Number of device groups the replica's batch is divided across.
+
+    Under the orthogonal layout a replica is `EP` groups of `TP` devices.
+    Each group carries its own copy of the attention and dense-FFN weights
+    and its own KV cache, so the groups serve *different* sequences: the
+    batch is divided `EP` ways for everything except the expert FFN, whose
+    tokens are routed across all `TP · EP` expert shards by the all-to-all.
+    Without this division every group would recompute the whole batch's
+    attention and hold the whole batch's KV cache — `EP` copies of the same
+    work.
+
+    Under the co-located layout TP and EP are the same devices, so there is
+    one group and the divisor is 1 (DP-attention's own `B / G_TP` batch
+    shard is applied separately, where it always was).
+    """
+    if framework.tp_ep_layout == "co_located":
+        return 1
+    return max(1, partition.EP)
+
+
+def group_batch(B: float, partition: PartitionSpec, framework: FrameworkSpec) -> float:
+    """Sequences one device group handles: `B / D_batch`, floored at one.
+
+    Same shape as `decode_microbatch`: with fewer sequences than groups,
+    each busy group holds one sequence and the rest are idle, so the
+    latency of a step is that of a group batch of 1, not of a fraction.
+    """
+    d = D_batch(partition, framework)
+    if B >= d:
+        return B / d
+    return float(min(B, 1))

@@ -114,6 +114,29 @@ def ffn_flops_per_token(
     return (L_dense / PP) * F_layer_dense_ffn + (L_moe / PP) * F_layer_moe_ffn
 
 
+def moe_expert_flops_per_token(
+    model: LlmModelSpec,
+    partition: PartitionSpec,
+    framework: FrameworkSpec,
+) -> float:
+    """Per-device per-token expert-FFN FLOPs alone, all MoE layers.
+
+    The slice of `ffn_flops_per_token` that scales with the *whole*
+    replica batch: tokens from every device group are routed across all
+    expert shards, so each shard sees `k_active / D_exp` of every token.
+    The remainder of `ffn_flops_per_token` (dense FFN and the router gate)
+    is computed on a token's home group and scales with the group batch.
+    Returns 0.0 for dense-only models.
+    """
+    if model.moe is None:
+        return 0.0
+    L = model.L
+    L_moe = model.moe.n_moe_layers if model.moe.n_moe_layers else L
+    N_exp = max(1, model.moe.n_experts)
+    d_exp_moe = D_exp(partition, framework, layer_kind="moe", n_exp_cap=N_exp)
+    return (L_moe / partition.PP) * (6 * model.H * model.moe.k_active * model.moe.I_moe) / d_exp_moe
+
+
 def linear_flops_per_token(
     model: LlmModelSpec,
     partition: PartitionSpec,

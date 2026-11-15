@@ -48,7 +48,7 @@ def kv_bytes_per_seq(
       head-structured). No D_kv divisor — only SP still applies.
     """
     L = model.L
-    b = model.bytes_per_param
+    b = model.kv_bytes()
     PP = partition.PP
     SP = partition.SP
 

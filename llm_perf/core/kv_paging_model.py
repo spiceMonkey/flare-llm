@@ -8,7 +8,7 @@ from ..specs.partition_spec import PartitionSpec
 from ..specs.tuner_spec import TuningSpec
 from ..utils import GB_TO_BYTES
 from .memory_model import MemoryResults
-from .primitives import D_kv
+from .primitives import D_batch, D_kv
 
 
 @dataclass
@@ -41,7 +41,7 @@ def compute_kv_paging(
     """KV paging analysis. Doc: documentation/modeling/kv.md §2-6"""
 
     L = model.L
-    b = model.bytes_per_param
+    b = model.kv_bytes()
     S = tuner.S_decode
     PP = partition.PP
     SP = partition.SP
@@ -80,7 +80,13 @@ def compute_kv_paging(
 
     # Max concurrent sequences
     M_per_seq = N_blocks_per_seq * M_block * phi_avg
-    max_sequences = int(M_HBM_KV_avail / M_per_seq) if M_per_seq > 0 else 0
+    # Sequences one device can hold, times the device groups the batch is
+    # divided across (EP under the orthogonal layout, else 1) — the replica's
+    # concurrent-sequence capacity, in the same units as B_decode.
+    max_sequences = (
+        int(M_HBM_KV_avail / M_per_seq) * D_batch(partition, framework)
+        if M_per_seq > 0 else 0
+    )
 
     # Max context length for a single sequence (with paging fragmentation)
     M_per_token_kv = kv_base_per_tok_per_layer * (L / PP) / (d_kv_eff * SP)

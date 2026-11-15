@@ -14,6 +14,7 @@ from .primitives import (
     moe_weight_bytes,
     embedding_bytes,
     kv_bytes_per_seq,
+    group_batch,
 )
 
 
@@ -22,7 +23,7 @@ class MemoryResults:
     M_theta_device: float
     M_act_device: float
     M_kv_token: float       # per-device, per-sequence KV memory (one resident sequence's KV history, all stage layers); matches decode.md §1.3 M_{KV,token}
-    M_kv_device: float      # per-device, per-step KV memory aggregated over B sequences: B * M_kv_token; matches decode.md §1.3 M_{KV,device}(B)
+    M_kv_device: float      # per-device KV memory aggregated over the sequences its group holds: (B / D_batch) * M_kv_token; matches decode.md §1.3 M_{KV,device}
     M_total_device: float
     fits_in_HBM: bool                       # legacy name; True iff every tier fits
     M_resident_per_tier: List[float] = field(default_factory=list)  # bytes per tier
@@ -45,9 +46,11 @@ def compute_memory(
     """
 
     H = model.H
-    b = model.bytes_per_param
+    b = model.act_bytes()   # only the activation working set uses `b` below
     S = tuner.S_decode
-    B = tuner.B_decode
+    # Sequences resident on one device: the replica's batch divided across
+    # the EP device groups under the orthogonal layout (== B_decode otherwise).
+    B = group_batch(tuner.B_decode, partition, framework)
 
     # Parameter memory M_theta_device (dense weights + MoE weights + embedding)
     M_theta_device = (
