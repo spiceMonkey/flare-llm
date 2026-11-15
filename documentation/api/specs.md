@@ -485,6 +485,7 @@ The `disaggregated` flag selects which branch applies; the other branch's fields
 | `colo_repack_eta` | `float` | `1.0` |
 | `inter_alpha_us` | `float` | `0.0` |
 | `inter_bandwidth_GBps` | `float` | `0.0` |
+| `transfer_streams` | `int` | `1` |
 | `N_WR` | `int` | `0` |
 | `tau_WR_us` | `float` | `0.0` |
 | `overlap_rho_KV` | `float` | `0.0` |

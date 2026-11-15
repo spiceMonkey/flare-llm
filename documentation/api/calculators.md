@@ -72,6 +72,7 @@ Five-spec composition (`model × system × partition × tuner × framework`), ma
 | `throughput_per_gpu` | `float` | — |
 | `interactivity` | `float` | — |
 | `TTPS` | `float` | — |
+| `t_second_token` | `float` | — |
 | `t_handoff` | `float` | — |
 | `t_repack` | `float` | — |
 | `M_KV_total` | `float` | — |

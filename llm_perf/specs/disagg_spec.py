@@ -36,7 +36,16 @@ class DisaggSpec:
     # BW_inter is the *effective, delivered* per-GPU bandwidth (calibration knob),
     # not the NIC catalog line rate.
     inter_alpha_us: float = 0.0            # α_inter (single round-trip)
-    inter_bandwidth_GBps: float = 0.0      # BW_inter (effective, delivered)
+    inter_bandwidth_GBps: float = 0.0      # BW_inter (effective, delivered), per stream
+    # Number of device pairs that transfer in parallel. A replica's KV cache
+    # is spread over its devices, and each device with its own NIC can ship
+    # its shard at the same time, so the cache moves at
+    # transfer_streams x BW_inter. Set it to min(prefill replica devices,
+    # decode replica devices) when every device has a NIC; 1 (default) models
+    # a single link carrying the whole cache. Measured multi-NIC transfer
+    # rates scale this way (Mooncake reports 87 GB/s over 4 x 200 Gb/s and
+    # 190 GB/s over 8 x 400 Gb/s).
+    transfer_streams: int = 1
     N_WR: int = 0                          # RDMA WR count per handoff
     tau_WR_us: float = 0.0                 # per-WR posting latency
     overlap_rho_KV: float = 0.0            # ρ_KV ∈ [0, 1]

@@ -31,6 +31,11 @@ class E2EResults:
     interactivity: float        # 1 / TPOT (tokens/s perceived by user)
     TTPS: float                 # total cluster throughput
 
+    # Gap between the first and the second output token (seconds). One decode
+    # step, plus the KV handoff when a disaggregated prefill worker emits
+    # token 1 and the transfer therefore delays token 2 instead of TTFT.
+    t_second_token: float
+
     # KV handoff diagnostics
     t_handoff: float            # seconds (co-lo or disagg, depending on DisaggSpec.disaggregated)
     t_repack: float             # seconds (scale-up repack component; 0 if no repack)
@@ -124,6 +129,11 @@ class E2ECalculator:
         TTFT = t_sched + t_prefill + t_after_prefill
         TTFT_chunked = t_sched + t_prefill_chunked + t_after_prefill
 
+        # Token 1 -> token 2. Whatever part of the handoff was not on the
+        # TTFT path lands here: all of it when the prefill worker emits
+        # token 1, none otherwise.
+        t_second_token = dec.t_step_user + (t_handoff - t_after_prefill if dg.disaggregated and dg.first_token == "prefill" else 0.0)
+
         # TPOT (e2e.md §3). With speculative decoding enabled the decode model
         # reports the per-accepted-token time separately; use it, and scale
         # throughput by the same ratio (N_tok_per_step tokens per verify step).
@@ -140,6 +150,7 @@ class E2ECalculator:
         return E2EResults(
             TTFT=TTFT,
             TTFT_chunked=TTFT_chunked,
+            t_second_token=t_second_token,
             TPOT=TPOT,
             throughput_per_gpu=throughput_per_gpu,
             interactivity=interactivity,
@@ -159,7 +170,8 @@ class E2ECalculator:
             # §6.4 disaggregated transfer
             if dg.inter_bandwidth_GBps <= 0:
                 return 0.0, 0.0
-            BW_inter = dg.inter_bandwidth_GBps * GB_TO_BYTES
+            # Device pairs transferring in parallel each carry their own shard.
+            BW_inter = dg.inter_bandwidth_GBps * GB_TO_BYTES * max(1, int(dg.transfer_streams))
             alpha_eff = (dg.inter_alpha_us + dg.N_WR * dg.tau_WR_us) * US_TO_S
             t_repack = (
                 M_KV_total / (dg.repack_GBps * GB_TO_BYTES) * dg.repack_eta
