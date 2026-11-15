@@ -84,6 +84,7 @@ from .partition_layout import (
     DEFAULT_ORDER as NESTED_LAYOUT_ORDER,
     assign_tier_per_axis,
     axis_stride,
+    replicas_in_system,
     tier_at,
 )
 from .sharding_factors import (
@@ -165,6 +166,7 @@ __all__ = [
     "NESTED_LAYOUT_ORDER",
     "assign_tier_per_axis",
     "axis_stride",
+    "replicas_in_system",
     "tier_at",
     # sharding factors (notation.md §1)
     "D_attn",

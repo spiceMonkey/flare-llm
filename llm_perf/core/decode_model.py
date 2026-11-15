@@ -25,7 +25,7 @@ from ..specs.system_spec import SystemSpec
 from ..specs.partition_spec import PartitionSpec
 from ..specs.tuner_spec import TuningSpec
 from ..utils import GB_TO_BYTES, TB_TO_FLOPS
-from .memory_placement import PlacementResult, resolve_placement, t_mem_from_placement
+from .memory_placement import PlacementResult, resolve_placement, t_mem_from_placement, weights_seconds_per_byte
 from .primitives import (
     attn_proj_flops_per_token,
     ffn_flops_per_token,
@@ -41,6 +41,7 @@ from .primitives import (
     p2p_hop,
     assign_tier_per_axis,
     axis_stride,
+    replicas_in_system,
     tier_at,
     D_kv,
     D_emb,
@@ -748,9 +749,19 @@ def compute_latency(
     B_eff = mb_dev
     F_lm = 2.0 * B_eff * model.H * V / d_emb
     # Projection weights at the weight precision; logit rows are activations.
-    T_lm = (model.H * V * model.bytes_per_param) / d_emb + B_eff * V * model.act_bytes()
+    T_lm_weights = (model.H * V * model.bytes_per_param) / d_emb
+    T_lm = T_lm_weights + B_eff * V * model.act_bytes()
     t_lm_compute = F_lm / R_gpu if R_gpu > 0 else 0.0
-    t_lm_mem = T_lm / BW_top if BW_top > 0 else 0.0
+    if len(tiers) == 1:
+        t_lm_mem = T_lm / BW_top if BW_top > 0 else 0.0
+    else:
+        # Multi-tier device: the projection matrix is read from wherever the
+        # weights live (mostly the slow tier when they overflow the fast
+        # one); the logit rows are written to the fast tier.
+        t_lm_mem = (
+            T_lm_weights * weights_seconds_per_byte(residency, tiers)
+            + (B_eff * V * model.act_bytes()) / BW_top
+        )
     t_LM = max(t_lm_compute, t_lm_mem)
 
     # Per-sequence serving runtime overhead (decode.md §7.3): host-side work
@@ -782,7 +793,8 @@ def compute_latency(
     # the full product PP·TP·EP·SP; co-located uses PP·max(TP,EP)·SP since TP
     # and EP share the same physical GPU set.
     replica_size = N_replica(partition, framework)
-    DP = system.num_devices // replica_size
+    # Replicas tile fabric islands, not the flat device count (multi-rack).
+    DP = replicas_in_system(system, replica_size)
     TTPS = DP * TPS_single
 
     # B* crossover: batch size where the system transitions from
@@ -792,7 +804,18 @@ def compute_latency(
     # B* uses the per-token KV term (decode.md §4 B^star formula uses T_{KV,token}).
     # The roofline crossover is in microbatch terms; B = PP · mb when the
     # pipeline is full, so the replica-level crossover is PP times that.
-    denom = flops.F_token_device * BW_top - traffic.T_kv_token * R_gpu
+    # Per in-flight sequence, a device's compute and KV read grow at the
+    # group's share of the batch (1/D_batch) for attention, dense FFN and
+    # KV, and at the full rate for the expert FFN.
+    d_batch = D_batch(partition, framework)
+    if d_batch == 1:
+        F_slope = flops.F_token_device
+        T_kv_slope = traffic.T_kv_token
+    else:
+        F_moe_expert = moe_expert_flops_per_token(model, partition, framework)
+        F_slope = (flops.F_token_device - F_moe_expert) / d_batch + F_moe_expert
+        T_kv_slope = traffic.T_kv_token / d_batch
+    denom = F_slope * BW_top - T_kv_slope * R_gpu
     B_star = (pp_traversal_factor * traffic.T_theta * R_gpu / denom) if denom > 0 else float("inf")
 
     # Speculative-decoding extension (decode.md §8). Compose verify-step

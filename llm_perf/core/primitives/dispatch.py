@@ -22,6 +22,7 @@ bound with a `UserWarning` (explicit hybrid compositions are a follow-up).
 from __future__ import annotations
 
 import warnings
+import math
 from typing import List, Optional, Tuple
 
 from ...specs.system_spec import TierSpec, span_tiers
@@ -488,7 +489,12 @@ def _hierarchical_crossbar_cost(
     if G_inner is None:
         G_inner = max(1, inner_tier.ports)
     G_inner = max(1, min(G_inner, G))
-    L = max(1, G // G_inner)  # outer-tier rank count
+    # Outer-tier rank count: the islands the group occupies. A group that is
+    # not a whole multiple of an island still spills into one more island
+    # (80 ranks on 72-port islands is two islands, not one), and its ranks
+    # are then spread evenly over those islands.
+    L = max(1, math.ceil(G / G_inner))
+    G_inner = max(1, math.ceil(G / L))
 
     alpha_inner_s = (
         inner_tier.alpha_us * inner_tier.eta_alpha * US_TO_SECONDS

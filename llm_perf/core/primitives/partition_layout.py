@@ -144,6 +144,34 @@ def assign_tier_per_axis(
     return assignment
 
 
+def replicas_in_system(system: SystemSpec, replica_size: int, role: str = "PP") -> int:
+    """How many whole replicas of `replica_size` devices the system holds.
+
+    On a single-island fabric this is `num_devices // replica_size`. On a
+    tiered fabric a replica is priced as living inside the smallest island
+    that can contain it (that is what puts its collectives on the inner
+    tier), so replicas must tile islands, not the flat device count: eight
+    72-GPU racks hold eight 64-GPU replicas, one per rack, not the nine
+    that 576 // 64 suggests. Devices left over inside each island idle.
+
+    A replica larger than the outermost island reach falls back to the flat
+    count; its collectives are already priced on the outer tiers.
+    """
+    N = system.num_devices
+    if replica_size <= 0:
+        return 0
+    chain = system.get_tier_chain(role)
+    reach = 1
+    for tier in chain:
+        reach *= max(1, tier.ports)
+        if reach >= replica_size:
+            if reach >= N:
+                return N // replica_size
+            n_islands, leftover = divmod(N, reach)
+            return n_islands * (reach // replica_size) + leftover // replica_size
+    return N // replica_size
+
+
 def tier_at(system: SystemSpec, role: str, tier_index: int) -> TierSpec:
     """Return the tier at ``tier_index`` of the role's fabric chain.
 

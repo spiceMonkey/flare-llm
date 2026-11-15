@@ -611,17 +611,24 @@ def compute_prefill_latency(
         total_chunked = 0.0
         t_chunk_k = 0.0
         for k in range(1, n_chunks + 1):
-            # Attention FLOPs for chunk k: C query positions attend to kC
-            # accumulated positions. Sharded by D_kv·SP per prefill.md §1.5 /
-            # §5.1. MLA models use the variant-specific score/value cost at
-            # context length kC, as the unchunked pass does at S.
+            # Attention FLOPs for chunk k. The unchunked pass charges every
+            # query the full S positions (the 4·S²·H convention of prefill.md
+            # §1.2: implementations compute whole tiles and mask), which is
+            # twice the causal work. Chunk k's C queries causally see
+            # (k−1)·C earlier positions plus half the chunk on average, so
+            # the same convention charges them (2k−1)·C positions: the chunks
+            # then sum to exactly the unchunked 4·S²·H, and chunking by
+            # itself neither adds nor removes attention work. Sharded by
+            # D_kv·SP per prefill.md §1.5 / §5.1; MLA models use the
+            # variant-specific score/value cost at that context length.
+            S_attn_k = (2 * k - 1) * C
             if model.mla is not None:
                 F_sv_per_tok = mla_score_value_flops_per_layer_per_device(
-                    model, partition, fw, k * C, fw.mla_mode
+                    model, partition, fw, S_attn_k, fw.mla_mode
                 )
                 F_attn_chunk_k = (L / PP) * F_sv_per_tok * C / SP
             else:
-                F_attn_chunk_k = (L / PP) * (4 * C * k * C * H) / (d_kv_pf * SP)
+                F_attn_chunk_k = (L / PP) * (4 * C * S_attn_k * H) / (d_kv_pf * SP)
             F_chunk_k = F_linear_per_chunk + F_attn_chunk_k
 
             t_chunk_compute_k = F_chunk_k / R_gpu

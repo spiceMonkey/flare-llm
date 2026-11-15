@@ -341,6 +341,12 @@ True iff every tier's resident bytes (T\_θ,i + B · T\_KV,i) fit in C\_i.
 
 Companion to `resolve_placement`. The "auto" greedy placement is permissive on overflow (bytes accumulate on the last tier); use this predicate to detect the unfit state without aborting latency math.
 
+### `weights_seconds_per_byte(placement: PlacementResult, tiers: List[MemoryTierSpec]) -> float`
+
+Seconds to read one byte of weights, averaged over where weights live.
+
+`Σ_i (w_i / W) / BW_eff,i`: a read of weight bytes that are spread over the tiers like the resident weights are. Used for weight reads that are not part of the per-layer traffic (the LM head projection), so that a device whose weights sit mostly on a slow tier does not get them at the fast tier's bandwidth. On a single-tier device this is `1 / BW_eff`.
+
 ### `t_mem_from_placement(placement: PlacementResult, B: int, tiers: List[MemoryTierSpec], eta_beta_curve_factor: float=1.0) -> float`
 
 Multi-tier decode roofline memory time per sram.md §2.1 (full α–β form):

@@ -1,5 +1,5 @@
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import List
 
 from ..specs.framework_spec import FrameworkSpec
@@ -103,12 +103,22 @@ def compute_memory(
     tiers = system.device.get_tiers()
     M_resident_per_tier: List[float] = [0.0] * len(tiers)
     fits = True
+    # Activations live on the fastest tier and are not movable, so that
+    # tier's capacity is reduced by them before weights and KV are placed.
+    # Placing weights and KV first and adding activations afterwards would
+    # report a multi-tier device as not fitting whenever its fast tier is
+    # full, even though the placement could simply have left room.
+    act_GB = M_act_device / GB_TO_BYTES
+    tiers_for_placement = [
+        replace(tiers[0], capacity_GB=max(0.0, tiers[0].capacity_GB - act_GB)),
+        *tiers[1:],
+    ]
     try:
         placement = resolve_placement(
             T_theta_device=M_theta_device,
             T_kv_per_request_device=M_kv_token,
             B=max(1, B),
-            tiers=tiers,
+            tiers=tiers_for_placement,
             placement=tuner.placement,
         )
         for i, (w_i, kv_i) in enumerate(
@@ -118,7 +128,7 @@ def compute_memory(
         # Activations land on tier 0 (fastest); add to its residency before
         # the per-tier capacity check.
         M_resident_per_tier[0] += M_act_device
-        fits = placement_fits(placement, B=max(1, B), tiers=tiers)
+        fits = placement_fits(placement, B=max(1, B), tiers=tiers_for_placement)
         # Activations might still overflow tier 0 even when weights+KV fit.
         if M_resident_per_tier[0] > tiers[0].capacity_GB * GB_TO_BYTES + 1e-9:
             fits = False

@@ -226,6 +226,29 @@ def placement_fits(
     return True
 
 
+def weights_seconds_per_byte(
+    placement: PlacementResult,
+    tiers: List[MemoryTierSpec],
+) -> float:
+    """Seconds to read one byte of weights, averaged over where weights live.
+
+    `Σ_i (w_i / W) / BW_eff,i`: a read of weight bytes that are spread over
+    the tiers like the resident weights are. Used for weight reads that are
+    not part of the per-layer traffic (the LM head projection), so that a
+    device whose weights sit mostly on a slow tier does not get them at the
+    fast tier's bandwidth. On a single-tier device this is `1 / BW_eff`.
+    """
+    W = sum(placement.weights_per_tier)
+    if W <= 0:
+        t0 = tiers[0]
+        return 1.0 / (t0.bandwidth_GBps * t0.eta_beta * GB_TO_BYTES)
+    total = 0.0
+    for w_i, tier in zip(placement.weights_per_tier, tiers):
+        if w_i > 0:
+            total += (w_i / W) / (tier.bandwidth_GBps * tier.eta_beta * GB_TO_BYTES)
+    return total
+
+
 def t_mem_from_placement(
     placement: PlacementResult,
     B: int,
