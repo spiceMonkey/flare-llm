@@ -221,7 +221,8 @@ def placement_fits(
         placement.kv_per_request_per_tier,
         tiers,
     ):
-        if w_i + max(1, B) * kv_i > tier.capacity_GB * GB_TO_BYTES + 1e-9:
+        # Relative tolerance; see the matching check in memory_model.
+        if w_i + max(1, B) * kv_i > tier.capacity_GB * GB_TO_BYTES * (1.0 + 1e-9):
             return False
     return True
 

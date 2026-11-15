@@ -130,7 +130,11 @@ def compute_memory(
         M_resident_per_tier[0] += M_act_device
         fits = placement_fits(placement, B=max(1, B), tiers=tiers_for_placement)
         # Activations might still overflow tier 0 even when weights+KV fit.
-        if M_resident_per_tier[0] > tiers[0].capacity_GB * GB_TO_BYTES + 1e-9:
+        # Relative tolerance: when greedy placement fills the fast tier
+        # exactly, residency plus activations can land one float step over
+        # capacity, which an absolute tolerance far below the float spacing
+        # at these magnitudes would report as an overflow.
+        if M_resident_per_tier[0] > tiers[0].capacity_GB * GB_TO_BYTES * (1.0 + 1e-9):
             fits = False
     except CapacityError:
         fits = False
