@@ -45,7 +45,7 @@ A disaggregated prefill/decode pipeline with a distributed KV cache. Each device
 
 FLARE's decode predictions are cross-validated against measured production-stack Time-Per-Output-Token (TPOT) from the [InferenceX™](https://github.com/SemiAnalysisAI/InferenceX) public benchmark dataset (SemiAnalysis LLC, Apache-2.0; snapshot vendored under [`benchmark/inferenceX/`](benchmark/inferenceX/), fetched 2026-05-09). Each published driver under [`benchmark/validate/`](benchmark/validate/) pins one (model, hardware, framework) cut, sweeps concurrency *B*, and overlays the model's cost-component breakdown on the measured scatter — so the plot shows not just *whether* the prediction lands, but *which primitive* sets the floor at each operating point.
 
-Two per-cut calibration constants are used: *bw_eta* (sustained-to-nameplate HBM bandwidth, a function of chip generation × access pattern) and *c*<sub>seq</sub> (per-sequence host-side serving work, a function of the serving stack). Everything else is first-principles. Each example below is reproducible with the single command shown.
+Three calibration constants are used. Two belong to the serving stack and are shared by both cuts below: the per-kernel launch time (4 µs for Dynamo+TRT-LLM) and *c*<sub>seq</sub>, the per-sequence host-side serving work (5 µs). The third, *bw_eta*, is fitted per cut. It multiplies the HBM bandwidth on top of the 0.7 sustained-to-nameplate fraction the GB200 system spec already carries, so the two cuts run at 0.49× and 0.50× nameplate; treat it as a fitted residual, not as a measured hardware constant. Everything else is first-principles. Each example below is reproducible with the single command shown.
 
 ### Small MoE — gpt-oss-120b on GB200
 
@@ -118,9 +118,9 @@ from llm_perf.specs.disagg_spec import DisaggSpec
 model     = load_model_from_db("gpt_1_8t_moe")
 system    = load_system_from_db("gb200.72gpu")
 tuner     = load_tuner_from_db("gpt_1_8t_moe.tuner")
-partition = PartitionSpec(PP=8, TP=8, EP=1, SP=1)
+partition = PartitionSpec(PP=1, TP=8, EP=8, SP=1)   # co-located TP+EP, as dynamo_trt expects
 framework = load_framework_from_db("dynamo_trt")
-tuner.S_input, tuner.S_decode, tuner.B_decode = 8192, 8192, 1
+tuner.S_input, tuner.S_decode, tuner.B_decode = 8192, 8192, 64
 
 framework = optimize_collective_algorithms(model, partition, system, tuner, framework)
 
@@ -146,7 +146,9 @@ print(f"tok/s/GPU  = {e2e.throughput_per_gpu:.1f}")
 
 ![full (partition, B) exploration cloud vs. extracted frontier](assets/pareto_basic.png)
 
-Enumerates every valid `(PP, TP, EP, SP)` partition, sweeps `B` from 1 to the KV-paging max, and extracts the upper-right envelope in (interactivity, throughput/GPU) space. At baseline GB200 NVL72 with `PP_MAX = 8`: 260 valid partitions → 37 frontier points, dominated by `PP=8 TP=8 EP=1 SP=1`. Raise `PP_MAX` to study the unbounded-PP frontier (winners shift toward `PP=32 TP=2`-style shapes).
+Enumerates every valid pipeline / tensor / expert / sequence parallelism partition `(PP, TP, EP, SP)`, sweeps the batch `B` from 1 to the KV-paging max, and extracts the upper-right envelope in (interactivity, throughput/GPU) space. At baseline GB200 NVL72 with `PP_MAX = 8`: 260 valid partitions and 5,895 evaluations → 61 frontier points, every one of them at `TP=16`.
+
+Three regimes share the envelope. The interactive end is `PP=1 TP=16 EP=1`, capped at 395 tok/s/user by the kernel-launch budget of the 120 layers. The middle (140–310 tok/s/user) is `PP=1 TP=16 EP=4`: spreading the experts over four groups cuts the expert weights each device reads per step from 56 GB to 17 GB, at four times the devices per replica. The throughput end returns to `EP=1` and deepens the pipeline to `PP=4`, peaking at 1,391 tok/s/GPU. Pipeline depth buys batch, not speed: a token crosses every stage, so the time per token is the sum over all of them, and depth helps only because each device then holds a quarter of the KV cache and the replica admits a larger batch.
 
 Workload: GPT-1.8T MoE @ FP4 on GB200 NVL72.
 
@@ -156,16 +158,16 @@ Workload: GPT-1.8T MoE @ FP4 on GB200 NVL72.
 
 ![TPU v5p pod vs GB200 NVL72 Pareto frontiers](assets/pareto_tpu_vs_gb200.png)
 
-Two fabrics with opposite design points, same workload: GPT-1.8T MoE @ FP4, `S_decode = 8192`. A TPU v5p pod (4096 chips, 3D torus 16³, 459 TF and 2.77 TB/s HBM per chip, 150 GB/s/port Inter-Chip Interconnect) against a GB200 NVL72 (72 GPUs, single-tier NVLink crossbar, 2250 TF and 8 TB/s HBM per GPU, 900 GB/s/port). Both axes are per-device or per-user, so the 4096-vs-72 device gap doesn't distort the comparison — but aggregate throughput is not shown, and it scales with cluster size.
+Two fabrics with opposite design points, same workload: GPT-1.8T MoE @ FP4, `S_decode = 8192`, batch up to 256. A TPU v5p slice (4096 chips, 3D torus 16³, 459 TF and 2.77 TB/s HBM per chip, 100 GB/s/port Inter-Chip Interconnect) against a GB200 NVL72 (72 GPUs, single-tier NVLink crossbar, 2250 TF and 8 TB/s HBM per GPU, 900 GB/s/port). Both chips are given the same 0.7 sustained-to-nameplate memory-bandwidth fraction; the GB200 value is fitted to measured runs and the TPU has no measurement behind it, so the notebook exposes it as one knob. Both axes are per-device or per-user, so the 4096-vs-72 device gap doesn't distort the comparison — but aggregate throughput is not shown, and it scales with cluster size.
 
 | Fabric | Valid partitions | Peak throughput/device | Peak interactivity | Winner at peak throughput |
 |---|---|---|---|---|
-| TPU v5p pod | 631 | 429 tok/s/device | 297 tok/s/user | `PP=8 TP=4 EP=1 B=256` |
-| GB200 NVL72 | 65 | 916 tok/s/device | 260 tok/s/user | `PP=6 TP=2 EP=1 B=256` |
+| TPU v5p slice | 631 | 152 tok/s/device | 109 tok/s/user | `PP=1 TP=16 EP=1 B=128` |
+| GB200 NVL72 | 65 | 563 tok/s/device | 226 tok/s/user | `PP=1 TP=8 EP=1 B=128` |
 
-The frontiers cross. GB200 delivers ~2.1× the throughput per device at the batch-heavy end, on the strength of 2.9× the HBM bandwidth per chip; but its frontier falls away steeply past ~130 tok/s/user, while the torus pod stays nearly flat out to ~300. Above the crossover near 120 tok/s/user, the lower-bandwidth chip is the better per-device buy.
+The rack is ahead at every operating point: 3.7× the throughput per device at the batch-heavy end, about 7× at 50 tok/s/user and 13× at 100. Two things separate them. Memory bandwidth per chip is 2.9× higher on GB200, and decode on a model this size is bound by reading weights. And the 95 GB chip forces a wider shard: one pipeline stage needs 16 TPU chips but 8 GB200 chips, and the wider group runs its collectives over 100 GB/s links instead of 900 GB/s ones. Communication takes 24–49% of stage time along the TPU frontier against 4–16% along the GB200 one. At nameplate TPU memory bandwidth the TPU peak rises to 196 tok/s/device and the ordering is unchanged.
 
-Each fabric is also swept under two collective-algorithm variants — ring everywhere versus the per-collective optimizer (double binary tree, DBT, on the crossbar; dimension-decomposed torus routing on the pod). **The algorithm choice moves up to 25% of time-per-output-token in the interior of the cloud (44% of TPU points and 23% of GB200 points shift by more than 0.5%) yet barely moves the frontier**, because the envelope-winning partitions are the ones with almost no collective traffic to optimize — communication accounts for 0.7–3% of stage time along the GB200 frontier. The one real exception is the GB200 interactive tail, where DBT on the `TP=8` all-reduce extends the envelope from 236 to 260 tok/s/user. The lesson generalizes: collective-algorithm tuning pays off where a deployment is already communication-bound, and the Pareto-optimal deployments mostly aren't.
+Each fabric is also swept under two collective-algorithm variants — ring everywhere versus the per-collective optimizer (double binary tree, DBT, on the crossbar; dimension-decomposed torus routing on the pod). **On GB200 the optimizer lifts the whole frontier**: it picks the pipelined DBT for the `TP=8` all-reduce, raising peak throughput from 540 to 563 tok/s/device and top interactivity from 185 to 226 tok/s/user, because communication is 8–31% of stage time under ring on those partitions. On the pod the throughput peak does not move — its `TP=16` group is a whole torus axis, which the stock dispatcher already routes dimension by dimension — and the gain is confined to the interactive tail (103 to 109 tok/s/user). The lesson generalizes: collective-algorithm tuning pays in proportion to the communication share, and that share is set by how wide the tensor-parallel group must be before the model fits.
 
 ---
 

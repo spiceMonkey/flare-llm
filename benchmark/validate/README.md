@@ -13,7 +13,7 @@ The published set is the two per-cut drivers the root README walks through.
 | `gpt_oss_120b_gb200_dynamo_trt.py` | `gpt_oss_120b` | `gb200.72gpu` | dynamo-trt | TP=4 EP=1 dec=4 — mean absolute error (MAE) 13.6% over 7 points |
 | `dsr1_gb200_dynamo_trt.py` | `deepseek_r1_0528` | `gb200.72gpu` | dynamo-trt | EXACT (TP=36 EP=1), CO-LOCATED (TP=EP={8,16,32}), ORTHO (TP=8 EP=8 dec=32) — 19.6% MAE over 14 points on the co-located TP-attention cut |
 
-Both are calibrated per cut: `bw_eta` and `c_seq` are fitted for the (model, hardware, framework) cell, and everything else is first-principles. Accuracy on an *uncalibrated* cell is materially worse — the dominant residual is a consistent under-prediction that grows with batch size, which is the not-yet-calibrated per-step host floor rather than a failure of the roofline itself.
+Both are calibrated: `bw_eta` is fitted per (model, hardware, framework) cell, while `c_seq` and the per-kernel launch time come from the framework spec and are shared by every cut on that serving stack. Everything else is first-principles. `bw_eta` multiplies on top of the `hbm_eta_beta` the system spec already carries (0.7 on GB200), so the default 0.7 means 0.49× nameplate HBM bandwidth; it is a fitted residual, not a measured hardware constant. Accuracy on an *uncalibrated* cell is materially worse — the dominant residual is a consistent under-prediction that grows with batch size, which is the not-yet-calibrated per-step host floor rather than a failure of the roofline itself.
 
 ## Running
 
@@ -40,12 +40,12 @@ python benchmark/validate/dsr1_gb200_dynamo_trt.py --out-dir /tmp/plots
 | Arg | Default | What it does |
 |---|---|---|
 | `--flops-eta` | per-driver | Multiply `device.peak_flops_TF` by this factor (sustained / nameplate) |
-| `--bw-eta` | per-driver | Multiply every memory tier's `bandwidth_GBps` by this factor |
+| `--bw-eta` | per-driver | Multiply every memory tier's `bandwidth_GBps` by this factor, on top of the tier's own `eta_beta` from the system spec |
 | `--c-seq-us` | per-driver | Per-sequence serving runtime overhead, µs/seq (decode.md §7.2) |
 | `--out-dir` | `benchmark/results/` | Where to write plots |
 | `--check MAE_PCT` | None | If set, exit non-zero when overall MAE exceeds this |
 
-The three calibration knobs (`--flops-eta`, `--bw-eta`, `--c-seq-us`) default to **per-driver** values — each script ships with `DEFAULT_BW_ETA` / `DEFAULT_C_SEQ_US` constants tuned to its specific (model, hardware, framework) cut so out-of-box runs land within reasonable MAE without users having to know the magic numbers. Override on the command line for sweeps; `--bw-eta 1.0 --c-seq-us 0` reverts to the peak roofline.
+The three calibration knobs (`--flops-eta`, `--bw-eta`, `--c-seq-us`) default to **per-driver** values — each script ships with `DEFAULT_BW_ETA` / `DEFAULT_C_SEQ_US` constants tuned to its specific (model, hardware, framework) cut so out-of-box runs land within reasonable MAE without users having to know the magic numbers. Override on the command line for sweeps; `--bw-eta 1.0 --c-seq-us 0` reverts to the system spec's own roofline (its `hbm_eta_beta` still applies).
 
 Each driver may also expose its own filters (`--cut`, `--tp`, etc.) — see `--help`.
 
@@ -68,7 +68,7 @@ Empirical anchors observed across the validator suite:
 | `trt`, `trt-llm` (raw) | 50–100 µs/seq | No Dynamo orchestrator; more individual kernel launches per step. |
 | `sglang`, `vllm` (raw) | 30–60 µs/seq (estimated) | Python interpreter dominates. |
 
-`bw_eta` ranges by chip:
+`bw_eta` ranges by chip (the driver multiplier; multiply by the system spec's `hbm_eta_beta` to get the fraction of nameplate):
 
 | Chip | `bw_eta` range observed |
 |---|---|
