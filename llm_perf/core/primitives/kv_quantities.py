@@ -29,6 +29,22 @@ from ...specs.partition_spec import PartitionSpec
 from .sharding_factors import D_kv
 
 
+def kv_bytes_cluster(model: LlmModelSpec, n_tokens: int) -> float:
+    """Cluster-aggregate KV-cache bytes of one sequence of `n_tokens`
+    (prefill.md §6.2): the whole cache, before any parallelism shards it.
+
+    - GQA / MHA: keys and values, `2 · L · n_tokens · H_kv · b`.
+    - MLA: one head-shared latent per token per layer.
+
+    This is the volume a prefill-to-decode handoff moves and the volume a
+    cache tier stores for a reusable prompt.
+    """
+    b = model.kv_bytes()
+    if model.mla is not None:
+        return model.L * n_tokens * model.mla.kv_bytes_per_token_per_layer(b)
+    return 2 * model.L * n_tokens * model.H_kv() * b
+
+
 def kv_bytes_per_seq(
     model: LlmModelSpec,
     partition: PartitionSpec,

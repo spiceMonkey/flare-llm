@@ -9,6 +9,7 @@ from ..specs.tuner_spec import TuningSpec
 from ..specs.overhead_spec import OverheadSpec
 from ..specs.disagg_spec import DisaggSpec
 from ..utils import GB_TO_BYTES
+from ..core.primitives import kv_bytes_cluster
 from .inference_calculator import InferenceResults
 from .prefill_calculator import PrefillResults
 
@@ -95,12 +96,7 @@ class E2ECalculator:
 
         # KV cache volume (cluster-aggregate, prefill.md §6.2). Latent-attention
         # models store one shared latent per token per layer, not per-head K/V.
-        S = self.tuner.S_input
-        b = self.model.kv_bytes()
-        if self.model.mla is not None:
-            M_KV_total = self.model.L * S * self.model.mla.kv_bytes_per_token_per_layer(b)
-        else:
-            M_KV_total = 2 * self.model.L * S * self.model.H_kv() * b
+        M_KV_total = kv_bytes_cluster(self.model, self.tuner.S_input)
 
         # KV handoff: branch on DisaggSpec.disaggregated (prefill.md §6.3 / §6.4)
         t_handoff, t_repack = self._compute_handoff(M_KV_total, t_prefill)

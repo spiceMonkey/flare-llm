@@ -68,7 +68,7 @@ from .weight_quantities import (
     moe_weight_traffic_bytes,
     embedding_bytes,
 )
-from .kv_quantities import kv_bytes_per_seq
+from .kv_quantities import kv_bytes_cluster, kv_bytes_per_seq
 from .linear_flops import (
     attn_proj_flops_per_token,
     ffn_flops_per_token,
@@ -152,6 +152,7 @@ __all__ = [
     "moe_weight_bytes",
     "moe_weight_traffic_bytes",
     "embedding_bytes",
+    "kv_bytes_cluster",
     "kv_bytes_per_seq",
     "attn_proj_flops_per_token",
     "ffn_flops_per_token",
