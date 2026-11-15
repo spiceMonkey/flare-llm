@@ -561,8 +561,10 @@ def inc_a2a(M: float, G: int, alpha_s: float, bw_Bps: float) -> float:
 
         t = 2·α_switch + (G-1)/G · M / BW
 
-    Tomahawk Ultra (Ethernet, shipping 2025) and planned Rubin-gen NVSwitches
-    collapse software A2A's (G-1) endpoint-driven scheduling rounds into one
+    A what-if primitive: no vendor documents a hardware all-to-all collective
+    (Tomahawk Ultra names AllReduce, Broadcast and AllGather; Quantum-X800's
+    SHARPv4 lists an undefined "ScatterGather"). It would collapse
+    software A2A's (G-1) endpoint-driven scheduling rounds into one
     switch-driven transaction. Per-rank wire-side bytes are unchanged from
     software pairwise (the switch routes verbatim — no aggregation, no
     replication), so the BW term stays at the per-port bound.
@@ -570,8 +572,8 @@ def inc_a2a(M: float, G: int, alpha_s: float, bw_Bps: float) -> float:
     ``alpha_s`` is ``α_switch``; the factor of 2 is the same one-hop-in,
     one-hop-out traversal every INC primitive in this module pays.
 
-    Not on shipping NVSwitch Gen4 (NVL72) or Quantum-X800; software pairwise
-    is the only A2A path on those fabrics.
+    No hardware A2A is documented on NVSwitch (NVL72) or Quantum-X800; software
+    pairwise is the only documented A2A path on those fabrics.
     """
     if G <= 1:
         return 0.0
@@ -951,8 +953,9 @@ def realistic_cost(
 
 # (label, target μs) — ``04_in_network_collectives.md`` §3.1 (ideal) and
 # ``05_contention_and_congestion.md`` §5.1 (realistic η, §4.1 profile).
-# N=512, M=16 MB, α=0.5 μs, BW=900 GB/s.
-ANCHOR_TOLERANCE_US = 0.6
+# N=512, M=16 MB, α=0.5 μs, BW=900 GB/s. Targets are the exact values to two
+# decimals; the docs print them rounded (546, 45, 18.8, 56.5, 35, 53, 84 μs).
+ANCHOR_TOLERANCE_US = 0.005
 
 
 def canonical_anchors() -> list[tuple[str, float, float]]:
@@ -968,22 +971,22 @@ def canonical_anchors() -> list[tuple[str, float, float]]:
 
     return [
         ("ideal: star + ring AR",
-         us(ring_all_reduce(M, G, alpha, bw)), 546.0),
+         us(ring_all_reduce(M, G, alpha, bw)), 546.49),
         ("ideal: star + DBT (pipelined, single-port)",
-         us(tree_all_reduce(M, G, alpha, bw, pipelined=True)), 45.0),
+         us(tree_all_reduce(M, G, alpha, bw, pipelined=True)), 44.56),
         ("ideal: hyp. 512-port star + NVLS",
-         us(inc_all_reduce(M, alpha, bw)), 18.8),
+         us(inc_all_reduce(M, alpha, bw)), 18.78),
         ("ideal: torus 8³ dim-decomp ring AR",
-         us(torus_all_reduce(M, dims, alpha, bw)), 57.0),
+         us(torus_all_reduce(M, dims, alpha, bw)), 56.49),
         ("realistic: star + NVLS (η_β=0.52)",
          us(realistic_cost(inc_all_reduce, M, alpha, bw,
-                           eta_alpha=1.00, eta_beta=0.52)), 35.0),
+                           eta_alpha=1.00, eta_beta=0.52)), 35.19),
         ("realistic: star + DBT (η_β=0.80)",
          us(realistic_cost(tree_all_reduce, M, G, alpha, bw, pipelined=True,
-                           eta_alpha=1.00, eta_beta=0.80)), 53.0),
+                           eta_alpha=1.00, eta_beta=0.80)), 53.44),
         ("realistic: torus 8³ (η_α=1.20, η_β=0.60)",
          us(realistic_cost(torus_all_reduce, M, dims, alpha, bw,
-                           eta_alpha=1.20, eta_beta=0.60)), 84.0),
+                           eta_alpha=1.20, eta_beta=0.60)), 84.34),
     ]
 
 
@@ -991,7 +994,7 @@ def _self_test() -> None:
     """Reproduce the canonical N=512 anchors and fail loudly on drift."""
     print("N=512, M=16 MB, α=0.5 μs, BW=900 GB/s:")
     for label, value, target in canonical_anchors():
-        print(f"  {label:45s} {value:7.2f} μs   (target ~{target:g})")
+        print(f"  {label:45s} {value:7.2f} μs   (target {target:.2f})")
         assert abs(value - target) <= ANCHOR_TOLERANCE_US, (label, value, target)
     print("all anchors within tolerance")
 
