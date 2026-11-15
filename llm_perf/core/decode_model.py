@@ -793,8 +793,8 @@ def compute_latency(
     # the full product PP·TP·EP·SP; co-located uses PP·max(TP,EP)·SP since TP
     # and EP share the same physical GPU set.
     replica_size = N_replica(partition, framework)
-    # Replicas tile fabric islands, not the flat device count (multi-rack).
-    DP = replicas_in_system(system, replica_size)
+    # Stage blocks tile fabric islands, not the flat device count (multi-rack).
+    DP = replicas_in_system(system, replica_size, stages=max(1, PP))
     TTPS = DP * TPS_single
 
     # B* crossover: batch size where the system transitions from

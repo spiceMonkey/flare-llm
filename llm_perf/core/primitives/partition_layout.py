@@ -144,31 +144,49 @@ def assign_tier_per_axis(
     return assignment
 
 
-def replicas_in_system(system: SystemSpec, replica_size: int, role: str = "PP") -> int:
-    """How many whole replicas of `replica_size` devices the system holds.
+def replicas_in_system(
+    system: SystemSpec,
+    replica_size: int,
+    stages: int = 1,
+    role: str = "PP",
+) -> int:
+    """How many whole replicas the system holds, respecting fabric islands.
 
-    On a single-island fabric this is `num_devices // replica_size`. On a
-    tiered fabric a replica is priced as living inside the smallest island
-    that can contain it (that is what puts its collectives on the inner
-    tier), so replicas must tile islands, not the flat device count: eight
-    72-GPU racks hold eight 64-GPU replicas, one per rack, not the nine
-    that 576 // 64 suggests. Devices left over inside each island idle.
+    A replica is `stages` pipeline stages, each a block of
+    `replica_size // stages` devices (the TP x EP x SP group). The block is
+    the unit whose collectives are priced on the inner fabric tier, so it is
+    the unit that must sit whole inside an island; consecutive stages may be
+    in different islands, and their hop is priced on the tier that joins
+    them. Blocks therefore tile islands, and a replica needs `stages` of
+    them:
 
-    A replica larger than the outermost island reach falls back to the flat
+        blocks   = islands x floor(island / block)  (+ whatever fits in a partial island)
+        replicas = blocks // stages
+
+    Eight 72-GPU racks hold eight 64-GPU blocks: eight single-stage
+    replicas, four two-stage ones, or two three-stage ones — not the nine,
+    four and three that dividing 576 by the replica size gives. Devices left
+    over inside an island idle.
+
+    On a single-island fabric this is `num_devices // replica_size`. A block
+    larger than the outermost island reach also falls back to the flat
     count; its collectives are already priced on the outer tiers.
     """
     N = system.num_devices
+    stages = max(1, int(stages))
     if replica_size <= 0:
         return 0
+    block = max(1, replica_size // stages)
     chain = system.get_tier_chain(role)
     reach = 1
     for tier in chain:
         reach *= max(1, tier.ports)
-        if reach >= replica_size:
+        if reach >= block:
             if reach >= N:
                 return N // replica_size
             n_islands, leftover = divmod(N, reach)
-            return n_islands * (reach // replica_size) + leftover // replica_size
+            blocks = n_islands * (reach // block) + leftover // block
+            return blocks // stages
     return N // replica_size
 
 
