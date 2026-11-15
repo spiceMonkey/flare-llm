@@ -37,7 +37,7 @@ A disaggregated prefill/decode pipeline with a distributed KV cache. Each device
 | **Parallelism axes** | DP / PP / TP / EP / SP, with orthogonal or co-located TP+EP layout | [decode](https://spicemonkey.github.io/flare-llm/decode.html) |
 | **Serving stacks** | 7 calibrated framework JSONs: `default`, `trt`, `dynamo_trt`, `dynamo_sglang`, `dynamo_vllm`, `sglang`, `vllm` | [framework](https://spicemonkey.github.io/flare-llm/framework.html) |
 | **KV handoff** | co-located matched, co-located repack, disaggregated transfer | [kv](https://spicemonkey.github.io/flare-llm/kv.html) |
-| **SLO feasibility** | floor check, TPOT bound on B, TTFT bound on PP, goodput-optimal partition sweep | [slo](https://spicemonkey.github.io/flare-llm/slo.html) |
+| **SLO feasibility** | floor checks, TPOT bound on B, TTFT bound on shape, batch window, goodput-optimal partition sweep | [slo](https://spicemonkey.github.io/flare-llm/slo.html) |
 
 ---
 
