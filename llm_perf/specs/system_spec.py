@@ -82,6 +82,19 @@ class DeviceSpec:
     # existing system JSON's pre-Phase-F behavior).
     peak_flops_eta: float = 1.0
 
+    # ── Published per-precision compute peaks (optional) ───────────────
+    # Maps bytes per parameter → dense peak TFLOPs for chips whose compute
+    # does not follow the linear byte-ratio rule that `peak_flops_TF`
+    # assumes (peak(p) = peak_FP16 · 2 / bytes). d-Matrix Corsair is the
+    # case in the database: its vendor figures quadruple per halving of
+    # precision (16-bit 75, 8-bit 300, 4-bit 1200 TFLOPs per chiplet).
+    # When set, the table replaces the byte-ratio rule for this device
+    # (`peak_flops_eta` still applies): an exact key is used as is, a
+    # precision between two keys is interpolated geometrically, and one
+    # outside the table is byte-ratio scaled from the nearest key.
+    # None (default) = byte-ratio rule from `peak_flops_TF`.
+    peak_flops_TF_by_precision: Optional[Dict[float, float]] = None
+
     # ── Static HBM BW deflator on legacy single-tier path (Phase F) ────
     # Convenience field: the chip-baseline "sustained / nameplate" HBM
     # BW factor, applied to the auto-materialized HBM tier when the

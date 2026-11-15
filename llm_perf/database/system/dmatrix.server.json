@@ -8,7 +8,12 @@
     "hbm_bandwidth_GBps": 51.2,
     "sram_capacity_MB": 256.0,
     "sram_bandwidth_TBps": 18.75,
-    "peak_flops_TF": 150.0,
+    "peak_flops_TF": 75.0,
+    "peak_flops_TF_by_precision": {
+      "2.0": 75.0,
+      "1.0": 300.0,
+      "0.5": 1200.0
+    },
     "peak_flops_eta": 1.0
   },
   "fabrics": {
@@ -75,5 +80,5 @@
       "pcie_server"
     ]
   },
-  "_comment": "d-Matrix single-server reference (8 cards \u00d7 8 chiplets = 64 chiplets), modeled at chiplet granularity. Identical per-chiplet device spec as `dmatrix.squadrack`. peak_flops_TF=150 stores the per-chiplet **FP16-equivalent** dense peak (= MXINT8/2 = 300/2; framework convention is FP16 dense per chip with linear byte-ratio scaling for lower precisions). Linear scaling gives MXINT8 = 300 TF/chiplet (= 2400 TF/card, matches whitepaper) and MXINT4 = 600 TF/chiplet by simple byte ratio. **Caveat**: published d-Matrix MXINT4 is 1200 TF/chiplet (4\u00d7 MXINT8, not 2\u00d7) due to block-sparse acceleration in the INT4 path; the framework's linear-byte-scaling convention under-states d-Matrix INT4 / FP4 throughput by 2\u00d7 as a known limitation. Fabric chain decomposes the in-server hierarchy into 4 tiers (cumulative reach 4 \u2192 16 \u2192 32 \u2192 64): (1) `package_d2d` \u2014 2\u00d72 full mesh of 4 chiplets within a single Corsair package via D2D links, 128 GB/s, 0.115 \u03bcs (whitepaper Fig 6); (2) `dmx_bridge` \u2014 4 packages joined across 2 cards via the DMX Bridge, 64 GB/s, 0.4 \u03bcs (whitepaper Fig 9); (3a) `pcie5-intra-hemisphere` \u2014 2 sets of 2-card pairs (= 32 chiplets) within one PCIe-switch hemisphere, 64 GB/s, 0.6 \u03bcs; (3b) `pcie5-inter-hemisphere` \u2014 2 hemispheres joined across the host-CPU PCIe switches (= 64 chiplets full server), 64 GB/s, 0.6 \u03bcs. Both PCIe hops use the same Gen5 x16 lanes; we model them as a single 2-tier `pcie_server` fabric with reach 2 \u00d7 2 = 4. Performance Mode tuners (placement=auto/auto) put weights+KV in SRAM when capacity allows; Capacity Mode pins weights to LPDDR5. Use this system for workloads that fit in a single 8-card server (e.g., Llama-3-8B per sram.md \u00a73.2). For full-rack scale, use `dmatrix.squadrack` which adds the JetStream/Ethernet tier across servers."
+  "_comment": "d-Matrix single-server reference (8 cards \u00d7 8 chiplets = 64 chiplets), modeled at chiplet granularity. Identical per-chiplet device spec as `dmatrix.squadrack`. Compute peaks are the vendor's dense figures per chiplet, from the Corsair product brief and white paper (per PCIe card of 8 chiplets: 600 TFLOPs at 16-bit, 2400 at 8-bit, 9600 at 4-bit; weights and activations in the same format): `peak_flops_TF_by_precision` = {2 bytes: 75, 1 byte: 300, 0.5 byte: 1200} TFLOPs. They quadruple per halving of precision, so the table replaces the framework's linear byte-ratio rule for this device; `peak_flops_TF`=75 is the 16-bit entry, kept for tools that read the scalar. Fabric chain decomposes the in-server hierarchy into 4 tiers (cumulative reach 4 \u2192 16 \u2192 32 \u2192 64): (1) `package_d2d` \u2014 2\u00d72 full mesh of 4 chiplets within a single Corsair package via D2D links, 128 GB/s, 0.115 \u03bcs (whitepaper Fig 6); (2) `dmx_bridge` \u2014 4 packages joined across 2 cards via the DMX Bridge, 64 GB/s, 0.4 \u03bcs (whitepaper Fig 9); (3a) `pcie5-intra-hemisphere` \u2014 2 sets of 2-card pairs (= 32 chiplets) within one PCIe-switch hemisphere, 64 GB/s, 0.6 \u03bcs; (3b) `pcie5-inter-hemisphere` \u2014 2 hemispheres joined across the host-CPU PCIe switches (= 64 chiplets full server), 64 GB/s, 0.6 \u03bcs. Both PCIe hops use the same Gen5 x16 lanes; we model them as a single 2-tier `pcie_server` fabric with reach 2 \u00d7 2 = 4. Performance Mode tuners (placement=auto/auto) put weights+KV in SRAM when capacity allows; Capacity Mode pins weights to LPDDR5. Use this system for workloads that fit in a single 8-card server (e.g., Llama-3-8B per sram.md \u00a73.2). For full-rack scale, use `dmatrix.squadrack` which adds the JetStream/Ethernet tier across servers."
 }

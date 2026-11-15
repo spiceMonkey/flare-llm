@@ -250,6 +250,44 @@ def weights_seconds_per_byte(
     return total
 
 
+def spill_seconds_per_byte(
+    nbytes: float,
+    placement: PlacementResult,
+    B: int,
+    tiers: List[MemoryTierSpec],
+) -> float:
+    """Seconds to read one byte of a block that is placed *after* `placement`.
+
+    The block of `nbytes` takes whatever capacity `placement` (weights plus
+    the KV cache of `B` requests) left free, fastest tier first; bytes that
+    fit nowhere land on the last tier, as in the permissive "auto" rule of
+    `resolve_placement`. Returns `Σ_i (x_i / nbytes) / BW_eff,i` for the
+    resulting split `x_i`.
+
+    Used for the vocabulary matrix (input embedding / LM head) when it is
+    given the lowest claim on fast memory: only the last pipeline stage
+    reads it, once per token, while layer weights are read on every stage
+    pass (sram.md §2).
+    """
+    if nbytes <= 0:
+        t0 = tiers[0]
+        return 1.0 / (t0.bandwidth_GBps * t0.eta_beta * GB_TO_BYTES)
+    left = nbytes
+    total = 0.0
+    last = len(tiers) - 1
+    for i, (w_i, kv_i, tier) in enumerate(zip(
+        placement.weights_per_tier, placement.kv_per_request_per_tier, tiers,
+    )):
+        free = tier.capacity_GB * GB_TO_BYTES - (w_i + max(1, B) * kv_i)
+        take = left if i == last else min(left, max(0.0, free))
+        if take > 0:
+            total += (take / nbytes) / (tier.bandwidth_GBps * tier.eta_beta * GB_TO_BYTES)
+            left -= take
+        if left <= 0:
+            break
+    return total
+
+
 def t_mem_from_placement(
     placement: PlacementResult,
     B: int,

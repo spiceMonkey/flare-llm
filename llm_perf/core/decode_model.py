@@ -16,6 +16,7 @@ Public surface (preserved from the pre-refactor four-file split):
   - compute_latency(model, system, partition, tuner, flops, traffic, comm) → LatencyResults
 """
 
+import math
 from dataclasses import dataclass
 from typing import Dict, Optional
 
@@ -25,7 +26,13 @@ from ..specs.system_spec import SystemSpec
 from ..specs.partition_spec import PartitionSpec
 from ..specs.tuner_spec import TuningSpec
 from ..utils import GB_TO_BYTES, TB_TO_FLOPS
-from .memory_placement import PlacementResult, resolve_placement, t_mem_from_placement, weights_seconds_per_byte
+from .memory_placement import (
+    PlacementResult,
+    resolve_placement,
+    spill_seconds_per_byte,
+    t_mem_from_placement,
+    weights_seconds_per_byte,
+)
 from .primitives import (
     attn_proj_flops_per_token,
     ffn_flops_per_token,
@@ -79,16 +86,34 @@ def effective_peak_flops_TF(system: SystemSpec, bytes_per_param: float) -> float
       - FP8  (b=1.0): 4500 TF
       - FP4  (b=0.5): 9000 TF
 
-    **Known limitation**: d-Matrix MXINT4 throughput is 4× MXINT8 rather
-    than the 2× linear byte scaling predicts (block-sparse acceleration in
-    the INT4 path). With FP16 baseline = 150 TF/chiplet, the framework
-    computes 600 TF/chiplet for MXINT4, but the published peak is
-    1200 TF/chiplet — a 2× under-estimate on d-Matrix INT4 / FP4 only.
-    Linear byte scaling holds for every other modeled architecture
-    (NVIDIA Hopper / Blackwell, TPU v5p / v6e, Groq LPU).
+    A device whose published peaks do not follow that rule carries them in
+    `DeviceSpec.peak_flops_TF_by_precision` (bytes per parameter → TFLOPs),
+    which then replaces the byte-ratio rule. d-Matrix Corsair is the case
+    in the database: its vendor figures quadruple per halving of precision
+    (75 / 300 / 1200 TFLOPs per chiplet at 16 / 8 / 4 bits), so the linear
+    rule would under-state its 4-bit peak by 2× and over-state its 16-bit
+    peak by 2×. An exact key is used as is; a precision between two keys is
+    interpolated geometrically; one outside the table is byte-ratio scaled
+    from the nearest key.
     """
     bpp = max(1e-9, bytes_per_param)
-    return system.device.peak_flops_TF * system.device.peak_flops_eta * (_FP16_BYTES / bpp)
+    eta = system.device.peak_flops_eta
+    table = system.device.peak_flops_TF_by_precision
+    if table:
+        keys = sorted(table)
+        if bpp <= keys[0]:
+            return table[keys[0]] * (keys[0] / bpp) * eta
+        if bpp >= keys[-1]:
+            return table[keys[-1]] * (keys[-1] / bpp) * eta
+        for lo, hi in zip(keys, keys[1:]):
+            if lo <= bpp <= hi:
+                if bpp == lo:
+                    return table[lo] * eta
+                if bpp == hi:
+                    return table[hi] * eta
+                w = math.log(bpp / lo) / math.log(hi / lo)
+                return table[lo] * (table[hi] / table[lo]) ** w * eta
+    return system.device.peak_flops_TF * eta * (_FP16_BYTES / bpp)
 
 
 # ────────────────────────────────────────────────────────────
@@ -763,6 +788,56 @@ def compute_latency(
             + (B_eff * V * model.act_bytes()) / BW_top
         )
     t_LM = max(t_lm_compute, t_lm_mem)
+
+    # Multi-tier device, "auto" weight placement: the pooled placement above
+    # lets the vocabulary matrix (input embedding / LM head) claim fast-tier
+    # capacity in proportion to its size, on every pipeline stage. But only
+    # the last stage reads it, once per token, while layer weights are read
+    # on every stage pass (and the first stage's embedding lookup is a
+    # gather of a few rows). So also price the placement that gives the
+    # matrix the lowest claim — layer weights and KV first, the matrix in
+    # whatever capacity is left — and keep whichever gives the shorter step.
+    # In a full pipeline the slowest stage sets the pace, so both variants
+    # charge every stage alike. Capacity is unaffected: the end stages hold
+    # the matrix either way (memory_model). Single-tier devices never reach
+    # this branch, where residency does not change the time.
+    M_vocab = embedding_bytes(model, partition)
+    if len(tiers) > 1 and tuner.placement.weights_tier == "auto" and M_vocab > 0:
+        M_layers = M_theta_resident - M_vocab
+        B_res = group_batch(max(1, B), partition, framework)
+        residency_alt = resolve_placement(
+            T_theta_device=M_layers,
+            T_kv_per_request_device=traffic.T_kv_token,
+            B=B_res,
+            tiers=tiers,
+            placement=tuner.placement,
+        )
+        placement_alt = PlacementResult(
+            weights_per_tier=[
+                traffic.T_theta * (w_i / M_layers) if M_layers > 0 else 0.0
+                for w_i in residency_alt.weights_per_tier
+            ],
+            kv_per_request_per_tier=list(residency_alt.kv_per_request_per_tier),
+        )
+        t_mem_alt = t_mem_from_placement(
+            placement_alt, B=mb_dev, tiers=tiers,
+            eta_beta_curve_factor=eta_beta_B,
+        )
+        t_local_alt = max(t_compute_eff, t_mem_alt)
+        t_stage_alt = t_local_alt + max(0.0, t_comm - rho * t_local_alt)
+        t_stage_with_kernel_alt = t_stage_alt + max(0.0, t_kernel - rho_kernel * t_stage_alt)
+        t_lm_mem_alt = (
+            T_lm_weights * spill_seconds_per_byte(M_vocab, residency_alt, B_res, tiers)
+            + (B_eff * V * model.act_bytes()) / BW_top
+        )
+        t_LM_alt = max(t_lm_compute, t_lm_mem_alt)
+        if (
+            t_stage_with_kernel_alt * pp_traversal_factor + t_LM_alt
+            < t_stage_with_kernel * pp_traversal_factor + t_LM
+        ):
+            t_mem, t_local, t_stage = t_mem_alt, t_local_alt, t_stage_alt
+            t_stage_with_kernel = t_stage_with_kernel_alt
+            t_lm_mem, t_LM = t_lm_mem_alt, t_LM_alt
 
     # Per-sequence serving runtime overhead (decode.md §7.3): host-side work
     # that scales linearly with active-sequence count B (block-table gather,

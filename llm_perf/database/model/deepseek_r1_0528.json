@@ -26,6 +26,6 @@
     "d_v": 128
   },
 
-  "_comment_mla": "Multi-head Latent Attention (DSv3-style). With mla set, KV cache uses (d_c + d_qk_rope)·b = 576 bytes/tok/layer at FP8 (vs the prior n_kv=5 approximation that gave ~280); per-layer attention parameters use the 6-matrix sum from attention.md §3.3 (~187 M/layer) instead of the GQA approximation (~109 M/layer). The n_kv field is retained at the canonical n_q value but is ignored when mla is set; it falls back to GQA behavior only if mla is removed.",
+  "_comment_mla": "Multi-head Latent Attention (DSv3-style). With mla set, KV cache uses (d_c + d_qk_rope)·b = 576 bytes/tok/layer at FP8 (vs the prior n_kv=5 approximation that gave ~280); per-layer attention parameters use the 6-matrix sum from attention.md §3.3 (~187 M/layer) instead of the GQA approximation (~109 M/layer). n_kv = 128 is the published value (`num_key_value_heads` = `num_attention_heads` = 128 in the model's config.json), not a placeholder: MLA keeps one key/value projection per head. The KV-cache size does not use it when mla is set (the cache is the head-shared latent); it still bounds tensor parallelism at one head per rank, so TP up to 128 is admitted by the head count and limited in practice by the devices in a scale-up domain.",
   "_comment_k_active": "8 routed experts + 1 shared expert (always active). Shared expert approximated by k=9."
 }

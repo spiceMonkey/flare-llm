@@ -445,6 +445,26 @@ def system_spec_from_json_dict(cfg: Dict[str, Any]) -> SystemSpec:
         raise ValueError(
             f"device configuration: 'hbm_eta_beta' must be in (0, 1], got {hbm_eta_beta}"
         )
+    peak_by_precision = None
+    if dev_cfg.get("peak_flops_TF_by_precision") is not None:
+        raw = dev_cfg["peak_flops_TF_by_precision"]
+        if not isinstance(raw, dict) or not raw:
+            raise ValueError(
+                "device configuration: 'peak_flops_TF_by_precision' must be a "
+                "non-empty object mapping bytes-per-parameter to TFLOPs"
+            )
+        peak_by_precision = {}
+        for k, v in raw.items():
+            try:
+                kf, vf = float(k), float(v)
+            except (TypeError, ValueError):
+                kf = vf = -1.0
+            if kf <= 0.0 or vf <= 0.0:
+                raise ValueError(
+                    "device configuration: 'peak_flops_TF_by_precision' needs "
+                    f"positive bytes-per-parameter keys and TFLOPs values, got {k!r}: {v!r}"
+                )
+            peak_by_precision[kf] = vf
     tc_curve = _parse_efficiency_curve(
         dev_cfg.get("tensor_core_efficiency"), key_name="mb",
         prefix="device configuration: 'tensor_core_efficiency'",
@@ -461,6 +481,7 @@ def system_spec_from_json_dict(cfg: Dict[str, Any]) -> SystemSpec:
         hbm_capacity_GB=float(dev_cfg["hbm_capacity_GB"]),
         hbm_bandwidth_GBps=float(dev_cfg["hbm_bandwidth_GBps"]),
         peak_flops_TF=float(dev_cfg["peak_flops_TF"]),
+        peak_flops_TF_by_precision=peak_by_precision,
         sram_capacity_MB=sram_capacity_MB,
         sram_bandwidth_TBps=sram_bandwidth_TBps,
         tiers=tiers,
