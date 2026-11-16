@@ -304,6 +304,7 @@ class E2ECalculator:
                 N_active=paged.max_sequences,
                 idle_fraction=self.workload.idle_fraction,
                 n_gpus=replica_devices(self.partition),
+                overflow_tiers=self.offload.overflow_tiers,
             )
 
         return E2EResults(

@@ -645,6 +645,8 @@ With a fraction f\_idle of sessions idle at any moment, N\_active busy ones corr
 
 The tier list is ordered and each tier names its own path, so a flash tier or a remote store is one more entry; nothing here is specific to DRAM.
 
+Several tiers (warm, then cold). Idle sessions fill the first tier, then each overflow tier in the order given: the same fastest-first rule the hot placement uses. Capacities add, each tier holding a whole number of caches, and the fetch a resuming session pays depends on the tier it was parked in; the mean over the parked sessions is reported next to the per-tier values.
+
 ### class `WarmSessionResults`
 
 **Fields**
@@ -665,6 +667,12 @@ The tier list is ordered and each tier names its own path, so a flash tier or a 
 | `store_rate_GBps` | `float` | — |
 | `fetch_rate_GBps` | `float` | — |
 | `fetch_bottleneck` | `str` | — |
+| `tiers` | `Optional[List[str]]` | `None` |
+| `N_parked_capacity_by_tier` | `Optional[List[int]]` | `None` |
+| `N_parked_by_tier` | `Optional[List[float]]` | `None` |
+| `t_resume_fetch_by_tier` | `Optional[List[float]]` | `None` |
+| `t_store_by_tier` | `Optional[List[float]]` | `None` |
+| `t_resume_fetch_mean` | `float` | `0.0` |
 
 ### `tier_stages(host: HostSpec, tier: KVTierSpec, *, write: bool=False) -> List[PathStageSpec]`
 
@@ -682,9 +690,11 @@ Time to move `M_bytes` of cache from `n_gpus` GPUs to a tier.
 
 The `core.kv_reuse.PrefixFetch` the strategy implies, or None when it names no prefix tier.
 
-### `warm_sessions(*, host: HostSpec, tier_name: str, M_KV_session: float, N_active: int, idle_fraction: float, n_gpus: int) -> WarmSessionResults`
+### `warm_sessions(*, host: HostSpec, tier_name: str, M_KV_session: float, N_active: int, idle_fraction: float, n_gpus: int, overflow_tiers: Sequence[str]=()) -> WarmSessionResults`
 
 Sessions one replica serves when idle caches are parked in a warm tier.
+
+`overflow_tiers` are further tiers (for example flash) that take idle sessions once `tier_name` is full, in the order given.
 
 `M_KV_session` is the whole cache of one session (all of its shards); `N_active` the sequences the replica holds in GPU memory; `n_gpus` the replica's devices, which fixes how many hosts (and so how much of the tier) it has.
 

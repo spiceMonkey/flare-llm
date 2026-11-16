@@ -597,6 +597,9 @@ prefix\_tier  the tier that holds reusable prefixes; "" = none, so no
                prefix reuse is priced from a tier;
 idle\_tier    the tier that holds the caches of idle sessions; "" =
                none, so no session is parked;
+overflow\_tiers  further tiers that take idle sessions once `idle_tier`
+               is full, filled in the order given (for example host DRAM
+               first, then flash). Empty = one tier only;
 fetch\_rule   "auto":   a hit is fetched only when fetch + suffix
                          prefill beats prefilling the whole prompt (a
                          latency rule; a skipped fetch costs a full
@@ -610,6 +613,7 @@ fetch\_rule   "auto":   a hit is fetched only when fetch + suffix
 | `prefix_tier` | `str` | `''` |
 | `idle_tier` | `str` | `''` |
 | `fetch_rule` | `str` | `'auto'` |
+| `overflow_tiers` | `Tuple[str, ...]` | `()` |
 
 ---
 

@@ -30,12 +30,18 @@ give the stricter N_parked / f_idle.)
 
 The tier list is ordered and each tier names its own path, so a flash tier
 or a remote store is one more entry; nothing here is specific to DRAM.
+
+Several tiers (warm, then cold). Idle sessions fill the first tier, then each
+overflow tier in the order given: the same fastest-first rule the hot
+placement uses. Capacities add, each tier holding a whole number of caches,
+and the fetch a resuming session pays depends on the tier it was parked in;
+the mean over the parked sessions is reported next to the per-tier values.
 """
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Sequence
 
 from ..specs.kv_offload_spec import KVOffloadSpec
 from ..specs.system_spec import HostSpec, KVTierSpec, PathStageSpec
@@ -59,6 +65,14 @@ class WarmSessionResults:
     store_rate_GBps: float
     fetch_rate_GBps: float
     fetch_bottleneck: str
+    # Per tier, in fill order (`tier` above is the first). With one tier these
+    # hold one entry and t_resume_fetch_mean equals t_resume_fetch.
+    tiers: Optional[List[str]] = None
+    N_parked_capacity_by_tier: Optional[List[int]] = None
+    N_parked_by_tier: Optional[List[float]] = None
+    t_resume_fetch_by_tier: Optional[List[float]] = None
+    t_store_by_tier: Optional[List[float]] = None
+    t_resume_fetch_mean: float = 0.0        # over the parked sessions, weighted by where they sit
 
 
 def tier_stages(host: HostSpec, tier: KVTierSpec, *, write: bool = False) -> List[PathStageSpec]:
@@ -102,8 +116,12 @@ def warm_sessions(
     N_active: int,
     idle_fraction: float,
     n_gpus: int,
+    overflow_tiers: Sequence[str] = (),
 ) -> WarmSessionResults:
     """Sessions one replica serves when idle caches are parked in a warm tier.
+
+    `overflow_tiers` are further tiers (for example flash) that take idle
+    sessions once `tier_name` is full, in the order given.
 
     `M_KV_session` is the whole cache of one session (all of its shards);
     `N_active` the sequences the replica holds in GPU memory; `n_gpus` the
@@ -116,9 +134,15 @@ def warm_sessions(
         raise ValueError(f"M_KV_session must be > 0, got {M_KV_session!r}")
     if N_active < 0:
         raise ValueError(f"N_active must be >= 0, got {N_active!r}")
+    names = [tier_name, *overflow_tiers]
+    if len(set(names)) != len(names):
+        raise ValueError(f"tiers must be distinct, got {names}")
     tier = host.get_tier(tier_name)
-    capacity = host.hosts_for(n_gpus) * tier.capacity_GB * GB_TO_BYTES
-    n_cap = int(math.floor(capacity / M_KV_session))
+    n_hosts = host.hosts_for(n_gpus)
+    caps_bytes = [n_hosts * host.get_tier(n).capacity_GB * GB_TO_BYTES for n in names]
+    caps = [int(math.floor(c / M_KV_session)) for c in caps_bytes]
+    capacity = caps_bytes[0] if len(names) == 1 else sum(caps_bytes)
+    n_cap = caps[0] if len(names) == 1 else sum(caps)
 
     wanted = N_active / (1.0 - idle_fraction)           # sessions the idle fraction calls for
     held = float(N_active + n_cap)                      # sessions the tier allows
@@ -130,6 +154,22 @@ def warm_sessions(
 
     store = tier_store(M_KV_session, host, tier_name, n_gpus)
     fetch = tier_fetch(M_KV_session, host, tier_name, n_gpus)
+    # Fill the tiers in order with the parked sessions.
+    left = max(0.0, n_sessions - N_active)
+    parked_by, fetch_by, store_by = [], [], []
+    for name, cap in zip(names, caps):
+        here = min(float(cap), left)
+        left -= here
+        parked_by.append(here)
+        fetch_by.append(fetch.t_total if name == tier_name else tier_fetch(M_KV_session, host, name, n_gpus).t_total)
+        store_by.append(store.t_total if name == tier_name else tier_store(M_KV_session, host, name, n_gpus).t_total)
+    used = [(p, t) for p, t in zip(parked_by, fetch_by) if p > 0.0]
+    if not used:
+        fetch_mean = fetch.t_total
+    elif len(used) == 1:
+        fetch_mean = used[0][1]                 # exactly that tier's fetch, no rounding
+    else:
+        fetch_mean = sum(p * t for p, t in used) / sum(p for p, _ in used)
     return WarmSessionResults(
         tier=tier.name,
         M_KV_session=M_KV_session,
@@ -145,4 +185,10 @@ def warm_sessions(
         store_rate_GBps=store.rate_GBps,
         fetch_rate_GBps=fetch.rate_GBps,
         fetch_bottleneck=fetch.bottleneck,
+        tiers=names,
+        N_parked_capacity_by_tier=caps,
+        N_parked_by_tier=parked_by,
+        t_resume_fetch_by_tier=fetch_by,
+        t_store_by_tier=store_by,
+        t_resume_fetch_mean=fetch_mean,
     )
