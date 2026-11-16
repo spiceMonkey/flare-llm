@@ -279,6 +279,86 @@ A fabric represents a single underlying network (e.g. NVLink5, InfiniBand, Ether
 | `name` | `str` | — |
 | `tiers` | `List[TierSpec]` | `field(default_factory=list)` |
 
+### class `PathStageSpec`
+
+One stage of a path that a KV cache takes between memory and the GPUs.
+
+Same format as a network fabric tier (`ports` in parallel, a rate per port, a latency), so a root complex, a PCIe link, a CXL device or a CXL switch is each one entry and a path is an ordered list of them. The stage latencies add and the bytes move at the slowest stage (`core.kv_transfer.transfer_time`).
+
+`per` says what `ports` counts:
+"host" - per host; the stage is CPU-side (a root complex, the copy
+           through pinned memory) and takes `HostSpec.eta_busy`;
+"gpu"  - per GPU that receives the transfer (a PCIe link into a GPU); "path" - as written (the links between two pools, the CXL devices or
+           drives behind one path).
+
+**Fields**
+
+| Field | Type | Default |
+|---|---|---|
+| `name` | `str` | — |
+| `bw_per_port_GBps` | `float` | — |
+| `ports` | `int` | `1` |
+| `per` | `str` | `'path'` |
+| `alpha_us` | `float` | `0.0` |
+
+### class `KVTierSpec`
+
+One off-GPU tier of a host that can hold KV caches (warm memory).
+
+Not a device memory tier (`MemoryTierSpec`): the decode step never reads it. It is read only when a cache moves, and it reaches the GPUs over a path of the host (`HostSpec.paths`), which `path` names.
+
+Host DRAM and CXL memory are described this way today. A flash tier is the same entry with a write rate below its read rate; a remote store is the same entry whose path contains a network stage.
+
+**Fields**
+
+| Field | Type | Default |
+|---|---|---|
+| `name` | `str` | — |
+| `capacity_GB` | `float` | — |
+| `read_GBps` | `float` | — |
+| `write_GBps` | `Optional[float]` | `None` |
+| `ports` | `int` | `1` |
+| `alpha_us` | `float` | `0.0` |
+| `path` | `str` | `''` |
+
+### class `HostSpec`
+
+The host side of a system: how many GPUs share a host, and the paths a KV cache takes between the host and its GPUs.
+
+Optional on `SystemSpec`. The decode and prefill calculators never read it; only the end-to-end layer does. Without it no host limit is applied to any transfer.
+
+`paths` maps a name to an ordered chain of stages, from the memory side to the GPU. The rate of a CPU-side stage (`per="host"`) is a measured, per-platform number, not a derate of the PCIe lane rate: on a current 8-GPU server the lanes add up to several hundred GB/s while the measured rate into the GPUs through the root complex is tens of GB/s.
+
+Calibration terms, all neutral by default:
+eta\_busy      extra loss on the CPU-side stages while the host is busy
+                serving, in (0, 1];
+tau\_block\_us  CPU cost per cache block moved, charged
+                ceil(bytes / block_MB) times when both are set;
+pipelined     True: the stages stream, the slowest sets the rate;
+                False: each stage stores the whole cache before the next
+                starts, so the stage times add.
+
+**Fields**
+
+| Field | Type | Default |
+|---|---|---|
+| `devices_per_host` | `int` | — |
+| `paths` | `Dict[str, List[PathStageSpec]]` | `field(default_factory=dict)` |
+| `handoff_path` | `str` | `''` |
+| `eta_busy` | `float` | `1.0` |
+| `tau_block_us` | `float` | `0.0` |
+| `block_MB` | `float` | `0.0` |
+| `pipelined` | `bool` | `True` |
+| `tiers` | `List[KVTierSpec]` | `field(default_factory=list)` |
+
+#### `get_tier(self, name: str) -> KVTierSpec`
+
+#### `get_path(self, name: str) -> List[PathStageSpec]`
+
+#### `hosts_for(self, n_devices: int) -> int`
+
+Hosts that a replica of `n_devices` GPUs spans.
+
 ### class `SystemSpec`
 
 System / cluster description.
@@ -294,6 +374,7 @@ Networks are declared once as named fabrics; each collective (TP/EP/SP/PP) maps 
 | `num_devices` | `int` | — |
 | `fabrics` | `Dict[str, FabricSpec]` | — |
 | `collective_fabrics` | `Dict[str, List[str]]` | — |
+| `host` | `Optional[HostSpec]` | `None` |
 
 #### `get_fabric_chain(self, collective: str) -> List[FabricSpec]`
 
@@ -490,10 +571,67 @@ The `disaggregated` flag selects which branch applies; the other branch's fields
 | `inter_alpha_us` | `float` | `0.0` |
 | `inter_bandwidth_GBps` | `float` | `0.0` |
 | `transfer_streams` | `int` | `1` |
+| `auto_streams` | `bool` | `False` |
 | `N_WR` | `int` | `0` |
 | `tau_WR_us` | `float` | `0.0` |
 | `overlap_rho_KV` | `float` | `0.0` |
+| `overlap_resid_us` | `float` | `0.0` |
+| `staged` | `bool` | `False` |
 | `repack_GBps` | `float` | `0.0` |
 | `repack_eta` | `float` | `1.0` |
+| `auto_repack` | `bool` | `False` |
+
+---
+
+## `llm_perf.specs.kv_offload_spec`
+
+### class `KVOffloadSpec`
+
+Warm-memory strategy: what is kept off the GPUs, and where.
+
+Read only by the end-to-end layer. The hardware it refers to is the off-GPU tier list of the host (`HostSpec.tiers`); this spec names tiers of that list and says when a cached prefix is fetched. The workload side (how often a prefix is hit, what fraction of sessions is idle) is on `WorkloadSpec`.
+
+Hot memory is untouched by it: weights and the cache of a sequence that is being decoded always stay in GPU memory.
+
+prefix\_tier  the tier that holds reusable prefixes; "" = none, so no
+               prefix reuse is priced from a tier;
+idle\_tier    the tier that holds the caches of idle sessions; "" =
+               none, so no session is parked;
+fetch\_rule   "auto":   a hit is fetched only when fetch + suffix
+                         prefill beats prefilling the whole prompt (a
+                         latency rule; a skipped fetch costs a full
+                         prefill of GPU work);
+               "always": every hit is fetched.
+
+**Fields**
+
+| Field | Type | Default |
+|---|---|---|
+| `prefix_tier` | `str` | `''` |
+| `idle_tier` | `str` | `''` |
+| `fetch_rule` | `str` | `'auto'` |
+
+---
+
+## `llm_perf.specs.workload_spec`
+
+### class `WorkloadSpec`
+
+Request-level workload, read only by the end-to-end layer.
+
+The decode and prefill calculators never see this spec: they price one step and one prefill pass. The end-to-end layer needs to know how many tokens a request generates, and optionally how many requests arrive, to turn those two prices into GPU time per request and a pool size.
+
+Prompt length and the two batch sizes stay on `TuningSpec` (`S_input`, `B_prefill`, `B_decode`).
+
+**Fields**
+
+| Field | Type | Default |
+|---|---|---|
+| `output_tokens` | `int` | — |
+| `request_rate` | `Optional[float]` | `None` |
+| `utilisation_cap` | `float` | `1.0` |
+| `prefix_hit_rate` | `float` | `0.0` |
+| `prefix_tokens` | `int` | `0` |
+| `idle_fraction` | `float` | `0.0` |
 
 ---
