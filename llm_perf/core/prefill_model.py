@@ -1,6 +1,6 @@
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Optional
 from ..specs.framework_spec import FrameworkSpec
 from ..specs.model_spec import LlmModelSpec
@@ -678,4 +678,118 @@ def compute_prefill_latency(
         chunk_size=C,
         n_chunks=n_chunks,
         t_prefill_chunked=t_prefill_chunked,
+    )
+
+
+# ────────────────────────────────────────────────────────────
+# Suffix prefill on a cached prefix (prefix reuse)
+# ────────────────────────────────────────────────────────────
+
+@dataclass
+class SuffixPrefillResults:
+    S_prefix: int                   # tokens whose cache is already present
+    S_suffix: int                   # new tokens prefilled: S_input - S_prefix
+    F_suffix_device: float          # per-device FLOPs across L/PP layers
+    t_compute_eff: float            # Tensor-Core-derated compute time
+    t_mem: float                    # weights + KV write (suffix) + KV read (prefix)
+    t_local: float                  # max(compute_eff, mem) composed with the SW budget
+    t_comm: float                   # per-stage collectives at S_suffix tokens
+    t_stage: float                  # t_local + unhidden comm
+    t_LM: float                     # LM head on the last position, once
+    t_suffix: float                 # PP * t_stage + t_LM
+
+
+def compute_suffix_prefill(
+    model: LlmModelSpec,
+    system: SystemSpec,
+    partition: PartitionSpec,
+    tuner: TuningSpec,
+    framework: FrameworkSpec,
+    S_prefix: int,
+) -> SuffixPrefillResults:
+    """Prefill of the last `S_input - S_prefix` tokens on top of a cached prefix.
+
+    The new tokens attend to every position of the prompt. Under the
+    convention of the chunked model above (each query is charged the full
+    tile, so chunk k of size C is charged (2k-1)*C positions) a suffix of C
+    tokens after a prefix of P is charged 2P + C positions per query: its
+    attention work is exactly that of the whole prompt less that of the
+    prefix, 4*H*((P+C)^2 - P^2) per layer. It is priced as one chunk of that
+    model, for a prefix of ANY length:
+
+      compute  linear FLOPs of C tokens + that attention work
+      memory   weights once + KV write of C entries + KV read of P entries
+      comm     the stage's collectives at C tokens per step
+      total    PP stages, then the LM head once
+
+    With P a multiple of C this is the chunk the chunked model prices for
+    the same tokens; with P = 0 it is one chunk covering the whole prompt.
+    Single request, like the chunked model (`tuner.B_prefill` enters only
+    the Tensor-Core payload). `tuner.S_input` is the whole prompt.
+    """
+    fw = framework
+    S = tuner.S_input
+    if int(S_prefix) != S_prefix or S_prefix < 0:
+        raise ValueError(f"S_prefix must be a non-negative integer, got {S_prefix!r}")
+    if S_prefix >= S:
+        raise ValueError(f"S_prefix ({S_prefix}) must be below the prompt length S_input ({S}): at least one token is prefilled")
+    P = int(S_prefix)
+    C = S - P
+
+    # The whole-prompt pass supplies what does not depend on the split: the
+    # per-stage SW dispatch budget, the LM head and the weight traffic.
+    whole = replace(tuner, chunk_size=0)
+    traffic = compute_prefill_traffic(model, partition, whole, fw)
+    lat = compute_prefill_latency(
+        system, partition, whole, model,
+        compute_prefill_flops(model, partition, whole, fw), traffic,
+        compute_prefill_comm(model, system, partition, whole, fw), fw,
+    )
+
+    R_gpu = effective_peak_flops_TF(system, model.bytes_per_param) * TB_TO_FLOPS
+    tiers = system.device.get_tiers()
+    PP, SP, L, H = partition.PP, partition.SP, model.L, model.H
+    d_kv = D_kv(partition, fw)
+
+    F_linear = linear_flops_per_token(model, partition, fw) * C
+    S_attn = 2 * P + C
+    if model.mla is not None:
+        from .primitives.mla_flops import mla_score_value_flops_per_layer_per_device
+        F_attn = (L / PP) * mla_score_value_flops_per_layer_per_device(model, partition, fw, S_attn, fw.mla_mode) * C / SP
+    else:
+        F_attn = (L / PP) * (4 * C * S_attn * H) / (d_kv * SP)
+    F_suffix = F_linear + F_attn
+    t_compute = F_suffix / R_gpu
+
+    T_kv = kv_bytes_per_seq(model, partition, fw, C) + kv_bytes_per_seq(model, partition, fw, P)
+    plc = resolve_placement(
+        T_theta_device=traffic.T_theta_device,
+        T_kv_per_request_device=T_kv,
+        B=1,
+        tiers=tiers,
+        placement=tuner.placement,
+    )
+    t_mem = t_mem_from_placement(
+        plc, B=1, tiers=tiers,
+        eta_beta_curve_factor=_eta_beta_at_B(system.device.bw_efficiency, 1),
+    )
+
+    mb = max(1, tuner.B_prefill) * max(1, C) / max(1, PP)
+    eta_TC = _eta_TC_at_mb(system.device.tensor_core_efficiency, mb)
+    t_compute_eff = t_compute / eta_TC if eta_TC > 0 else float("inf")
+    t_local_gpu = max(t_compute_eff, t_mem)
+    t_local = t_local_gpu + max(0.0, lat.t_kernel_per_stage - fw.kernel_overlap_factor * t_local_gpu)
+    t_comm = compute_prefill_comm(model, system, partition, tuner, fw, tokens_per_step=C).t_prefill_comm
+    t_stage = t_local + max(0.0, t_comm - fw.comm_overlap_factor * t_local)
+    return SuffixPrefillResults(
+        S_prefix=P,
+        S_suffix=C,
+        F_suffix_device=F_suffix,
+        t_compute_eff=t_compute_eff,
+        t_mem=t_mem,
+        t_local=t_local,
+        t_comm=t_comm,
+        t_stage=t_stage,
+        t_LM=lat.t_LM_prefill,
+        t_suffix=max(1, PP) * t_stage + lat.t_LM_prefill,
     )

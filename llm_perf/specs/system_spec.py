@@ -357,6 +357,151 @@ def span_tiers(
 COLLECTIVES: Tuple[str, ...] = ("TP", "EP", "SP", "PP")
 
 
+PATH_STAGE_SCOPES: Tuple[str, ...] = ("host", "gpu", "path")
+
+
+@dataclass
+class PathStageSpec:
+    """One stage of a path that a KV cache takes between memory and the GPUs.
+
+    Same format as a network fabric tier (`ports` in parallel, a rate per
+    port, a latency), so a root complex, a PCIe link, a CXL device or a CXL
+    switch is each one entry and a path is an ordered list of them. The
+    stage latencies add and the bytes move at the slowest stage
+    (`core.kv_transfer.transfer_time`).
+
+    `per` says what `ports` counts:
+      "host" - per host; the stage is CPU-side (a root complex, the copy
+               through pinned memory) and takes `HostSpec.eta_busy`;
+      "gpu"  - per GPU that receives the transfer (a PCIe link into a GPU);
+      "path" - as written (the links between two pools, the CXL devices or
+               drives behind one path).
+    """
+
+    name: str
+    bw_per_port_GBps: float        # rate per port (GB/s, decimal)
+    ports: int = 1
+    per: str = "path"              # "host" | "gpu" | "path"
+    alpha_us: float = 0.0          # latency the stage adds per transfer (microseconds)
+
+    def __post_init__(self) -> None:
+        if self.per not in PATH_STAGE_SCOPES:
+            raise ValueError(f"PathStageSpec.per must be one of {PATH_STAGE_SCOPES}, got {self.per!r}")
+        if not self.bw_per_port_GBps > 0.0:
+            raise ValueError(f"PathStageSpec {self.name!r}: bw_per_port_GBps must be > 0, got {self.bw_per_port_GBps!r}")
+        if int(self.ports) != self.ports or self.ports < 1:
+            raise ValueError(f"PathStageSpec {self.name!r}: ports must be a positive integer, got {self.ports!r}")
+        if self.alpha_us < 0.0:
+            raise ValueError(f"PathStageSpec {self.name!r}: alpha_us must be >= 0, got {self.alpha_us!r}")
+
+
+@dataclass
+class KVTierSpec:
+    """One off-GPU tier of a host that can hold KV caches (warm memory).
+
+    Not a device memory tier (`MemoryTierSpec`): the decode step never reads
+    it. It is read only when a cache moves, and it reaches the GPUs over a
+    path of the host (`HostSpec.paths`), which `path` names.
+
+    Host DRAM and CXL memory are described this way today. A flash tier is
+    the same entry with a write rate below its read rate; a remote store is
+    the same entry whose path contains a network stage.
+    """
+
+    name: str
+    capacity_GB: float                     # per host (GB, decimal)
+    read_GBps: float                       # rate per port when a cache is fetched from the tier
+    write_GBps: Optional[float] = None     # rate per port when a cache is stored; None = read rate
+    ports: int = 1                         # parallel devices behind the tier (CXL devices, drives)
+    alpha_us: float = 0.0                  # first-byte latency per transfer (microseconds)
+    path: str = ""                         # name of the HostSpec path from the tier into the GPUs
+
+    def __post_init__(self) -> None:
+        if self.capacity_GB < 0.0:
+            raise ValueError(f"KVTierSpec {self.name!r}: capacity_GB must be >= 0, got {self.capacity_GB!r}")
+        if not self.read_GBps > 0.0:
+            raise ValueError(f"KVTierSpec {self.name!r}: read_GBps must be > 0, got {self.read_GBps!r}")
+        if self.write_GBps is not None and not self.write_GBps > 0.0:
+            raise ValueError(f"KVTierSpec {self.name!r}: write_GBps must be > 0 or None, got {self.write_GBps!r}")
+        if int(self.ports) != self.ports or self.ports < 1:
+            raise ValueError(f"KVTierSpec {self.name!r}: ports must be a positive integer, got {self.ports!r}")
+        if self.alpha_us < 0.0:
+            raise ValueError(f"KVTierSpec {self.name!r}: alpha_us must be >= 0, got {self.alpha_us!r}")
+
+
+@dataclass
+class HostSpec:
+    """The host side of a system: how many GPUs share a host, and the paths
+    a KV cache takes between the host and its GPUs.
+
+    Optional on `SystemSpec`. The decode and prefill calculators never read
+    it; only the end-to-end layer does. Without it no host limit is applied
+    to any transfer.
+
+    `paths` maps a name to an ordered chain of stages, from the memory side
+    to the GPU. The rate of a CPU-side stage (`per="host"`) is a measured,
+    per-platform number, not a derate of the PCIe lane rate: on a current
+    8-GPU server the lanes add up to several hundred GB/s while the measured
+    rate into the GPUs through the root complex is tens of GB/s.
+
+    Calibration terms, all neutral by default:
+      eta_busy      extra loss on the CPU-side stages while the host is busy
+                    serving, in (0, 1];
+      tau_block_us  CPU cost per cache block moved, charged
+                    ceil(bytes / block_MB) times when both are set;
+      pipelined     True: the stages stream, the slowest sets the rate;
+                    False: each stage stores the whole cache before the next
+                    starts, so the stage times add.
+    """
+
+    devices_per_host: int
+    paths: Dict[str, List[PathStageSpec]] = field(default_factory=dict)
+    # The path a staged prefill->decode handoff takes from host memory into
+    # the GPUs (`DisaggSpec.staged`). Must name an entry of `paths` when set.
+    handoff_path: str = ""
+    eta_busy: float = 1.0
+    tau_block_us: float = 0.0
+    block_MB: float = 0.0
+    pipelined: bool = True
+    # Off-GPU tiers that can hold KV caches (warm memory), fastest first.
+    # Empty = the host has no warm memory. Each tier names its path.
+    tiers: List[KVTierSpec] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if int(self.devices_per_host) != self.devices_per_host or self.devices_per_host < 1:
+            raise ValueError(f"HostSpec.devices_per_host must be a positive integer, got {self.devices_per_host!r}")
+        if not 0.0 < self.eta_busy <= 1.0:
+            raise ValueError(f"HostSpec.eta_busy must be in (0, 1], got {self.eta_busy!r}")
+        if self.tau_block_us < 0.0 or self.block_MB < 0.0:
+            raise ValueError(f"HostSpec.tau_block_us and block_MB must be >= 0, got {self.tau_block_us!r}, {self.block_MB!r}")
+        for name, stages in self.paths.items():
+            if not stages:
+                raise ValueError(f"HostSpec.paths[{name!r}] is empty; a path needs at least one stage")
+        if self.handoff_path and self.handoff_path not in self.paths:
+            raise ValueError(f"HostSpec.handoff_path {self.handoff_path!r} is not in paths {sorted(self.paths)}")
+        names = [t.name for t in self.tiers]
+        if len(set(names)) != len(names):
+            raise ValueError(f"HostSpec.tiers has duplicate names: {names}")
+        for t in self.tiers:
+            if t.path and t.path not in self.paths:
+                raise ValueError(f"KVTierSpec {t.name!r} names path {t.path!r}, which is not in paths {sorted(self.paths)}")
+
+    def get_tier(self, name: str) -> KVTierSpec:
+        for t in self.tiers:
+            if t.name == name:
+                return t
+        raise ValueError(f"unknown warm tier {name!r}; known: {[t.name for t in self.tiers]}")
+
+    def get_path(self, name: str) -> List[PathStageSpec]:
+        if name not in self.paths:
+            raise ValueError(f"unknown host path {name!r}; known: {sorted(self.paths)}")
+        return self.paths[name]
+
+    def hosts_for(self, n_devices: int) -> int:
+        """Hosts that a replica of `n_devices` GPUs spans."""
+        return -(-max(1, n_devices) // self.devices_per_host)
+
+
 @dataclass
 class SystemSpec:
     """System / cluster description.
@@ -373,6 +518,9 @@ class SystemSpec:
     num_devices: int
     fabrics: Dict[str, FabricSpec]
     collective_fabrics: Dict[str, List[str]]
+    # Host side of the system (GPUs per host, paths between host and GPUs).
+    # None = not described: no host limit on any transfer, no warm memory.
+    host: Optional[HostSpec] = None
 
     def get_fabric_chain(self, collective: str) -> List[FabricSpec]:
         """Return the ordered FabricSpec list for a collective (TP/EP/SP/PP)."""

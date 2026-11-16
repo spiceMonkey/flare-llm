@@ -46,8 +46,32 @@ class DisaggSpec:
     # rates scale this way (Mooncake reports 87 GB/s over 4 x 200 Gb/s and
     # 190 GB/s over 8 x 400 Gb/s).
     transfer_streams: int = 1
+    # True derives the stream count from the two replicas instead of using
+    # `transfer_streams`: min(prefill replica devices, decode replica
+    # devices), every device with its own link. With no separate prefill
+    # pool given to the calculator both replicas are the decode replica.
+    auto_streams: bool = False
     N_WR: int = 0                          # RDMA WR count per handoff
     tau_WR_us: float = 0.0                 # per-WR posting latency
     overlap_rho_KV: float = 0.0            # ρ_KV ∈ [0, 1]
+    # Part of the transfer that overlap with prefill cannot remove (layer-wise
+    # streaming still ships the last layers after prefill ends). The handoff
+    # is never shorter than this, nor is the floor ever longer than the
+    # un-overlapped transfer itself. Splitwise measures about 8 ms on A100 and
+    # about 5 ms on H100. 0 (default) keeps the plain max(0, ...) clamp.
+    overlap_resid_us: float = 0.0
+    # False (default): the transfer goes straight into GPU memory (RDMA with
+    # GPU-direct), so only the link between pools limits it. True: it lands
+    # in host memory first and is then copied into the GPUs over the decode
+    # system's `HostSpec.handoff_path`, whose stages join the path. Inert
+    # when the decode system has no HostSpec.
+    staged: bool = False
     repack_GBps: float = 0.0               # BW_intra,d (decode-side scale-up); 0 → no repack
     repack_eta: float = 1.0                # η_repack ∈ [1, 2]
+
+    # True charges a repack (either branch) only when the prefill and the
+    # decode replica split a sequence's cache differently
+    # (`core.pool_model.kv_layout`); with equal layouts the repack is zero
+    # whatever the repack rate. False (default) charges it whenever a repack
+    # rate is set, as before.
+    auto_repack: bool = False

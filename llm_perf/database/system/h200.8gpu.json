@@ -34,5 +34,33 @@
     "eta": 1.0,
     "delta_alpha_us": 0.0
   },
+  "host": {
+    "devices_per_host": 8,
+    "handoff_path": "host",
+    "paths": {
+      "host": [
+        {
+          "name": "root_complex",
+          "bw_per_port_GBps": 26.0,
+          "per": "host"
+        },
+        {
+          "name": "pcie_link",
+          "bw_per_port_GBps": 63.0,
+          "per": "gpu"
+        }
+      ]
+    },
+    "tiers": [
+      {
+        "name": "dram",
+        "capacity_GB": 2000.0,
+        "read_GBps": 218.0,
+        "alpha_us": 0.114,
+        "path": "host"
+      }
+    ],
+    "_comment": "Host side, read only by the end-to-end layer. Each figure is the conservative end of a measured or published range (documentation/modeling/disaggregation.md \u00a71-\u00a72, \u00a78). root_complex: 26 GB/s is the rate measured for GPU reads from a CXL memory pool (Beluga), with about 47 GB/s in total into eight GPUs reported by Samsung; both are CXL-to-GPU measurements, so for host DRAM this rate is an assumption to be calibrated per platform. pcie_link: PCIe 5.0 x16, about 63 GB/s per direction per GPU. dram: 2 TB (32 DIMMs), 218-246 GB/s summed over 16 channels (218 used), 78-114 ns (114 used)."
+  },
   "_comment": "NVIDIA HGX H200: 141 GB HBM3E @ 4.8 TB/s, FP16 dense 989 TFLOPS/GPU per framework convention (peak_flops_TF stores FP16 dense; FP8 = 1979 by linear byte scaling \u2014 same Hopper compute as H100, just bigger HBM), NVLink4 900 GB/s bidir (450 GB/s single-direction). 8-GPU NVLink domain via 4 NVSwitch chips. B_agg = 8 \u00d7 450 GB/s = 3.6 TB/s single-dir system aggregate. Cross-node would be InfiniBand."
 }

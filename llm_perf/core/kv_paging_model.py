@@ -8,7 +8,7 @@ from ..specs.partition_spec import PartitionSpec
 from ..specs.tuner_spec import TuningSpec
 from ..utils import GB_TO_BYTES
 from .memory_model import MemoryResults
-from .primitives import D_batch, D_kv
+from .primitives import D_batch, D_kv, group_batch
 
 
 @dataclass
@@ -27,6 +27,8 @@ class KVPagingResults:
     M_HBM_KV_avail: float      # HBM available for KV after weights+act+sys (bytes)
     max_sequences: int          # max concurrent sequences at given S
     S_max: float                # max supportable context length for 1 sequence
+    M_act_per_seq: float = 0.0  # activation working set one resident sequence adds on a device (bytes)
+    inflight_sequences: float = 0.0   # caches in flight to the replica that were charged (sequences)
 
 
 def compute_kv_paging(
@@ -37,8 +39,18 @@ def compute_kv_paging(
     framework: FrameworkSpec,
     memory: MemoryResults,
     paging: KVPagingConfig,
+    *,
+    inflight_sequences: float = 0.0,
 ) -> KVPagingResults:
-    """KV paging analysis. Doc: documentation/modeling/kv.md §2-6"""
+    """KV paging analysis. Doc: documentation/modeling/kv.md §2-6
+
+    `inflight_sequences` is the number of caches in flight to this replica
+    during a disaggregated handoff (`E2EResults.inflight_sequences`): each
+    already holds its cache in GPU memory but is not decoded yet, so it takes
+    the room of a resident sequence's cache without its activations.
+    """
+    if inflight_sequences < 0.0:
+        raise ValueError(f"compute_kv_paging needs inflight_sequences >= 0, got {inflight_sequences!r}")
 
     L = model.L
     b = model.kv_bytes()
@@ -78,18 +90,34 @@ def compute_kv_paging(
     M_HBM_KV_avail = HBM_bytes - memory.M_theta_device - memory.M_act_device - sys_overhead
     M_HBM_KV_avail = max(0.0, M_HBM_KV_avail)
 
-    # Max concurrent sequences
-    M_per_seq = N_blocks_per_seq * M_block * phi_avg
+    # Max concurrent sequences. One sequence's cache on a device is its S
+    # tokens times the average fragmentation factor (kv.md §3.1, §6): phi_avg
+    # already carries the partly filled last block, so the token count is S
+    # itself and not the whole-block count N_blocks * block_size. (Rounding up
+    # to whole blocks AND applying phi_avg counted that block twice whenever S
+    # was not a multiple of the block size; at a multiple the two agree.)
+    M_per_token_kv = kv_base_per_tok_per_layer * (L / PP) / (d_kv_eff * SP)
+    M_per_seq = S * M_per_token_kv * phi_avg
+    # Every resident sequence brings its cache AND its activation working
+    # set. `memory.M_act_device` is the working set of the tuner's own batch
+    # on one device, so one sequence's share is that over the sequences the
+    # device holds. (M_HBM_KV_avail above keeps its meaning: what is left for
+    # the cache at the tuner's batch.)
+    n_groups = D_batch(partition, framework)
+    B_dev = group_batch(tuner.B_decode, partition, framework)
+    M_act_per_seq = memory.M_act_device / B_dev if B_dev > 0 else 0.0
+    M_room = max(0.0, HBM_bytes - memory.M_theta_device - sys_overhead)
+    # Caches in flight are spread over the device groups like the batch is.
+    M_inflight_dev = (inflight_sequences / n_groups) * M_per_seq
     # Sequences one device can hold, times the device groups the batch is
     # divided across (EP under the orthogonal layout, else 1) — the replica's
     # concurrent-sequence capacity, in the same units as B_decode.
     max_sequences = (
-        int(M_HBM_KV_avail / M_per_seq) * D_batch(partition, framework)
+        max(0, int((M_room - M_inflight_dev) / (M_per_seq + M_act_per_seq))) * n_groups
         if M_per_seq > 0 else 0
     )
 
     # Max context length for a single sequence (with paging fragmentation)
-    M_per_token_kv = kv_base_per_tok_per_layer * (L / PP) / (d_kv_eff * SP)
     S_max = M_HBM_KV_avail / (M_per_token_kv * phi_avg) if M_per_token_kv > 0 else 0.0
 
     return KVPagingResults(
@@ -99,4 +127,6 @@ def compute_kv_paging(
         M_HBM_KV_avail=M_HBM_KV_avail,
         max_sequences=max_sequences,
         S_max=S_max,
+        M_act_per_seq=M_act_per_seq,
+        inflight_sequences=inflight_sequences,
     )

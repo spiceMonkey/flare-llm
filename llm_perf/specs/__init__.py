@@ -5,7 +5,10 @@ from .system_spec import (
     CrossbarTier,
     DeviceSpec,
     FabricSpec,
+    HostSpec,
+    KVTierSpec,
     MemoryTierSpec,
+    PathStageSpec,
     MeshTier,
     SystemSpec,
     TierSpec,
@@ -15,6 +18,8 @@ from .partition_spec import PartitionSpec
 from .tuner_spec import MemoryPlacementSpec, TuningSpec
 from .overhead_spec import OverheadSpec
 from .disagg_spec import DisaggSpec
+from .workload_spec import WorkloadSpec
+from .kv_offload_spec import KVOffloadSpec
 
 __all__ = [
     "FrameworkSpec",
@@ -27,6 +32,10 @@ __all__ = [
     "TorusTier",
     "MeshTier",
     "MemoryTierSpec",
+    "HostSpec",
+    "KVTierSpec",
+    "KVOffloadSpec",
+    "PathStageSpec",
     "TierSpec",
     "SystemSpec",
     "PartitionSpec",
@@ -34,4 +43,5 @@ __all__ = [
     "MemoryPlacementSpec",
     "OverheadSpec",
     "DisaggSpec",
+    "WorkloadSpec",
 ]

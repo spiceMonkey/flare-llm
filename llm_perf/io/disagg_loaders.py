@@ -17,16 +17,22 @@ def disagg_spec_from_json_dict(cfg: Dict[str, Any]) -> DisaggSpec:
 
     return DisaggSpec(
         disaggregated=bool(cfg.get("disaggregated", False)),
+        first_token=str(cfg.get("first_token", "decode")),
         colo_alpha_us=float(cfg.get("colo_alpha_us", 0.0)),
         colo_repack_GBps=float(cfg.get("colo_repack_GBps", 0.0)),
         colo_repack_eta=float(cfg.get("colo_repack_eta", 1.0)),
         inter_alpha_us=float(cfg.get("inter_alpha_us", 0.0)),
         inter_bandwidth_GBps=float(cfg.get("inter_bandwidth_GBps", 0.0)),
+        transfer_streams=int(cfg.get("transfer_streams", 1)),
+        auto_streams=bool(cfg.get("auto_streams", False)),
         N_WR=int(cfg.get("N_WR", 0)),
         tau_WR_us=float(cfg.get("tau_WR_us", 0.0)),
         overlap_rho_KV=float(cfg.get("overlap_rho_KV", 0.0)),
+        overlap_resid_us=float(cfg.get("overlap_resid_us", 0.0)),
+        staged=bool(cfg.get("staged", False)),
         repack_GBps=float(cfg.get("repack_GBps", 0.0)),
         repack_eta=float(cfg.get("repack_eta", 1.0)),
+        auto_repack=bool(cfg.get("auto_repack", False)),
     )
 
 

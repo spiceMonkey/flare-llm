@@ -9,8 +9,11 @@ from ..specs.system_spec import (
     CrossbarTier,
     DeviceSpec,
     FabricSpec,
+    HostSpec,
+    KVTierSpec,
     MemoryTierSpec,
     MeshTier,
+    PathStageSpec,
     SystemSpec,
     TierSpec,
     TorusTier,
@@ -538,6 +541,58 @@ def system_spec_from_json_dict(cfg: Dict[str, Any]) -> SystemSpec:
         num_devices=num_devices,
         fabrics=fabrics,
         collective_fabrics=collective_fabrics,
+        host=_host_from_json_dict(cfg["host"]) if cfg.get("host") is not None else None,
+    )
+
+
+def _host_from_json_dict(cfg: Dict[str, Any]) -> HostSpec:
+    """Parse the optional `host` block of a system JSON.
+
+    {
+      "devices_per_host": 8,
+      "paths": {"host": [{"name": "root_complex", "bw_per_port_GBps": 26.0, "per": "host"},
+                         {"name": "pcie_link", "bw_per_port_GBps": 63.0, "per": "gpu"}]},
+      "handoff_path": "host",
+      "eta_busy": 1.0, "tau_block_us": 0.0, "block_MB": 0.0, "pipelined": true,
+      "tiers": [{"name": "dram", "capacity_GB": 2000, "read_GBps": 218.0, "path": "host"}]
+    }
+    """
+    if "devices_per_host" not in cfg:
+        raise ValueError("host: 'devices_per_host' is required")
+    paths: Dict[str, List[PathStageSpec]] = {}
+    for name, stages in (cfg.get("paths") or {}).items():
+        if not isinstance(stages, list):
+            raise ValueError(f"host.paths[{name!r}] must be a list of stages")
+        paths[str(name)] = [
+            PathStageSpec(
+                name=str(st.get("name", f"{name}_{i}")),
+                bw_per_port_GBps=float(st["bw_per_port_GBps"]),
+                ports=int(st.get("ports", 1)),
+                per=str(st.get("per", "path")),
+                alpha_us=float(st.get("alpha_us", 0.0)),
+            )
+            for i, st in enumerate(stages)
+        ]
+    return HostSpec(
+        devices_per_host=int(cfg["devices_per_host"]),
+        paths=paths,
+        handoff_path=str(cfg.get("handoff_path", "")),
+        eta_busy=float(cfg.get("eta_busy", 1.0)),
+        tau_block_us=float(cfg.get("tau_block_us", 0.0)),
+        block_MB=float(cfg.get("block_MB", 0.0)),
+        pipelined=bool(cfg.get("pipelined", True)),
+        tiers=[
+            KVTierSpec(
+                name=str(t["name"]),
+                capacity_GB=float(t["capacity_GB"]),
+                read_GBps=float(t["read_GBps"]),
+                write_GBps=float(t["write_GBps"]) if t.get("write_GBps") is not None else None,
+                ports=int(t.get("ports", 1)),
+                alpha_us=float(t.get("alpha_us", 0.0)),
+                path=str(t.get("path", "")),
+            )
+            for t in (cfg.get("tiers") or [])
+        ],
     )
 
 
