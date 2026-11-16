@@ -33,8 +33,8 @@
         <link rel="icon" href="favicon-de23e50b.svg">
         <link rel="shortcut icon" href="favicon-8114d1fc.png">
         <link rel="stylesheet" href="css/variables-8adf115d.css">
-        <link rel="stylesheet" href="css/general-2459343d.css">
-        <link rel="stylesheet" href="css/chrome-ae938929.css">
+        <link rel="stylesheet" href="css/general-e96d0476.css">
+        <link rel="stylesheet" href="css/chrome-d279d366.css">
         <link rel="stylesheet" href="css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -53,10 +53,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-c29cd1d5.js";
+            window.path_to_searchindex_js = "searchindex-9e24694e.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-87917597.js"></script>
+        <script src="toc-52454c4f.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -197,7 +197,7 @@
                     <main>
                         <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.4/dist/katex.min.css">
 <h1 id="decode-modeling"><a class="header" href="#decode-modeling">Decode Modeling</a></h1>
-<p><strong>Author:</strong> Yue Lu</p>
+<p><strong>Author:</strong> Yue Lu<br><strong>Date:</strong> November 2026</p>
 <p>First-principles analytical derivation of decode-phase latency, throughput, and memory bandwidth for LLM inference on a cluster. The chapters are intentionally <strong>implementation-independent</strong> — they describe the cost model, the assumptions, and the symbol conventions; the FLARE code in <a href="https://github.com/spiceMonkey/flare-llm"><code>spiceMonkey/flare-llm</code></a> is one possible realization.</p>
 <p><strong>Where to start.</strong> <a href="decode.html">Decode and TPOT</a> is the centerpiece. The other two chapters cover the supporting physics it references:</p>
 <ul>
@@ -205,6 +205,7 @@
 <li><a href="sram.html">Memory hierarchy</a> — multi-tier roofline that generalizes the legacy single-HBM model to SRAM-augmented and 3D-stacked devices</li>
 </ul>
 <p>For the collective-communication cost model that decode references throughout (α–β cost form, ring / tree / hierarchical algorithms, topology composition, in-network reduction), see the dedicated tutorial at <a href="https://spicemonkey.github.io/collective-comm/">spicemonkey.github.io/collective-comm</a> — linked from the <a href="collective_comm.html">Collective Communication</a> chapter.</p>
+<p><strong>Serving and deployment.</strong> Four chapters build on the decode model: <a href="kv.html">KV cache management</a>, <a href="framework.html">Framework overhead</a>, <a href="slo.html">SLO feasibility</a>, and <a href="disaggregation.html">Phase and memory disaggregation</a>, which sizes separate prefill and decode pools, prices the cache transfer between them, and adds host memory for caches that are not being decoded.</p>
 <p><strong>Scope.</strong> This book is intentionally focused. Prefill, end-to-end metrics, SLO feasibility, KV paging, and serving-framework overhead each have their own derivation docs in the <a href="https://github.com/spiceMonkey/flare-llm/tree/main/documentation/modeling"><code>documentation/modeling/</code></a> tree on GitHub, but they’re not in this book yet.</p>
 
                     </main>
@@ -245,11 +246,11 @@
 
         <script src="elasticlunr-ef4e11c1.min.js"></script>
         <script src="mark-09e88c2c.min.js"></script>
-        <script src="searcher-c2a407aa.js"></script>
+        <script src="searcher-09f2665d.js"></script>
 
         <script src="clipboard-1626706a.min.js"></script>
         <script src="highlight-abc7f01d.js"></script>
-        <script src="book-a0b12cfe.js"></script>
+        <script src="book-609e4cb8.js"></script>
 
         <!-- Custom JS scripts -->
 

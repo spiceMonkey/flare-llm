@@ -236,7 +236,7 @@
 <text x="820" y="762" font-size="11" fill="#333">Only AR gains bandwidth: 2·M/BW in software → M/BW.</text>
 <rect x="860" y="500" width="260" height="52" rx="6" fill="#aed6f1" stroke="#2874a6" stroke-width="2"/>
 <text x="990.0" y="524.0" text-anchor="middle" font-size="13" font-weight="bold" fill="#1a5276">switch ALU (Σ)  +  multicast</text>
-<text x="990.0" y="538.0" text-anchor="middle" font-size="10" font-style="italic" fill="#1a5276">scatter-gather engine for hardware A2A</text>
+<text x="990.0" y="538.0" text-anchor="middle" font-size="10" font-style="italic" fill="#1a5276">what-if: scatter-gather for hardware A2A</text>
 <line x1="859.0" y1="632.0" x2="859.0" y2="558.0" stroke="#2874a6" stroke-width="2" marker-end="url(#aUp)"/>
 <line x1="871.0" y1="554.0" x2="871.0" y2="628.0" stroke="#1a5276" stroke-width="2" marker-end="url(#aDn)"/>
 <rect x="853.0" y="632.0" width="24" height="24" rx="4" fill="#abebc6" stroke="#1e8449" stroke-width="1.5"/>
