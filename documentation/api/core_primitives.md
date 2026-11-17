@@ -453,7 +453,7 @@ primitive matches the doc convention:
 - A2A: total per-rank A2A payload (``N`` chunks of size ``M/N`` each).
 - P2P: single-message payload.
 
-``G`` is the group rank count, ``alpha\_s`` is per-hop latency in seconds, and ``bw\_Bps`` is the per-rank port bandwidth (one direction) in bytes per second — on a star each rank has one such port; on a torus / mesh it is the per-link bandwidth. Each function returns seconds. Functions return ``0.0`` on no-op group sizes (``G ≤ 1``) so callers can skip shape-level guards, and raise ``ValueError`` on a non-positive bandwidth (a dead link is not a free one).
+``G`` is the group rank count, ``alpha\_s`` is per-hop latency in seconds, and ``bw\_Bps`` is the per-rank port bandwidth (one direction) in bytes per second — on a star each rank has one such port; on a torus / mesh it is the per-link bandwidth. Each function returns seconds. Functions that take a group return ``0.0`` on no-op group sizes (``G ≤ 1``) so callers can skip shape-level guards; ``p2p\_hop``, ``inc\_broadcast``, ``inc\_reduce`` and ``inc\_all\_reduce`` take no group and always price one exchange. A function that prices at least one exchange raises ``ValueError`` on a non-positive bandwidth (a dead link is not a free one) and on a negative payload or latency; a group size or torus dimension that is not a whole number is always a ``ValueError``. (A no-op group returns ``0.0`` before its payload, latency and bandwidth are examined.)
 
 Pipelined variants
 ------------------
@@ -480,8 +480,11 @@ Calibration profile (``05\_contention\_and\_congestion.md`` §4.1):
 
 - Crossbar (NVLink + NVSwitch, no SHARP):    η\_α = 1.00, η\_β = 0.80
 - NVLS (NVLink SHARP, in-network reduction): η\_α = 1.00, η\_β = 0.52
-- Torus (off-prefix + concurrent groups):    η\_α = 1.20, η\_β = 0.60
-- Fat-tree / Clos at oversubscription s:     η\_β = min(η\_β\_hw, 1/s)   (§4.2)
+- Torus (assumed placeholder — concurrent groups sharing links, mild
+layout penalty; not a measurement):       η\_α = 1.20, η\_β = 0.60
+- Fat-tree / Clos at oversubscription s:     η\_β ≤ min(η\_β\_hw, 1/s)   (§4.2)
+
+Both coefficients must be positive; the ranges above are what the coefficients mean, and a value outside them is not rejected.
 
 ### `p2p_hop(M: float, alpha_s: float, bw_Bps: float) -> float`
 
@@ -489,7 +492,7 @@ Single send / recv — ``01\_collective\_algorithms.md`` §8.
 
     t = α + M / BW
 
-The degenerate N=2 case of any collective. Used per inter-stage hop in pipeline parallelism.
+The building block of every schedule in this module (and the N=2 case of broadcast and reduce). Used per inter-stage hop in pipeline parallelism.
 
 ### `ring_broadcast(M: float, G: int, alpha_s: float, bw_Bps: float, pipelined: bool=False) -> float`
 
@@ -508,6 +511,8 @@ Binomial tree broadcast — ``01\_collective\_algorithms.md`` §3.2.
     pipelined (P→P*):       t ≈ ⌈log₂ G⌉·α + M / BW
 
 Binomial-tree BC is the MPI-library default (MPICH / Open MPI). NCCL restricts ``ncclBroadcast`` to its ring algorithm. On a single-port fabric the pipelined ``M/BW`` floor is that of the two-tree [SST09] schedule (each tree carries ``M/2``, so a rank's port moves ``M`` per direction); a pure binomial root would push ``⌈log₂ G⌉·M`` through its port and a lone binary tree ``2M``.
+
+For that pipelined two-tree form α is charged once per tree level (a rank addresses both children in one step; the port limits bytes only). In the one-message-per-step model [SST09] works in, the two-tree costs about ``2⌈log₂ G⌉·α`` — §3.2, App. C.4.
 
 ### `inc_broadcast(M: float, alpha_s: float, bw_Bps: float) -> float`
 
@@ -563,6 +568,8 @@ N=512 anchors in ``04\_in\_network\_collectives.md`` §3.1):
 
 Each rank is interior in one tree and a leaf in the other, so it receives ``M/2`` from each of its two children during reduce and ``M/2`` from each of its two parents during broadcast: ``2M`` in (and ``2M`` out) through one port. Pipelining removes waiting, not bytes, so the BW coefficient floors at 2 — the same dual-touch ``BW\_eff = BW/2`` that ring AR pays, and the factor INC AR removes.
 
+α is charged once per tree level per pass — NCCL's tree kernels cover all of an interior rank's children in one primitive call. In the one-message-per-step model [SST09] works in, the latency term would be about ``4⌈log₂ G⌉·α`` (§5.2, App. C.4).
+
 Multi-port fabric (``multi\_port=True`` — every tree edge is its own full-BW link, up to 4 per rank: parent and two children in one tree, parent in the other): both BW terms halve,
 
     non-pipelined (P=1):    t = 2⌈log₂ G⌉·α + ⌈log₂ G⌉ · M / BW
@@ -580,7 +587,7 @@ Rabenseifner halving-doubling AR — ``01\_collective\_algorithms.md`` App. B.2.
 
     t = 2⌈log₂ G⌉·α + 2·(G-1)/G · M / BW
 
-Two complementary hypercube passes (recursive halving for RS, recursive doubling for AG) with chunk-exponential payloads. Matches ring's BW floor with log-depth α — but **not shipped by NCCL** for AR; reference only. Power-of-2 G is required for clean partner pairings.
+Two complementary hypercube passes (recursive halving for RS, recursive doubling for AG) with chunk-exponential payloads. Matches ring's BW floor with log-depth α — but **not shipped by NCCL** for AR; reference only. The schedule pairs ranks cleanly only for power-of-2 G; any other G is accepted and costed with ``⌈log₂ G⌉``, which is then a lower bound.
 
 ### `inc_all_reduce(M: float, alpha_s: float, bw_Bps: float) -> float`
 
@@ -612,7 +619,7 @@ Recursive-doubling AG — ``01\_collective\_algorithms.md`` App. B.4.
 
     t = ⌈log₂ G⌉·α + (G-1)/G · M / BW
 
-Hypercube butterfly with doubling chunk size. MPI menus ship this alongside ring; NCCL does not. Power-of-2 G required for clean pairings.
+Hypercube butterfly with doubling chunk size. MPI menus ship this alongside ring; NCCL does not. Clean pairings need power-of-2 G; any other G is accepted and costed with ``⌈log₂ G⌉``, a lower bound.
 
 ### `recursive_halving_reduce_scatter(M: float, G: int, alpha_s: float, bw_Bps: float) -> float`
 
@@ -620,7 +627,7 @@ Recursive-halving RS — ``01\_collective\_algorithms.md`` App. B.4.
 
     t = ⌈log₂ G⌉·α + (G-1)/G · M / BW
 
-Time-reverse of recursive-doubling AG: hypercube butterfly with halving chunk size, accumulating on receive. Power-of-2 G required.
+Time-reverse of recursive-doubling AG: hypercube butterfly with halving chunk size, accumulating on receive. Clean pairings need power-of-2 G; any other G is accepted and costed with ``⌈log₂ G⌉``, a lower bound.
 
 ### `pat_all_gather(M: float, G: int, alpha_s: float, bw_Bps: float) -> float`
 
@@ -652,7 +659,7 @@ In-network reduce-scatter — ``04\_in\_network\_collectives.md`` §1.4.
 
     t = 2·α_switch + (G-1)/G · M / BW
 
-Mirror of inc\_all\_gather: α-only collapse, BW unchanged from software ring RS on a full-duplex crossbar.
+Mirror of inc\_all\_gather: α-only collapse, BW unchanged from software ring RS on a full-duplex crossbar. Each rank withholds its own slice and adds it locally to the slice it receives, so a port carries ``(G-1)/G · M``.
 
 ### `pairwise_a2a(M: float, G: int, alpha_s: float, bw_Bps: float) -> float`
 
@@ -668,7 +675,7 @@ Ring relay A2A on a bidirectional ring — ``01\_collective\_algorithms.md`` §7
 
     t ≈ ⌊G/2⌋·α + (G/8) · M / BW
 
-Shortest-arc forwarding through intermediate ranks. ``bw\_Bps`` is the bandwidth of each ring link (a rank has two). The ring's bisection is two links per direction and ``G·M/4`` bytes cross it each way, so the busiest link carries ``G·M/8`` — the BW term grows with ``G`` and exceeds pairwise direct-send's single-port ``(G-1)/G`` from ``G = 8`` on. The α term is the longest path (``⌊G/2⌋`` hops) with chunks streamed back-to-back.
+Shortest-arc forwarding through intermediate ranks. ``bw\_Bps`` is the bandwidth of each ring link (a rank has two). The ring's bisection is two links per direction and ``G·M/4`` bytes cross it each way, so the busiest link carries ``G·M/8`` — the BW term grows with ``G`` and exceeds pairwise direct-send's single-port ``(G-1)/G`` from ``G = 8`` on (with the ``G/8`` form used here, from ``G = 7``, where the exact odd-``G`` value ``(G²-1)/(8G)`` ties pairwise at ``6/7``). The α term is the longest path (``⌊G/2⌋`` hops) with chunks streamed back-to-back — a different convention from ``pairwise\_a2a``, which charges one α per chunk a rank sends; one α per chunk here would be ``G²/8`` per link (32,768 α at ``G = 512``).
 
 ``G/8`` assumes antipodal chunks are split across both directions (even ``G``); a fixed rightward tie-break gives ``(G+2)/8`` — the lockstep ``3α + (3/4)·M/BW`` of the §7.1 trace at ``G = 4``. Evaluated as ``torus\_a2a(M, (G,), ...)``, so ``G = 2`` (one link, coefficient 1/2) follows the size-2 rule documented there.
 
@@ -678,7 +685,7 @@ Bruck log-round A2A — ``01\_collective\_algorithms.md`` App. B.5.
 
     t = ⌈log₂ G⌉·α + ⌈log₂ G⌉/2 · M / BW
 
-Log-depth latency at the cost of an ``⌈log₂ G⌉/2`` BW coefficient — every byte crosses ``log₂ G / 2`` link-hops on average (chunks bounce around the hypercube before reaching their final destination). Reference only; NCCL / RCCL do not ship Bruck.
+Log-depth latency at the cost of an ``⌈log₂ G⌉/2`` BW coefficient — every byte crosses ``log₂ G / 2`` link-hops on average (chunks bounce around the hypercube before reaching their final destination). The schedule works for any G; when G is not a power of two the rounds ship unequal slot counts (at most ``⌊G/2⌋`` chunks each), so the BW term here is an upper bound. Reference only; NCCL / RCCL do not ship Bruck.
 
 ### `inc_a2a(M: float, G: int, alpha_s: float, bw_Bps: float) -> float`
 
@@ -686,7 +693,7 @@ Hardware A2A (crossbar scatter-gather) — ``04\_in\_network\_collectives.md`` �
 
     t = 2·α_switch + (G-1)/G · M / BW
 
-A what-if primitive: no vendor documents a hardware all-to-all collective (Tomahawk Ultra names AllReduce, Broadcast and AllGather; Quantum-X800's SHARPv4 lists an undefined "ScatterGather"). It would collapse software A2A's (G-1) endpoint-driven scheduling rounds into one switch-driven transaction. Per-rank wire-side bytes are unchanged from software pairwise (the switch routes verbatim — no aggregation, no replication), so the BW term stays at the per-port bound.
+A what-if primitive: no vendor documents an all-to-all collective executed in a switch (Tomahawk Ultra names AllReduce, Broadcast and AllGather; Quantum-X800's SHARPv4 lists an undefined "ScatterGather"; the ``MPI\_Alltoall`` hardware engine NVIDIA lists is in the ConnectX-8 adapter, not the switch). It would collapse software A2A's (G-1) endpoint-driven scheduling rounds into one switch-driven transaction. Per-rank wire-side bytes are unchanged from software pairwise (the switch routes verbatim — no aggregation, no replication), so the BW term stays at the per-port bound.
 
 ``alpha\_s`` is ``α\_switch``; the factor of 2 is the same one-hop-in, one-hop-out traversal every INC primitive in this module pays.
 
@@ -740,7 +747,7 @@ Only ``d\_max`` (not N) scales the BW term: asymmetric layouts pay disproportion
 
 A dim of size 2 has no distinct wraparound link (it coincides with the direct link), so cutting across it severs only ``N/2`` links and that dim contributes ``d\_i/4 = 1/2`` instead of ``d\_i/8``. The BW coefficient is therefore the worst cut over dims, ``max\_i c\_i`` with ``c\_i = d\_i/8`` for ``d\_i ≥ 3`` and ``1/2`` for ``d\_i = 2`` — which equals ``d\_max/8`` whenever ``d\_max ≥ 4``. For odd ``d`` the exact per-dim value is ``(d²-1)/(8d)`` (``(d²-1)/(4d)`` on the mesh); the ``≈`` covers it.
 
-M is the per-rank total A2A payload (G chunks of size M/G).
+M is the per-rank total A2A payload (N chunks of size M/N). α is charged per hop of the longest path (chunks streamed back to back), not per chunk; one α per chunk on a cut link would be ``N·d\_max/8`` (512 α at 8×8×8, against the 12 charged).
 
 ### `torus_broadcast(M: float, dims: Sequence[int], alpha_s: float, bw_Bps: float, wraparound: bool=True, pipelined: bool=False) -> float`
 
@@ -756,7 +763,7 @@ k-D mesh (open-line per dim, unidirectional from end):
     non-pipelined:  t = Σ(d_i-1)·α + Σ(d_i-1) · M / BW
     pipelined:      t ≈ Σ(d_i-1)·α + M / BW
 
-Pipelined form hits the ``M/BW`` ceiling (``02\_topology\_mapping.md`` §5.1 BC row).
+Pipelined form hits the ``M/BW`` ceiling (``02\_topology\_mapping.md`` §5.1 BC row), and is the form the specification tabulates. The non-pipelined form is its literal P=1 counterpart: one full-``M`` step per hop of the longest path.
 
 ### `torus_reduce(M: float, dims: Sequence[int], alpha_s: float, bw_Bps: float, wraparound: bool=True, pipelined: bool=False) -> float`
 

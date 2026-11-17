@@ -40,9 +40,14 @@ primitive matches the doc convention:
 ``G`` is the group rank count, ``alpha_s`` is per-hop latency in seconds, and
 ``bw_Bps`` is the per-rank port bandwidth (one direction) in bytes per second —
 on a star each rank has one such port; on a torus / mesh it is the per-link
-bandwidth. Each function returns seconds. Functions return ``0.0`` on no-op
-group sizes (``G ≤ 1``) so callers can skip shape-level guards, and raise
-``ValueError`` on a non-positive bandwidth (a dead link is not a free one).
+bandwidth. Each function returns seconds. Functions that take a group return
+``0.0`` on no-op group sizes (``G ≤ 1``) so callers can skip shape-level
+guards; ``p2p_hop``, ``inc_broadcast``, ``inc_reduce`` and ``inc_all_reduce``
+take no group and always price one exchange. A function that prices at least
+one exchange raises ``ValueError`` on a non-positive bandwidth (a dead link is
+not a free one) and on a negative payload or latency; a group size or torus
+dimension that is not a whole number is always a ``ValueError``. (A no-op
+group returns ``0.0`` before its payload, latency and bandwidth are examined.)
 
 Pipelined variants
 ------------------
@@ -78,15 +83,50 @@ def _prod(xs: Sequence[int]) -> int:
     return n
 
 
+def _whole(x) -> bool:
+    """True for a finite whole number (an int, or a float such as 8.0)."""
+    try:
+        return x == int(x)
+    except (OverflowError, ValueError):     # inf, nan
+        return False
+
+
+def _all(cond) -> bool:
+    """Truth of a comparison whose operands may be scalars or arrays (every element must hold)."""
+    return bool(cond.all()) if hasattr(cond, "all") else bool(cond)
+
+
+def _noop(G: int) -> bool:
+    """True for a group that has nothing to exchange (``G ≤ 1``); rejects a
+    negative or non-integer rank count."""
+    if not _whole(G) or G < 0:
+        raise ValueError(f"group size must be a non-negative integer, got {G!r}")
+    return G <= 1
+
+
+def _dims(dims: Sequence[int]) -> tuple[int, ...]:
+    """Torus / mesh shape as a tuple of positive integers (any iterable is accepted)."""
+    dims = tuple(dims)
+    if any(not _whole(d) or d < 1 for d in dims):
+        raise ValueError(f"every dimension must be a positive integer, got {dims!r}")
+    return dims
+
+
 def _inner_size(N: int, L: int) -> int:
-    """Ranks per outer group; ``L`` must satisfy ``1 ≤ L ≤ N`` and divide ``N``."""
-    if L < 1 or L > N or N % L != 0:
-        raise ValueError(f"L={L} must be in [1, N] and divide N={N}")
-    return N // L
+    """Ranks per outer group; ``L`` must be an integer with ``1 ≤ L ≤ N`` that divides ``N``."""
+    if not _whole(N) or not _whole(L) or L < 1 or L > N or N % L != 0:
+        raise ValueError(f"L={L} must be an integer in [1, N] that divides N={N}")
+    return int(N) // int(L)
 
 
-def _check_bw(bw_Bps: float) -> None:
-    if bw_Bps <= 0:
+def _check_inputs(M: float, alpha_s: float, bw_Bps: float) -> None:
+    """Reject a negative payload or latency and a bandwidth that is not positive
+    (NaN included). ``M`` and ``alpha_s`` may be arrays; every element is checked."""
+    if not _all(M >= 0):
+        raise ValueError(f"payload must be non-negative, got {M!r}")
+    if not _all(alpha_s >= 0):
+        raise ValueError(f"per-hop latency must be non-negative, got {alpha_s!r}")
+    if not _all(bw_Bps > 0):
         raise ValueError(f"bandwidth must be positive, got {bw_Bps!r}")
 
 
@@ -109,9 +149,15 @@ def apply_eta(
 
     - Crossbar (NVLink + NVSwitch, no SHARP):    η_α = 1.00, η_β = 0.80
     - NVLS (NVLink SHARP, in-network reduction): η_α = 1.00, η_β = 0.52
-    - Torus (off-prefix + concurrent groups):    η_α = 1.20, η_β = 0.60
-    - Fat-tree / Clos at oversubscription s:     η_β = min(η_β_hw, 1/s)   (§4.2)
+    - Torus (assumed placeholder — concurrent groups sharing links, mild
+      layout penalty; not a measurement):       η_α = 1.20, η_β = 0.60
+    - Fat-tree / Clos at oversubscription s:     η_β ≤ min(η_β_hw, 1/s)   (§4.2)
+
+    Both coefficients must be positive; the ranges above are what the
+    coefficients mean, and a value outside them is not rejected.
     """
+    if not _all(eta_alpha > 0) or not _all(eta_beta > 0):
+        raise ValueError(f"contention coefficients must be positive, got {eta_alpha!r}, {eta_beta!r}")
     return alpha_s * eta_alpha, bw_Bps * eta_beta
 
 
@@ -125,10 +171,10 @@ def p2p_hop(M: float, alpha_s: float, bw_Bps: float) -> float:
 
         t = α + M / BW
 
-    The degenerate N=2 case of any collective. Used per inter-stage hop in
-    pipeline parallelism.
+    The building block of every schedule in this module (and the N=2 case of
+    broadcast and reduce). Used per inter-stage hop in pipeline parallelism.
     """
-    _check_bw(bw_Bps)
+    _check_inputs(M, alpha_s, bw_Bps)
     return alpha_s + M / bw_Bps
 
 
@@ -149,9 +195,9 @@ def ring_broadcast(
     ``2·sqrt((G-2)·α·M/BW)`` (Appendix C); it vanishes relative to ``M/BW``
     as ``M → ∞``.
     """
-    if G <= 1:
+    if _noop(G):
         return 0.0
-    _check_bw(bw_Bps)
+    _check_inputs(M, alpha_s, bw_Bps)
     bw_coeff = 1.0 if pipelined else (G - 1)
     return (G - 1) * alpha_s + bw_coeff * (M / bw_Bps)
 
@@ -170,10 +216,15 @@ def tree_broadcast(
     schedule (each tree carries ``M/2``, so a rank's port moves ``M`` per
     direction); a pure binomial root would push ``⌈log₂ G⌉·M`` through its
     port and a lone binary tree ``2M``.
+
+    For that pipelined two-tree form α is charged once per tree level (a
+    rank addresses both children in one step; the port limits bytes only).
+    In the one-message-per-step model [SST09] works in, the two-tree costs
+    about ``2⌈log₂ G⌉·α`` — §3.2, App. C.4.
     """
-    if G <= 1:
+    if _noop(G):
         return 0.0
-    _check_bw(bw_Bps)
+    _check_inputs(M, alpha_s, bw_Bps)
     log_G = math.ceil(math.log2(G))
     bw_coeff = 1.0 if pipelined else log_G
     return log_G * alpha_s + bw_coeff * (M / bw_Bps)
@@ -191,7 +242,7 @@ def inc_broadcast(M: float, alpha_s: float, bw_Bps: float) -> float:
     on one direction (single-switch star: ``α_switch``; k-tier scale-out
     aggregation tree: ``Σ α_tier``).
     """
-    _check_bw(bw_Bps)
+    _check_inputs(M, alpha_s, bw_Bps)
     return 2 * alpha_s + M / bw_Bps
 
 
@@ -210,9 +261,9 @@ def ring_reduce(
 
     Time-reverse of ring BC with on-chip add at every hop.
     """
-    if G <= 1:
+    if _noop(G):
         return 0.0
-    _check_bw(bw_Bps)
+    _check_inputs(M, alpha_s, bw_Bps)
     bw_coeff = 1.0 if pipelined else (G - 1)
     return (G - 1) * alpha_s + bw_coeff * (M / bw_Bps)
 
@@ -229,9 +280,9 @@ def tree_reduce(
     BW floor at log-depth α). MPI libraries ship the tree; NCCL restricts
     ``ncclReduce`` to its ring algorithm.
     """
-    if G <= 1:
+    if _noop(G):
         return 0.0
-    _check_bw(bw_Bps)
+    _check_inputs(M, alpha_s, bw_Bps)
     log_G = math.ceil(math.log2(G))
     bw_coeff = 1.0 if pipelined else log_G
     return log_G * alpha_s + bw_coeff * (M / bw_Bps)
@@ -246,7 +297,7 @@ def inc_reduce(M: float, alpha_s: float, bw_Bps: float) -> float:
     Each rank pushes V_i upstream (1 hop); switch ALU sums on-chip and
     forwards the single reduced result to the root (1 hop).
     """
-    _check_bw(bw_Bps)
+    _check_inputs(M, alpha_s, bw_Bps)
     return 2 * alpha_s + M / bw_Bps
 
 
@@ -264,9 +315,9 @@ def ring_all_reduce(M: float, G: int, alpha_s: float, bw_Bps: float) -> float:
     payload bakes pipelining into the derivation, so no ``pipelined`` flag is
     needed. BW coefficient hits the AR floor of 2 as G → ∞.
     """
-    if G <= 1:
+    if _noop(G):
         return 0.0
-    _check_bw(bw_Bps)
+    _check_inputs(M, alpha_s, bw_Bps)
     return 2 * (G - 1) * alpha_s + 2 * ((G - 1) / G) * (M / bw_Bps)
 
 
@@ -294,6 +345,11 @@ def tree_all_reduce(
     BW coefficient floors at 2 — the same dual-touch ``BW_eff = BW/2`` that
     ring AR pays, and the factor INC AR removes.
 
+    α is charged once per tree level per pass — NCCL's tree kernels cover
+    all of an interior rank's children in one primitive call. In the
+    one-message-per-step model [SST09] works in, the latency term would be
+    about ``4⌈log₂ G⌉·α`` (§5.2, App. C.4).
+
     Multi-port fabric (``multi_port=True`` — every tree edge is its own
     full-BW link, up to 4 per rank: parent and two children in one tree,
     parent in the other): both BW terms halve,
@@ -313,9 +369,9 @@ def tree_all_reduce(
     ``G = 2`` or ``3`` the closed form overcounts (two ranks need only one
     exchange, ``α + M/BW``).
     """
-    if G <= 1:
+    if _noop(G):
         return 0.0
-    _check_bw(bw_Bps)
+    _check_inputs(M, alpha_s, bw_Bps)
     log_G = math.ceil(math.log2(G))
     bw_coeff = 1.0 if pipelined else float(log_G)
     if not multi_port:
@@ -333,11 +389,12 @@ def rabenseifner_all_reduce(
     Two complementary hypercube passes (recursive halving for RS, recursive
     doubling for AG) with chunk-exponential payloads. Matches ring's BW floor
     with log-depth α — but **not shipped by NCCL** for AR; reference only.
-    Power-of-2 G is required for clean partner pairings.
+    The schedule pairs ranks cleanly only for power-of-2 G; any other G is
+    accepted and costed with ``⌈log₂ G⌉``, which is then a lower bound.
     """
-    if G <= 1:
+    if _noop(G):
         return 0.0
-    _check_bw(bw_Bps)
+    _check_inputs(M, alpha_s, bw_Bps)
     log_G = math.ceil(math.log2(G))
     return 2 * log_G * alpha_s + 2 * ((G - 1) / G) * (M / bw_Bps)
 
@@ -356,7 +413,7 @@ def inc_all_reduce(M: float, alpha_s: float, bw_Bps: float) -> float:
     aggregation tree: ``Σ α_tier``); the leading factor of 2 covers the
     reduce-up + multicast-down round trip.
     """
-    _check_bw(bw_Bps)
+    _check_inputs(M, alpha_s, bw_Bps)
     return 2 * alpha_s + M / bw_Bps
 
 
@@ -374,9 +431,9 @@ def ring_all_gather(M: float, G: int, alpha_s: float, bw_Bps: float) -> float:
     pipelined (P=N) like ring AR. AG is exactly Phase 2 of ring AR with no
     reduction; RS is Phase 1 (same formula).
     """
-    if G <= 1:
+    if _noop(G):
         return 0.0
-    _check_bw(bw_Bps)
+    _check_inputs(M, alpha_s, bw_Bps)
     return (G - 1) * alpha_s + ((G - 1) / G) * (M / bw_Bps)
 
 
@@ -389,9 +446,9 @@ def ring_reduce_scatter(M: float, G: int, alpha_s: float, bw_Bps: float) -> floa
     the time-reverse of AG; same wiring, accumulating partial sum on every
     forward instead of overwriting.
     """
-    if G <= 1:
+    if _noop(G):
         return 0.0
-    _check_bw(bw_Bps)
+    _check_inputs(M, alpha_s, bw_Bps)
     return (G - 1) * alpha_s + ((G - 1) / G) * (M / bw_Bps)
 
 
@@ -403,11 +460,12 @@ def recursive_doubling_all_gather(
         t = ⌈log₂ G⌉·α + (G-1)/G · M / BW
 
     Hypercube butterfly with doubling chunk size. MPI menus ship this
-    alongside ring; NCCL does not. Power-of-2 G required for clean pairings.
+    alongside ring; NCCL does not. Clean pairings need power-of-2 G; any other
+    G is accepted and costed with ``⌈log₂ G⌉``, a lower bound.
     """
-    if G <= 1:
+    if _noop(G):
         return 0.0
-    _check_bw(bw_Bps)
+    _check_inputs(M, alpha_s, bw_Bps)
     log_G = math.ceil(math.log2(G))
     return log_G * alpha_s + ((G - 1) / G) * (M / bw_Bps)
 
@@ -420,11 +478,12 @@ def recursive_halving_reduce_scatter(
         t = ⌈log₂ G⌉·α + (G-1)/G · M / BW
 
     Time-reverse of recursive-doubling AG: hypercube butterfly with halving
-    chunk size, accumulating on receive. Power-of-2 G required.
+    chunk size, accumulating on receive. Clean pairings need power-of-2 G; any
+    other G is accepted and costed with ``⌈log₂ G⌉``, a lower bound.
     """
-    if G <= 1:
+    if _noop(G):
         return 0.0
-    _check_bw(bw_Bps)
+    _check_inputs(M, alpha_s, bw_Bps)
     log_G = math.ceil(math.log2(G))
     return log_G * alpha_s + ((G - 1) / G) * (M / bw_Bps)
 
@@ -443,9 +502,9 @@ def pat_all_gather(M: float, G: int, alpha_s: float, bw_Bps: float) -> float:
     number of full-buffer transfers (the α count grows; not modelled here).
     NCCL 2.23 ships it inter-node at 1 rank per node.
     """
-    if G <= 1:
+    if _noop(G):
         return 0.0
-    _check_bw(bw_Bps)
+    _check_inputs(M, alpha_s, bw_Bps)
     log_G = math.ceil(math.log2(G))
     return log_G * alpha_s + ((G - 1) / G) * (M / bw_Bps)
 
@@ -458,9 +517,9 @@ def pat_reduce_scatter(M: float, G: int, alpha_s: float, bw_Bps: float) -> float
     Time-reverse of PAT AG (near dimension first); same small-operation
     regime and the same 1-rank-per-node shipping restriction.
     """
-    if G <= 1:
+    if _noop(G):
         return 0.0
-    _check_bw(bw_Bps)
+    _check_inputs(M, alpha_s, bw_Bps)
     log_G = math.ceil(math.log2(G))
     return log_G * alpha_s + ((G - 1) / G) * (M / bw_Bps)
 
@@ -475,9 +534,9 @@ def inc_all_gather(M: float, G: int, alpha_s: float, bw_Bps: float) -> float:
     ``(G-1)·α`` to ``2·α_switch``. ``alpha_s`` is the summed per-tier switch α
     (one direction).
     """
-    if G <= 1:
+    if _noop(G):
         return 0.0
-    _check_bw(bw_Bps)
+    _check_inputs(M, alpha_s, bw_Bps)
     return 2 * alpha_s + ((G - 1) / G) * (M / bw_Bps)
 
 
@@ -487,11 +546,12 @@ def inc_reduce_scatter(M: float, G: int, alpha_s: float, bw_Bps: float) -> float
         t = 2·α_switch + (G-1)/G · M / BW
 
     Mirror of inc_all_gather: α-only collapse, BW unchanged from software
-    ring RS on a full-duplex crossbar.
+    ring RS on a full-duplex crossbar. Each rank withholds its own slice and
+    adds it locally to the slice it receives, so a port carries ``(G-1)/G · M``.
     """
-    if G <= 1:
+    if _noop(G):
         return 0.0
-    _check_bw(bw_Bps)
+    _check_inputs(M, alpha_s, bw_Bps)
     return 2 * alpha_s + ((G - 1) / G) * (M / bw_Bps)
 
 
@@ -510,9 +570,9 @@ def pairwise_a2a(M: float, G: int, alpha_s: float, bw_Bps: float) -> float:
     that run A2A back-to-back (MoE Dispatch + Combine) double both terms
     externally — see ``01_collective_algorithms.md`` §7.2 final paragraph.
     """
-    if G <= 1:
+    if _noop(G):
         return 0.0
-    _check_bw(bw_Bps)
+    _check_inputs(M, alpha_s, bw_Bps)
     return (G - 1) * alpha_s + ((G - 1) / G) * (M / bw_Bps)
 
 
@@ -526,9 +586,13 @@ def ring_relay_a2a(M: float, G: int, alpha_s: float, bw_Bps: float) -> float:
     bandwidth of each ring link (a rank has two). The ring's bisection is two
     links per direction and ``G·M/4`` bytes cross it each way, so the busiest
     link carries ``G·M/8`` — the BW term grows with ``G`` and exceeds
-    pairwise direct-send's single-port ``(G-1)/G`` from ``G = 8`` on. The α
+    pairwise direct-send's single-port ``(G-1)/G`` from ``G = 8`` on (with
+    the ``G/8`` form used here, from ``G = 7``, where the exact odd-``G``
+    value ``(G²-1)/(8G)`` ties pairwise at ``6/7``). The α
     term is the longest path (``⌊G/2⌋`` hops) with chunks streamed
-    back-to-back.
+    back-to-back — a different convention from ``pairwise_a2a``, which charges
+    one α per chunk a rank sends; one α per chunk here would be ``G²/8`` per
+    link (32,768 α at ``G = 512``).
 
     ``G/8`` assumes antipodal chunks are split across both directions (even
     ``G``); a fixed rightward tie-break gives ``(G+2)/8`` — the lockstep
@@ -536,6 +600,8 @@ def ring_relay_a2a(M: float, G: int, alpha_s: float, bw_Bps: float) -> float:
     ``torus_a2a(M, (G,), ...)``, so ``G = 2`` (one link, coefficient 1/2)
     follows the size-2 rule documented there.
     """
+    if _noop(G):
+        return 0.0
     return torus_a2a(M, (G,), alpha_s, bw_Bps)
 
 
@@ -546,12 +612,14 @@ def bruck_a2a(M: float, G: int, alpha_s: float, bw_Bps: float) -> float:
 
     Log-depth latency at the cost of an ``⌈log₂ G⌉/2`` BW coefficient — every
     byte crosses ``log₂ G / 2`` link-hops on average (chunks bounce around
-    the hypercube before reaching their final destination). Reference only;
-    NCCL / RCCL do not ship Bruck.
+    the hypercube before reaching their final destination). The schedule
+    works for any G; when G is not a power of two the rounds ship unequal
+    slot counts (at most ``⌊G/2⌋`` chunks each), so the BW term here is an
+    upper bound. Reference only; NCCL / RCCL do not ship Bruck.
     """
-    if G <= 1:
+    if _noop(G):
         return 0.0
-    _check_bw(bw_Bps)
+    _check_inputs(M, alpha_s, bw_Bps)
     log_G = math.ceil(math.log2(G))
     return log_G * alpha_s + (log_G / 2.0) * (M / bw_Bps)
 
@@ -561,9 +629,11 @@ def inc_a2a(M: float, G: int, alpha_s: float, bw_Bps: float) -> float:
 
         t = 2·α_switch + (G-1)/G · M / BW
 
-    A what-if primitive: no vendor documents a hardware all-to-all collective
-    (Tomahawk Ultra names AllReduce, Broadcast and AllGather; Quantum-X800's
-    SHARPv4 lists an undefined "ScatterGather"). It would collapse
+    A what-if primitive: no vendor documents an all-to-all collective executed
+    in a switch (Tomahawk Ultra names AllReduce, Broadcast and AllGather;
+    Quantum-X800's SHARPv4 lists an undefined "ScatterGather"; the
+    ``MPI_Alltoall`` hardware engine NVIDIA lists is in the ConnectX-8
+    adapter, not the switch). It would collapse
     software A2A's (G-1) endpoint-driven scheduling rounds into one
     switch-driven transaction. Per-rank wire-side bytes are unchanged from
     software pairwise (the switch routes verbatim — no aggregation, no
@@ -575,9 +645,9 @@ def inc_a2a(M: float, G: int, alpha_s: float, bw_Bps: float) -> float:
     No hardware A2A is documented on NVSwitch (NVL72) or Quantum-X800; software
     pairwise is the only documented A2A path on those fabrics.
     """
-    if G <= 1:
+    if _noop(G):
         return 0.0
-    _check_bw(bw_Bps)
+    _check_inputs(M, alpha_s, bw_Bps)
     return 2 * alpha_s + ((G - 1) / G) * (M / bw_Bps)
 
 
@@ -600,10 +670,11 @@ def torus_all_reduce(
     Costs the ideal dim-aligned schedule. Worst-case group misalignment is a
     dispatch-layer concern (see ``02_topology_mapping.md`` §5.2, item 2).
     """
+    dims = _dims(dims)
     N = _prod(dims) if dims else 0
     if N <= 1:
         return 0.0
-    _check_bw(bw_Bps)
+    _check_inputs(M, alpha_s, bw_Bps)
     hops = sum(d - 1 for d in dims)
     return 2 * hops * alpha_s + 2 * ((N - 1) / N) * (M / bw_Bps)
 
@@ -617,10 +688,11 @@ def torus_all_gather(
 
     Half of torus AR. M is the per-rank gathered output.
     """
+    dims = _dims(dims)
     N = _prod(dims) if dims else 0
     if N <= 1:
         return 0.0
-    _check_bw(bw_Bps)
+    _check_inputs(M, alpha_s, bw_Bps)
     hops = sum(d - 1 for d in dims)
     return hops * alpha_s + ((N - 1) / N) * (M / bw_Bps)
 
@@ -634,10 +706,11 @@ def torus_reduce_scatter(
 
     Time-reverse of torus AG. M is the per-rank pre-scatter input.
     """
+    dims = _dims(dims)
     N = _prod(dims) if dims else 0
     if N <= 1:
         return 0.0
-    _check_bw(bw_Bps)
+    _check_inputs(M, alpha_s, bw_Bps)
     hops = sum(d - 1 for d in dims)
     return hops * alpha_s + ((N - 1) / N) * (M / bw_Bps)
 
@@ -682,12 +755,16 @@ def torus_a2a(
     whenever ``d_max ≥ 4``. For odd ``d`` the exact per-dim value is
     ``(d²-1)/(8d)`` (``(d²-1)/(4d)`` on the mesh); the ``≈`` covers it.
 
-    M is the per-rank total A2A payload (G chunks of size M/G).
+    M is the per-rank total A2A payload (N chunks of size M/N). α is charged
+    per hop of the longest path (chunks streamed back to back), not per chunk;
+    one α per chunk on a cut link would be ``N·d_max/8`` (512 α at 8×8×8,
+    against the 12 charged).
     """
+    dims = _dims(dims)
     N = _prod(dims) if dims else 0
     if N <= 1:
         return 0.0
-    _check_bw(bw_Bps)
+    _check_inputs(M, alpha_s, bw_Bps)
     if wraparound:
         diam = sum(d // 2 for d in dims)
         coeff = max(d / 8.0 if d >= 3 else d / 4.0 for d in dims if d > 1)
@@ -718,12 +795,15 @@ def torus_broadcast(
         pipelined:      t ≈ Σ(d_i-1)·α + M / BW
 
     Pipelined form hits the ``M/BW`` ceiling (``02_topology_mapping.md`` §5.1
-    BC row).
+    BC row), and is the form the specification tabulates. The non-pipelined
+    form is its literal P=1 counterpart: one full-``M`` step per hop of the
+    longest path.
     """
+    dims = _dims(dims)
     N = _prod(dims) if dims else 0
     if N <= 1:
         return 0.0
-    _check_bw(bw_Bps)
+    _check_inputs(M, alpha_s, bw_Bps)
     diam = sum(d // 2 for d in dims) if wraparound else sum(d - 1 for d in dims)
     bw_coeff = 1.0 if pipelined else diam
     return diam * alpha_s + bw_coeff * (M / bw_Bps)
@@ -790,7 +870,7 @@ def hierarchical_all_reduce_ring_ring(
 
     ``L`` must divide ``N``.
     """
-    if N <= 1:
+    if _noop(N):
         return 0.0
     _inner_size(N, L)
     if L <= 1:
@@ -864,7 +944,7 @@ def hierarchical_all_gather_ring_ring(
     ``hierarchical_all_reduce_ring_ring``; reduces to flat ring AG when
     ``L = 1`` or ``N = L``. ``L`` must divide ``N``.
     """
-    if N <= 1:
+    if _noop(N):
         return 0.0
     _inner_size(N, L)
     if L <= 1:
@@ -892,7 +972,7 @@ def hierarchical_reduce_scatter_ring_ring(
     Time-reverse of ``hierarchical_all_gather_ring_ring``; same cost. M is
     the per-rank pre-scatter input. ``L`` must divide ``N``.
     """
-    if N <= 1:
+    if _noop(N):
         return 0.0
     _inner_size(N, L)
     if L <= 1:
