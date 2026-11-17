@@ -90,7 +90,11 @@ def optimize_collective_algorithms(
         new_fields["ep_algorithm_decode"] = _resolve(
             tier_chain=system.get_tier_chain("EP"),
             op="moe_a2a",
-            M=mb_decode * k_active * H * b,
+            # Scatter-direct dispatch under DP-attention sends each rank's own
+            # share of the batch, as compute_comm prices it.
+            M=mb_decode * k_active * H * b / (
+                G_TP(partition) if (framework.moe_a2a_pattern == "scatter" and framework.attention_mode == "dp"
+                                    and G_TP(partition) > 1) else 1),
             G=G_EP(partition),
             inc_enabled=inc_enabled,
             align_policy=align_policy,

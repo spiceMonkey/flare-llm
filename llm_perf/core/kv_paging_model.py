@@ -15,8 +15,17 @@ from .primitives import D_batch, D_kv, group_batch
 class KVPagingConfig:
     """KV paging parameters (kv.md §2)."""
     block_size: int = 16                # tokens per block (B_block)
-    beam_width: int = 1                 # W (1 = greedy, no CoW)
+    beam_width: int = 1                 # W: NOT modelled; any value prices as 1 (a warning says so)
     system_overhead_GB: float = 1.5     # CUDA context + kernel workspace
+
+    def __post_init__(self) -> None:
+        if self.beam_width != 1:
+            import warnings
+            warnings.warn(
+                "KVPagingConfig.beam_width is not modelled: copy-on-write sharing between beams has no term, "
+                f"so beam_width={self.beam_width} gives the same result as 1",
+                UserWarning, stacklevel=2,
+            )
 
 
 @dataclass

@@ -163,6 +163,44 @@ def compose_check(partition: PartitionSpec, framework: FrameworkSpec) -> None:
             )
 
 
+def run_check(model, system, partition: PartitionSpec, framework: FrameworkSpec, *, context_tokens: int) -> None:
+    """Refuse a run the model cannot describe. Called by both calculators on entry.
+
+    Raises ValueError when:
+      - the (partition, framework) pair breaks `compose_check`;
+      - EP exceeds the model's number of experts (1 for a dense model): the
+        expert sharding was clamped while the batch was still divided by EP;
+      - one replica needs more devices than the system has (the result used
+        to be a throughput of zero with no error);
+    and warns (UserWarning) when the context is longer than the model's
+    stated maximum (`LlmModelSpec.max_seq_len`), which the run used to accept
+    silently.
+    """
+    compose_check(partition, framework)
+    n_exp = model.moe.n_experts if model.moe is not None else 1
+    if partition.EP > n_exp:
+        raise ValueError(
+            f"EP={partition.EP} exceeds the {n_exp} expert(s) of {model.name}: expert parallelism places whole "
+            "experts on separate devices, so EP cannot exceed their number (and is 1 for a dense model)"
+        )
+    n_rep = N_replica(partition, framework)
+    if n_rep > system.num_devices:
+        raise ValueError(
+            f"one replica needs {n_rep} devices (PP={partition.PP}, TP={partition.TP}, EP={partition.EP}, "
+            f"SP={partition.SP}, layout {framework.tp_ep_layout!r}) but the system has {system.num_devices}"
+        )
+    if context_tokens > model.max_seq_len:
+        # A warning, not an error: the cost model is well defined past the
+        # limit and what-if studies use it, but the run describes a context
+        # the model as specified cannot take.
+        import warnings
+        warnings.warn(
+            f"context of {context_tokens} tokens exceeds the max_seq_len of {model.max_seq_len} stated for "
+            f"{model.name}: the result is for a context this model cannot accept",
+            UserWarning, stacklevel=3,
+        )
+
+
 def decode_microbatch(B: int, PP: int) -> float:
     """Sequences one pipeline stage processes per pass (decode.md §7.2).
 
@@ -217,3 +255,20 @@ def group_batch(B: float, partition: PartitionSpec, framework: FrameworkSpec) ->
     if B >= d:
         return B / d
     return float(min(B, 1))
+
+
+def attn_rank_batch(Bg: float, partition: PartitionSpec, framework: FrameworkSpec) -> float:
+    """Sequences the busiest rank runs through attention: Bg / G_TP floored at one
+    under DP-attention (a rank holds whole sequences); Bg under TP-attention."""
+    if framework.attention_mode == "dp" and partition.TP > 1 and Bg > 0:
+        return max(1.0, Bg / partition.TP)
+    return Bg
+
+
+def kv_batch(Bg: float, partition: PartitionSpec, framework: FrameworkSpec) -> float:
+    """Multiplier for per-sequence quantities that already carry /D_kv
+    (kv_bytes_per_seq, score/value FLOPs). Bg, except under DP-attention, where the
+    busiest rank holds max(1, Bg/G_TP) WHOLE sequences = max(Bg, G_TP) shards."""
+    if framework.attention_mode == "dp" and partition.TP > 1 and Bg > 0:
+        return max(Bg, float(partition.TP))
+    return Bg

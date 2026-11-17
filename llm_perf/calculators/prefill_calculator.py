@@ -17,7 +17,7 @@ from ..core.prefill_model import (
     PrefillCommResults,
     PrefillLatencyResults,
 )
-from ..core.primitives.sharding_factors import compose_check
+from ..core.primitives.sharding_factors import run_check
 
 
 @dataclass
@@ -51,7 +51,7 @@ class PrefillCalculator:
         self.framework = framework if framework is not None else FrameworkSpec.default()
 
     def run(self) -> PrefillResults:
-        compose_check(self.partition, self.framework)     # co-located layouts need TP == EP
+        run_check(self.model, self.system, self.partition, self.framework, context_tokens=self.tuner.S_input)
         flops = compute_prefill_flops(self.model, self.partition, self.tuner, self.framework)
         traffic = compute_prefill_traffic(self.model, self.partition, self.tuner, self.framework)
         comm = compute_prefill_comm(self.model, self.system, self.partition, self.tuner, self.framework)

@@ -68,7 +68,8 @@ def _split_layers(model: LlmModelSpec) -> tuple[int, int, int, int]:
 def _per_layer_attn_params(model: LlmModelSpec) -> float:
     """Per-layer attention parameter count (cluster-total, before sharding).
 
-    GQA / MHA: `2H² + 2HH_kv` (the §2.3 form, reducing to `4H²` at MHA
+    GQA / MHA: `2·H·H_q + 2·H·H_kv`, with H_q = H unless the model states a
+    head_dim (the §2.3 form `2H² + 2HH_kv`, reducing to `4H²` at MHA
     limit). MLA: sum of six matrices from `attention.md §3.3`, computed
     via `MLASpec.per_layer_attn_params`.
     """
@@ -76,7 +77,7 @@ def _per_layer_attn_params(model: LlmModelSpec) -> float:
         return float(model.mla.per_layer_attn_params(model.H, model.n_q))
     H = model.H
     H_kv = model.H_kv()
-    return 2 * H**2 + 2 * H * H_kv
+    return 2 * H * model.H_q() + 2 * H * H_kv      # W_Q and W_O are H x H_q; H_q = H unless head_dim is set
 
 
 def _per_layer_attn_params_per_device(
@@ -240,13 +241,19 @@ def moe_weight_traffic_bytes(
     ) * b
 
 
-def embedding_bytes(model: LlmModelSpec, partition: PartitionSpec) -> float:
-    """Per-device embedding (and LM head) bytes.
+def embedding_bytes(model: LlmModelSpec, partition: PartitionSpec, *, resident: bool = False) -> float:
+    """Per-device bytes of one vocabulary matrix, or of all of them.
 
         M_embed = V · H / D_emb · b
 
-    The embedding is sharded along the vocab dimension by D_emb (= TP under
+    The matrix is sharded along the vocab dimension by D_emb (= TP under
     all configurations) and replicated across PP stages in the current
     convention — matches memory_model.py.
+
+    The default is the one matrix a step reads: the LM head. With
+    `resident=True` the result is what memory must hold, which is two
+    matrices when the model does not tie its input embedding to the LM
+    head (`LlmModelSpec.tied_embeddings` is False).
     """
-    return (model.vocab_size * model.H / D_emb(partition)) * model.bytes_per_param
+    one = (model.vocab_size * model.H / D_emb(partition)) * model.bytes_per_param
+    return one if (not resident or model.tied_embeddings) else 2 * one

@@ -83,6 +83,7 @@ def enumerate_partitions(
     ep_max_override: Optional[int] = None,
     scale_up_domain_override: Optional[int] = None,
     scale_up_tier_index: int = 0,
+    framework=None,
 ) -> List[PartitionSpec]:
     """Enumerate valid (PP, TP, EP, SP) partitions for `model` on `system`.
 
@@ -108,6 +109,11 @@ def enumerate_partitions(
         value. Takes precedence over `scale_up_tier_index`. Useful when
         the sweep replaces the system fabric to test a hypothetical
         topology.
+    framework : FrameworkSpec, optional
+        When its `tp_ep_layout` is "co_located", partitions are bounded by
+        the co-located replica size (PP x max(TP, EP) x SP) and TP != EP
+        shapes with both above 1 are left out. Without it the orthogonal
+        bounds apply, as before.
     scale_up_tier_index : int, default 0
         Index into the fabric chain (`system.get_tier_chain(role)`) up to
         which the scale-up domain extends. 0 = innermost tier only
@@ -119,6 +125,9 @@ def enumerate_partitions(
     """
     if num_devices is None:
         num_devices = system.num_devices
+    # A co-located stack overlays TP and EP on the same devices: a replica
+    # is PP x max(TP, EP) x SP devices and needs TP == EP when both exceed 1.
+    co_located = framework is not None and framework.tp_ep_layout == "co_located"
 
     n_kv = model.n_kv
     n_experts = model.moe.n_experts if model.moe is not None else None
@@ -150,10 +159,13 @@ def enumerate_partitions(
     for pp in pp_choices:
         for tp in tp_choices:
             for ep in ep_choices:
-                if tp * ep > scale_up:
+                if co_located and tp > 1 and ep > 1 and tp != ep:
+                    continue
+                group = max(tp, ep) if co_located else tp * ep
+                if group > scale_up:
                     continue
                 for sp in sp_choices:
-                    if pp * tp * ep * sp > num_devices:
+                    if pp * group * sp > num_devices:
                         continue
                     out.append(PartitionSpec(PP=pp, TP=tp, EP=ep, SP=sp))
     return out

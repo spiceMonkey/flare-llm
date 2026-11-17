@@ -125,7 +125,7 @@ def compute_prefill_flops(
         )
         F_attn_device = (L / PP) * F_sv_per_layer_per_device_per_token * S / SP
     else:
-        F_attn_device = (L / PP) * (4 * S**2 * H) / (D_kv(partition, fw) * SP)
+        F_attn_device = (L / PP) * (4 * S**2 * model.H_q()) / (D_kv(partition, fw) * SP)
 
     F_prefill_device = F_linear_device + F_attn_device
 
@@ -151,8 +151,8 @@ def compute_prefill_flops(
         ) * S
     else:
         H_kv = model.H_kv()
-        F_proj = (4 * H**2 + 4 * H * H_kv) * S
-        F_attn = 4 * S**2 * H
+        F_proj = (4 * H * model.H_q() + 4 * H * H_kv) * S
+        F_attn = 4 * S**2 * model.H_q()
     F_ffn_dense = 6 * H * I_dense * S
     F_layer_prefill = F_proj + F_attn + F_ffn_dense
 
@@ -440,6 +440,10 @@ def compute_prefill_latency(
         L_moe_total = 0
     k_dense = fw.kernels_per_layer_compute + fw.kernels_per_collective_call * (n_TP_calls + n_SP_calls)
     k_moe_extra = fw.kernels_per_collective_call * n_EP_calls
+    # Scatter-direct dispatch under DP-attention fires no TP collective on a
+    # MoE layer (compute_prefill_comm prices none), so it launches none.
+    if fw.moe_a2a_pattern == "scatter" and fw.attention_mode == "dp" and G_TP(partition) > 1:
+        k_moe_extra -= fw.kernels_per_collective_call * n_TP_calls
     layers_per_stage = L / PP if PP > 0 else L
     moe_layers_per_stage = L_moe_total / PP if PP > 0 else L_moe_total
     k_pp_hop = fw.kernels_per_pp_hop if PP > 1 else 0
@@ -500,7 +504,8 @@ def compute_prefill_latency(
         t_m = T_lm / BW_top if BW_top > 0 else 0.0
         return max(t_c, t_m)
 
-    t_LM_prefill = _t_LM(B_pf_eff)
+    t_LM_prefill = _t_LM(B_pf_eff)      # the pass over the whole prefill batch
+    t_LM_single = _t_LM(1)               # one request alone (equal at B_prefill = 1)
 
     t_prefill_compute = flops.F_prefill_device / R_gpu
     # η_TC at prefill payload (mb_eff = B_prefill · S / PP). With typical
@@ -523,7 +528,7 @@ def compute_prefill_latency(
     t_prefill_stage = t_prefill_local + max(0.0, t_prefill_comm - rho * t_prefill_local)
     t_pipeline_warmup = (PP - 1) * t_prefill_stage if PP > 1 else 0.0
 
-    t_prefill = t_prefill_stage + t_pipeline_warmup + t_LM_prefill
+    t_prefill = t_prefill_stage + t_pipeline_warmup + t_LM_single
 
     # ── Batched prefill (§4) ─────────────────────────────
 
@@ -642,7 +647,7 @@ def compute_prefill_latency(
                 )
                 F_attn_chunk_k = (L / PP) * F_sv_per_tok * C_k / SP
             else:
-                F_attn_chunk_k = (L / PP) * (4 * C_k * S_attn_k * H) / (d_kv_pf * SP)
+                F_attn_chunk_k = (L / PP) * (4 * C_k * S_attn_k * model.H_q()) / (d_kv_pf * SP)
             F_chunk_k = (F_linear_per_chunk if full else F_linear_per_token * C_k) + F_attn_chunk_k
 
             t_chunk_compute_k = F_chunk_k / R_gpu
@@ -680,7 +685,7 @@ def compute_prefill_latency(
         # fires once after the last chunk (one projection per request, not
         # per chunk), mirroring prefill.md §3.4.
         t_chunk_tail = (PP - 1) * t_chunk_max if PP > 1 else 0.0
-        t_prefill_chunked = total_chunked + t_chunk_tail + t_LM_prefill
+        t_prefill_chunked = total_chunked + t_chunk_tail + t_LM_single
     else:
         n_chunks = 0
         t_prefill_chunked = t_prefill  # no chunking → same as unchunked
@@ -780,7 +785,7 @@ def compute_suffix_prefill(
         from .primitives.mla_flops import mla_score_value_flops_per_layer_per_device
         F_attn = (L / PP) * mla_score_value_flops_per_layer_per_device(model, partition, fw, S_attn, fw.mla_mode) * C / SP
     else:
-        F_attn = (L / PP) * (4 * C * S_attn * H) / (d_kv * SP)
+        F_attn = (L / PP) * (4 * C * S_attn * model.H_q()) / (d_kv * SP)
     F_suffix = F_linear + F_attn
     t_compute = F_suffix / R_gpu
 

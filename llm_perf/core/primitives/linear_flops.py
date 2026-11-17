@@ -67,7 +67,7 @@ def attn_proj_flops_per_token(
         )
     else:
         H_kv = model.H_kv()
-        F_attn_proj = (4 * H**2 + 4 * H * H_kv) / d_attn
+        F_attn_proj = (4 * H * model.H_q() + 4 * H * H_kv) / d_attn
 
     return (L / PP) * F_attn_proj
 

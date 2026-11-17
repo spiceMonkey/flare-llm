@@ -98,6 +98,8 @@ from .sharding_factors import (
     decode_microbatch,
     D_batch,
     group_batch,
+    attn_rank_batch,
+    kv_batch,
 )
 
 __all__ = [
