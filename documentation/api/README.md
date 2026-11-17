@@ -14,7 +14,7 @@ Shorthand used throughout: tensor parallelism (TP), expert parallelism (EP), pip
 | [Calculators](calculators.md) | End-to-end entry points. Each composes the specs, runs the five-stage pipeline, and returns a results dataclass. | 6 |
 | [Specs](specs.md) | Typed dataclass inputs. The composition is model x system x partition x tuner x framework, plus optional overhead/disagg specs for end-to-end runs. | 22 |
 | [Core](core.md) | Pure analytical model functions. Each takes (model, system, partition, tuner, framework) and returns a results dataclass; no global state. | 55 |
-| [Core primitives](core_primitives.md) | Building blocks the core models compose: sharding factors and partition layout, weight / KV / FLOP quantities, collective cost formulas, topology-aware dispatch, and the per-stage communication aggregator. | 71 |
+| [Core primitives](core_primitives.md) | Building blocks the core models compose: sharding factors and partition layout, weight / KV / FLOP quantities, collective cost formulas, topology-aware dispatch, and the per-stage communication aggregator. | 73 |
 | [IO](io.md) | Spec loaders. `load_*_from_db` reads the bundled JSON database by id; `load_*_spec` / `*_spec_from_json_dict` read an arbitrary path or dict. | 22 |
 | [Utils](utils.md) | Helpers: HuggingFace model adapter, DRAM bandwidth calculator, constants, validation, and plotting. | 15 |
 

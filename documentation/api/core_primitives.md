@@ -23,9 +23,23 @@ configurations. The lookup table:
     co_located    dp              1       EP           max(TP,EP)    TP     TP(AG)  EP    PP*max(TP,EP)*SP
                                                         (seq)
 
+The co\_located rows apply only when both axes are in use (TP > 1 and EP > 1, see `overlaid`); with TP = 1 or EP = 1 the orthogonal rows apply.
+
 Dense FFN always uses D\_exp = TP regardless of tp\_ep\_layout (no EP axis to overlap). The fourth combination (co\_located + tp) models the production pattern where TP=EP overlay on the same physical GPU set (e.g., the DSr1 / NVL72 panel-(b) deployment with TP=EP=8 on 8 GPUs) and attention is head-sharded across the same group. The TP all-reduce and the MoE all-to-all both run on that shared 8-GPU set; the structural invariant `TP == EP` under co-location still holds.
 
 Phase H: `attention_mode` and `tp_ep_layout` live on FrameworkSpec, not on PartitionSpec. Every helper here takes both `partition` (PP/TP/EP/SP) and `framework` (attention\_mode/tp\_ep\_layout). At the default (orthogonal + tp) every helper collapses to the legacy raw TP / EP / SP form.
+
+### `overlaid(partition: PartitionSpec, framework: FrameworkSpec) -> bool`
+
+True when TP and EP are overlaid on the same devices: the co-located layout with both axes in use (TP > 1 and EP > 1).
+
+With TP = 1 or EP = 1 there is nothing to overlay, and a replica under the co-located layout IS the orthogonal replica: EP groups of TP devices, the batch divided across the groups, experts sharded TP * EP ways. Every divisor below takes the layout through this, so the two layouts agree in that case instead of pricing whole-batch attention on every device (TP = 1) or unsharded experts (EP = 1).
+
+### `scatter_direct(partition: PartitionSpec, framework: FrameworkSpec) -> bool`
+
+True when scatter-direct MoE dispatch is in effect (decode.md §5.2).
+
+Three conditions: the stack offers it (`moe_a2a_pattern == "scatter"`), attention is DP-sharded, and every device holds whole experts, which is the overlaid layout (co-located, TP = EP > 1). Under the orthogonal layout an EP group's experts are TP-sharded, and a TP-sharded FFN needs its input on every rank of the group and a reduce after it, so the gather pattern applies whatever the flag says; with EP = 1 there is no dispatch at all. A flag that cannot take effect is not an error (stacks ship it as a capability), it just prices the gather pattern.
 
 ### `D_attn(partition: PartitionSpec, framework: FrameworkSpec) -> int`
 

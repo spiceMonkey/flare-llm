@@ -14,6 +14,9 @@ configurations. The lookup table:
     co_located    dp              1       EP           max(TP,EP)    TP     TP(AG)  EP    PP*max(TP,EP)*SP
                                                         (seq)
 
+The co_located rows apply only when both axes are in use (TP > 1 and EP > 1,
+see `overlaid`); with TP = 1 or EP = 1 the orthogonal rows apply.
+
 Dense FFN always uses D_exp = TP regardless of tp_ep_layout (no EP axis to
 overlap). The fourth combination (co_located + tp) models the production
 pattern where TP=EP overlay on the same physical GPU set (e.g., the DSr1 /
@@ -30,6 +33,36 @@ PartitionSpec. Every helper here takes both `partition` (PP/TP/EP/SP) and
 
 from ...specs.framework_spec import FrameworkSpec
 from ...specs.partition_spec import PartitionSpec
+
+
+def overlaid(partition: PartitionSpec, framework: FrameworkSpec) -> bool:
+    """True when TP and EP are overlaid on the same devices: the co-located
+    layout with both axes in use (TP > 1 and EP > 1).
+
+    With TP = 1 or EP = 1 there is nothing to overlay, and a replica under
+    the co-located layout IS the orthogonal replica: EP groups of TP devices,
+    the batch divided across the groups, experts sharded TP * EP ways. Every
+    divisor below takes the layout through this, so the two layouts agree in
+    that case instead of pricing whole-batch attention on every device
+    (TP = 1) or unsharded experts (EP = 1).
+    """
+    return framework.tp_ep_layout == "co_located" and partition.TP > 1 and max(1, partition.EP) > 1
+
+
+def scatter_direct(partition: PartitionSpec, framework: FrameworkSpec) -> bool:
+    """True when scatter-direct MoE dispatch is in effect (decode.md §5.2).
+
+    Three conditions: the stack offers it (`moe_a2a_pattern == "scatter"`),
+    attention is DP-sharded, and every device holds whole experts, which is
+    the overlaid layout (co-located, TP = EP > 1). Under the orthogonal
+    layout an EP group's experts are TP-sharded, and a TP-sharded FFN needs
+    its input on every rank of the group and a reduce after it, so the
+    gather pattern applies whatever the flag says; with EP = 1 there is no
+    dispatch at all. A flag that cannot take effect is not an error (stacks
+    ship it as a capability), it just prices the gather pattern.
+    """
+    return (framework.moe_a2a_pattern == "scatter" and framework.attention_mode == "dp"
+            and overlaid(partition, framework))
 
 
 def D_attn(partition: PartitionSpec, framework: FrameworkSpec) -> int:
@@ -73,7 +106,7 @@ def D_exp(
     EP = max(1, partition.EP)
     if n_exp_cap is not None:
         EP = min(EP, max(1, n_exp_cap))
-    if framework.tp_ep_layout == "co_located":
+    if overlaid(partition, framework):
         return EP
     return partition.TP * EP
 
@@ -94,7 +127,7 @@ def D_kv(partition: PartitionSpec, framework: FrameworkSpec) -> int:
         shard across the TP group, which is the same set of ranks as the
         EP group — numerically equal to max(TP, EP) since TP == EP.
     """
-    if framework.tp_ep_layout == "co_located":
+    if overlaid(partition, framework):
         return max(partition.TP, max(1, partition.EP))
     return partition.TP
 
@@ -239,7 +272,7 @@ def D_batch(partition: PartitionSpec, framework: FrameworkSpec) -> int:
     one group and the divisor is 1 (DP-attention's own `B / G_TP` batch
     shard is applied separately, where it always was).
     """
-    if framework.tp_ep_layout == "co_located":
+    if overlaid(partition, framework):
         return 1
     return max(1, partition.EP)
 

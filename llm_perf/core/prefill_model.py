@@ -10,6 +10,7 @@ from ..specs.tuner_spec import TuningSpec
 from ..utils import GB_TO_BYTES, TB_TO_FLOPS
 from .decode_model import _eta_TC_at_mb, _eta_beta_at_B, effective_peak_flops_TF
 from .memory_placement import resolve_placement, t_mem_from_placement
+from .primitives.sharding_factors import scatter_direct as is_scatter_direct
 from .primitives import (
     attn_proj_flops_per_token,
     ffn_flops_per_token,
@@ -316,14 +317,14 @@ def compute_prefill_comm(
     # data-flow pattern (prefill.md §3.2; same two patterns as decode.md §5.2).
     #   "gather" (default) — full per-step tokens per rank
     #   "scatter" + DP-attn — tokens / G_TP per rank (~G_TP× reduction)
-    scatter_direct = (
-        fw.moe_a2a_pattern == "scatter"
-        and fw.attention_mode == "dp"
-        and g_TP > 1
-    )
+    scatter_direct = is_scatter_direct(partition, fw)
+    tokens_one = min(tokens, S)     # one request's tokens in this pass (a chunk, or the whole prompt)
     if g_EP > 1:
         if scatter_direct:
-            msg_EP = k_active * (tokens / g_TP) * H * b
+            # A rank holds whole requests, so the one that dispatches sends at
+            # least one request's tokens of this pass (the floor binds only
+            # with fewer requests than ranks).
+            msg_EP = k_active * max(tokens / g_TP, min(tokens, tokens_one)) * H * b
         else:
             msg_EP = k_active * tokens * H * b
         t_EP = _cost("EP", "moe_a2a", msg_EP, g_EP, alg=ep_algorithm)
@@ -450,7 +451,7 @@ def compute_prefill_latency(
     k_moe_extra = fw.kernels_per_collective_call * n_EP_calls
     # Scatter-direct dispatch under DP-attention fires no TP collective on a
     # MoE layer (compute_prefill_comm prices none), so it launches none.
-    if fw.moe_a2a_pattern == "scatter" and fw.attention_mode == "dp" and G_TP(partition) > 1:
+    if is_scatter_direct(partition, fw):
         k_moe_extra -= fw.kernels_per_collective_call * n_TP_calls
     layers_per_stage = L / PP if PP > 0 else L
     moe_layers_per_stage = L_moe_total / PP if PP > 0 else L_moe_total

@@ -38,6 +38,7 @@ from ..specs.partition_spec import PartitionSpec
 from ..specs.system_spec import SystemSpec, TierSpec
 from ..specs.tuner_spec import TuningSpec
 from .primitives import G_EP, G_TP, axis_stride, decode_microbatch, enumerate_options, group_batch
+from .primitives.sharding_factors import scatter_direct
 
 
 def optimize_collective_algorithms(
@@ -92,9 +93,7 @@ def optimize_collective_algorithms(
             op="moe_a2a",
             # Scatter-direct dispatch under DP-attention sends each rank's own
             # share of the batch, as compute_comm prices it.
-            M=mb_decode * k_active * H * b / (
-                G_TP(partition) if (framework.moe_a2a_pattern == "scatter" and framework.attention_mode == "dp"
-                                    and G_TP(partition) > 1) else 1),
+            M=(max(1.0, mb_decode / G_TP(partition)) if scatter_direct(partition, framework) else mb_decode) * k_active * H * b,
             G=G_EP(partition),
             inc_enabled=inc_enabled,
             align_policy=align_policy,
@@ -123,7 +122,9 @@ def optimize_collective_algorithms(
         new_fields["ep_algorithm_prefill"] = _resolve(
             tier_chain=system.get_tier_chain("EP"),
             op="moe_a2a",
-            M=tokens_prefill * k_active * H * b,
+            # Scatter-direct: a rank's own share, at least one whole request.
+            M=(max(tokens_prefill / G_TP(partition), tuner.S_input) if scatter_direct(partition, framework)
+               else tokens_prefill) * k_active * H * b,
             G=G_EP(partition),
             inc_enabled=inc_enabled,
             align_policy=align_policy,

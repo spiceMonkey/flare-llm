@@ -33,6 +33,7 @@ from .memory_placement import (
     t_mem_from_placement,
     weights_seconds_per_byte,
 )
+from .primitives.sharding_factors import scatter_direct as is_scatter_direct
 from .primitives import (
     attn_proj_flops_per_token,
     ffn_flops_per_token,
@@ -211,7 +212,7 @@ def _t_kernel_per_microbatch(
     k_moe_extra = k_coll * n_EP_calls
     # Scatter-direct dispatch under DP-attention fires no TP collective on a
     # MoE layer (compute_comm prices none), so those layers launch none.
-    if framework.moe_a2a_pattern == "scatter" and framework.attention_mode == "dp" and G_TP(partition) > 1:
+    if is_scatter_direct(partition, framework):
         k_moe_extra -= k_coll * n_TP_calls
     t_layer = layers_per_stage * k_dense * tau_us * 1e-6
     t_moe = moe_layers_per_stage * k_moe_extra * tau_us * 1e-6
@@ -534,13 +535,9 @@ def compute_comm(
     # (decode.md §5.2):
     #   "gather" (default) — full B per rank; payload = B·k·H·b
     #   "scatter" + DP-attn — B/G_TP per rank; payload = (B/G_TP)·k·H·b
-    # Scatter is a no-op outside DP-attn (the structural prerequisite is
-    # that attention has DP-sharded the batch across the TP group).
-    scatter_direct = (
-        fw.moe_a2a_pattern == "scatter"
-        and fw.attention_mode == "dp"
-        and g_TP > 1
-    )
+    # Scatter takes effect only where it can (`sharding_factors.scatter_direct`):
+    # attention has DP-sharded the batch and every device holds whole experts.
+    scatter_direct = is_scatter_direct(partition, fw)
     if g_EP > 1:
         if scatter_direct:
             # A rank holds whole sequences, so the one that dispatches sends at
