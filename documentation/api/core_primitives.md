@@ -96,6 +96,18 @@ Raises ValueError on:
 
 Both attention\_mode values ('tp' and 'dp') are allowed under either layout. The co\_located + tp\_attention combination models the production pattern where TP heads and EP experts both shard across the same physical GPU set — see the module docstring's four-row lookup table for the resulting D\_attn / D\_exp / D\_kv / N\_replica semantics.
 
+### `run_check(model, system, partition: PartitionSpec, framework: FrameworkSpec, *, context_tokens: int) -> None`
+
+Refuse a run the model cannot describe. Called by both calculators on entry.
+
+Raises ValueError when:
+- the (partition, framework) pair breaks `compose_check`;
+- EP exceeds the model's number of experts (1 for a dense model): the
+    expert sharding was clamped while the batch was still divided by EP;
+- one replica needs more devices than the system has (the result used
+    to be a throughput of zero with no error);
+and warns (UserWarning) when the context is longer than the model's stated maximum (`LlmModelSpec.max_seq_len`), which the run used to accept silently.
+
 ### `decode_microbatch(B: int, PP: int) -> float`
 
 Sequences one pipeline stage processes per pass (decode.md §7.2).
@@ -121,6 +133,14 @@ Under the co-located layout TP and EP are the same devices, so there is one grou
 Sequences one device group handles: `B / D_batch`, floored at one.
 
 Same shape as `decode_microbatch`: with fewer sequences than groups, each busy group holds one sequence and the rest are idle, so the latency of a step is that of a group batch of 1, not of a fraction.
+
+### `attn_rank_batch(Bg: float, partition: PartitionSpec, framework: FrameworkSpec) -> float`
+
+Sequences the busiest rank runs through attention: Bg / G\_TP floored at one under DP-attention (a rank holds whole sequences); Bg under TP-attention.
+
+### `kv_batch(Bg: float, partition: PartitionSpec, framework: FrameworkSpec) -> float`
+
+Multiplier for per-sequence quantities that already carry /D\_kv (kv\_bytes\_per\_seq, score/value FLOPs). Bg, except under DP-attention, where the busiest rank holds max(1, Bg/G\_TP) WHOLE sequences = max(Bg, G\_TP) shards.
 
 ---
 
@@ -243,13 +263,15 @@ real production routers can exhibit hot-spotting (some experts touched more ofte
 
 Returns 0.0 for dense-only models.
 
-### `embedding_bytes(model: LlmModelSpec, partition: PartitionSpec) -> float`
+### `embedding_bytes(model: LlmModelSpec, partition: PartitionSpec, *, resident: bool=False) -> float`
 
-Per-device embedding (and LM head) bytes.
+Per-device bytes of one vocabulary matrix, or of all of them.
 
     M_embed = V · H / D_emb · b
 
-The embedding is sharded along the vocab dimension by D\_emb (= TP under all configurations) and replicated across PP stages in the current convention — matches memory\_model.py.
+The matrix is sharded along the vocab dimension by D\_emb (= TP under all configurations) and replicated across PP stages in the current convention — matches memory\_model.py.
+
+The default is the one matrix a step reads: the LM head. With `resident=True` the result is what memory must hold, which is two matrices when the model does not tie its input embedding to the LM head (`LlmModelSpec.tied_embeddings` is False).
 
 ---
 

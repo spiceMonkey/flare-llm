@@ -280,7 +280,7 @@ KV paging parameters (kv.md §2).
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `block_size` | `int` | `16` | tokens per block (B\_block) |
-| `beam_width` | `int` | `1` | W (1 = greedy, no CoW) |
+| `beam_width` | `int` | `1` | W: NOT modelled; any value prices as 1 (a warning says so) |
 | `system_overhead_GB` | `float` | `1.5` | CUDA context + kernel workspace |
 
 ### class `KVPagingResults`

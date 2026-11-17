@@ -146,7 +146,7 @@ Cumulative number of devices reachable through tier `scale_up_tier_index` (inclu
 
 Out-of-range indices clamp to the last available tier rather than raising — so a single-tier system like NVL72 with `scale_up_tier_index=1` still returns its tier-0 reach (72) instead of erroring.
 
-### `enumerate_partitions(model: LlmModelSpec, system: SystemSpec, *, num_devices: Optional[int]=None, pp_max: int=32, pp_choices: Optional[List[int]]=None, sp_choices: Optional[List[int]]=None, tp_max_override: Optional[int]=None, ep_max_override: Optional[int]=None, scale_up_domain_override: Optional[int]=None, scale_up_tier_index: int=0) -> List[PartitionSpec]`
+### `enumerate_partitions(model: LlmModelSpec, system: SystemSpec, *, num_devices: Optional[int]=None, pp_max: int=32, pp_choices: Optional[List[int]]=None, sp_choices: Optional[List[int]]=None, tp_max_override: Optional[int]=None, ep_max_override: Optional[int]=None, scale_up_domain_override: Optional[int]=None, scale_up_tier_index: int=0, framework=None) -> List[PartitionSpec]`
 
 Enumerate valid (PP, TP, EP, SP) partitions for `model` on `system`.
 
@@ -172,6 +172,11 @@ scale\_up\_domain\_override : int, optional
     value. Takes precedence over `scale_up_tier_index`. Useful when
     the sweep replaces the system fabric to test a hypothetical
     topology.
+framework : FrameworkSpec, optional
+    When its `tp_ep_layout` is "co_located", partitions are bounded by
+    the co-located replica size (PP x max(TP, EP) x SP) and TP != EP
+    shapes with both above 1 are left out. Without it the orthogonal
+    bounds apply, as before.
 scale\_up\_tier\_index : int, default 0
     Index into the fabric chain (`system.get_tier_chain(role)`) up to
     which the scale-up domain extends. 0 = innermost tier only
