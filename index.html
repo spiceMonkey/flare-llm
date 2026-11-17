@@ -53,7 +53,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-9e24694e.js";
+            window.path_to_searchindex_js = "searchindex-f8e61a0f.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-52454c4f.js"></script>
@@ -198,15 +198,16 @@
                         <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.4/dist/katex.min.css">
 <h1 id="decode-modeling"><a class="header" href="#decode-modeling">Decode Modeling</a></h1>
 <p><strong>Author:</strong> Yue Lu<br><strong>Date:</strong> November 2026</p>
-<p>First-principles analytical derivation of decode-phase latency, throughput, and memory bandwidth for LLM inference on a cluster. The chapters are intentionally <strong>implementation-independent</strong> — they describe the cost model, the assumptions, and the symbol conventions; the FLARE code in <a href="https://github.com/spiceMonkey/flare-llm"><code>spiceMonkey/flare-llm</code></a> is one possible realization.</p>
-<p><strong>Where to start.</strong> <a href="decode.html">Decode and TPOT</a> is the centerpiece. The other two chapters cover the supporting physics it references:</p>
+<p>First-principles analytical derivation of decode-phase latency, throughput, and memory bandwidth for large language model (LLM) inference on a cluster. The chapters are intentionally <strong>implementation-independent</strong> — they describe the cost model, the assumptions, and the symbol conventions; the FLARE code in <a href="https://github.com/spiceMonkey/flare-llm"><code>spiceMonkey/flare-llm</code></a> is one possible realization.</p>
+<p><strong>Where to start.</strong> <a href="decode.html">Decode and TPOT</a> is the centerpiece: memory footprint, memory traffic, compute, communication, and the step time and throughput built from them. Three chapters cover the supporting physics it references:</p>
 <ul>
-<li><a href="attention.html">Attention variants</a> — MHA / GQA / MQA / MLA, what each costs per token-per-layer</li>
-<li><a href="sram.html">Memory hierarchy</a> — multi-tier roofline that generalizes the legacy single-HBM model to SRAM-augmented and 3D-stacked devices</li>
+<li><a href="attention.html">Attention variants</a> — multi-head, grouped-query, multi-query and latent attention, and what each costs per token per layer</li>
+<li><a href="sram.html">Memory hierarchy</a> — multi-tier roofline that generalizes the single-HBM model to SRAM-augmented devices</li>
+<li><a href="dram3d.html">3D-stacked DRAM bandwidth</a> — memory bandwidth derived from the parameters of a hybrid-bonded interface</li>
 </ul>
 <p>For the collective-communication cost model that decode references throughout (α–β cost form, ring / tree / hierarchical algorithms, topology composition, in-network reduction), see the dedicated tutorial at <a href="https://spicemonkey.github.io/collective-comm/">spicemonkey.github.io/collective-comm</a> — linked from the <a href="collective_comm.html">Collective Communication</a> chapter.</p>
-<p><strong>Serving and deployment.</strong> Four chapters build on the decode model: <a href="kv.html">KV cache management</a>, <a href="framework.html">Framework overhead</a>, <a href="slo.html">SLO feasibility</a>, and <a href="disaggregation.html">Phase and memory disaggregation</a>, which sizes separate prefill and decode pools, prices the cache transfer between them, and adds host memory for caches that are not being decoded.</p>
-<p><strong>Scope.</strong> This book is intentionally focused. Prefill, end-to-end metrics, SLO feasibility, KV paging, and serving-framework overhead each have their own derivation docs in the <a href="https://github.com/spiceMonkey/flare-llm/tree/main/documentation/modeling"><code>documentation/modeling/</code></a> tree on GitHub, but they’re not in this book yet.</p>
+<p><strong>Serving and deployment.</strong> Four chapters build on the decode model: <a href="kv.html">KV cache management</a> (paged allocation, fragmentation, and how many sequences a device holds), <a href="framework.html">Framework overhead</a> (host-side latency per request, and the constants that describe each serving stack), <a href="slo.html">SLO feasibility</a> (which batch sizes and partitions meet latency targets), and <a href="disaggregation.html">Phase and memory disaggregation</a>, which sizes separate prefill and decode pools, prices the cache transfer between them, and adds host memory for caches that are not being decoded.</p>
+<p><strong>Scope and companion documents.</strong> This book is intentionally focused on decode and on the serving questions that sit directly on top of it. Three derivations that the chapters cite are companion documents and are <strong>not</strong> chapters of this book: the prefill and time-to-first-token derivation, the end-to-end metrics derivation, and the suite’s combined notation reference. Where a chapter cites one of them, the citation is plain text and says that the document is outside the book; nothing a chapter needs in order to be read is left there — the sharding factors, the batch divisor and the replica size, for example, are defined in <a href="decode.html">Decode and TPOT</a> §1.4. Citations of the form <code>collectives/NN_name.md</code> refer to the chapters of the collective-communication tutorial linked above.</p>
 
                     </main>
 

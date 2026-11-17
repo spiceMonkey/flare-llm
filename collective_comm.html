@@ -53,7 +53,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-9e24694e.js";
+            window.path_to_searchindex_js = "searchindex-f8e61a0f.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-52454c4f.js"></script>
@@ -197,18 +197,20 @@
                     <main>
                         <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.4/dist/katex.min.css">
 <h1 id="collective-communication"><a class="header" href="#collective-communication">Collective Communication</a></h1>
-<p>The collective-communication cost model, algorithm library, and topology composition that this book references throughout (in <a href="decode.html">Decode and TPOT</a>, <a href="prefill.html">Prefill and TTFT</a>, <a href="e2e.html">E2E latency metrics</a>, and elsewhere) live in a dedicated tutorial site:</p>
+<p><strong>Author:</strong> Yue Lu<br><strong>Date:</strong> November 2026</p>
+<p>The collective-communication cost model, algorithm library, and topology composition that this book references throughout (in <a href="decode.html">Decode and TPOT</a>, in the serving chapters, and in the companion prefill and end-to-end derivations, which are not chapters of this book) live in a dedicated tutorial site:</p>
 <h2 id="-spicemonkeygithubiocollective-comm"><a class="header" href="#-spicemonkeygithubiocollective-comm">→ <a href="https://spicemonkey.github.io/collective-comm/">spicemonkey.github.io/collective-comm</a></a></h2>
 <p>That site covers:</p>
 <ul>
 <li>The Hockney α–β cost model</li>
-<li>Algorithm catalog (ring, tree / DBT, Rabenseifner halving-doubling, PAT, hierarchical, torus, in-network)</li>
+<li>Algorithm catalog: ring, double binary tree (DBT), Rabenseifner halving-doubling, Parallel Aggregated Trees (PAT), hierarchical, torus, in-network</li>
 <li>Topology mapping (crossbar, torus, mesh)</li>
-<li>Hierarchical composition (RS → sub-AR → AG telescoping)</li>
-<li>In-network collectives (NVLS, Quantum SHARP, hw_a2a)</li>
+<li>Hierarchical composition: reduce-scatter (RS), then a sub-all-reduce (AR) across islands, then all-gather (AG)</li>
+<li>In-network collectives (NVLink SHARP, Quantum SHARP, hardware all-to-all)</li>
 <li>Contention and congestion models</li>
 </ul>
-<p>The source repository is <a href="https://github.com/spiceMonkey/collective-comm"><code>spiceMonkey/collective-comm</code></a>, and an auto-synced mirror of those docs lives under <a href="https://github.com/spiceMonkey/flare-llm/tree/main/documentation/modeling/collectives"><code>documentation/modeling/collectives/</code></a> in this repo for offline reference.</p>
+<p>Citations in this book of the form <code>collectives/NN_name.md §N</code> refer to the chapters of that tutorial by the names of their source files: <code>00_summary</code> (cheat sheet), <code>01_collective_algorithms</code>, <code>02_topology_mapping</code>, <code>03_hierarchical_topologies</code>, <code>04_in_network_collectives</code> and <code>05_contention_and_congestion</code>.</p>
+<p>The source repository of the tutorial is <a href="https://github.com/spiceMonkey/collective-comm"><code>spiceMonkey/collective-comm</code></a>. The tutorial pages are not reproduced in this book.</p>
 
                     </main>
 
