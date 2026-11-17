@@ -34,14 +34,14 @@ A disaggregated prefill/decode pipeline with a distributed KV cache. Each device
 |---|---|---|
 | **Attention** | MHA, GQA, MQA, MLA (DeepSeek) | [attention](https://spicemonkey.github.io/flare-llm/attention.html) |
 | **Memory hierarchy** | single-tier HBM, multi-tier HBM + SRAM, hypothetical 3D-stacked | [sram](https://spicemonkey.github.io/flare-llm/sram.html), [dram3d](https://spicemonkey.github.io/flare-llm/dram3d.html) |
-| **Collectives** | ring / tree (DBT) / Rabenseifner / PAT / hierarchical / torus / INC (NVLS, Quantum SHARP, hw_a2a) | [collectives](https://spicemonkey.github.io/flare-llm/collective_comm.html) |
+| **Collectives** | ring / tree (double binary tree, plain and pipelined) / hierarchical / torus / INC (NVLS, Quantum SHARP, hw_a2a) | [collectives](https://spicemonkey.github.io/flare-llm/collective_comm.html) |
 | **Fabric topology** | crossbar (NVSwitch / IB / PCIe), torus (TPU ICI), full mesh, k-D mesh | [collectives](https://spicemonkey.github.io/flare-llm/collective_comm.html) |
 | **Parallelism axes** | DP / PP / TP / EP / SP, with orthogonal or co-located TP+EP layout | [decode](https://spicemonkey.github.io/flare-llm/decode.html) |
-| **Serving stacks** | 7 calibrated framework JSONs: `default`, `trt`, `dynamo_trt`, `dynamo_sglang`, `dynamo_vllm`, `sglang`, `vllm` | [framework](https://spicemonkey.github.io/flare-llm/framework.html) |
-| **KV handoff** | co-located matched, co-located repack, disaggregated transfer | [kv](https://spicemonkey.github.io/flare-llm/kv.html) |
+| **Serving stacks** | 7 framework JSONs of per-stack starting constants: `default`, `trt`, `dynamo_trt`, `dynamo_sglang`, `dynamo_vllm`, `sglang`, `vllm`. Calibration against measurement is per setup and lives in the validators (see Validation) | [framework](https://spicemonkey.github.io/flare-llm/framework.html) |
+| **KV handoff** | co-located matched, co-located repack, disaggregated transfer | [disaggregation](https://spicemonkey.github.io/flare-llm/disaggregation.html) |
 | **Prefill and decode pools** | shared replica under prefill interference, two-pool sizing, shared vs. split under latency targets, GPU-direct or host-staged handoff | [disaggregation](https://spicemonkey.github.io/flare-llm/disaggregation.html) |
 | **Warm and cold memory** | host DRAM, CXL, flash and remote-store tiers behind a host path; prefix reuse with a fetch-vs-recompute rule; idle sessions parked across tiers | [disaggregation](https://spicemonkey.github.io/flare-llm/disaggregation.html) |
-| **SLO feasibility** | floor checks, TPOT bound on B, TTFT bound on shape, batch window, goodput-optimal partition sweep | [slo](https://spicemonkey.github.io/flare-llm/slo.html) |
+| **SLO feasibility** | methodology chapter only, no code in `llm_perf` yet: floor checks, TPOT bound on B, TTFT bound on shape, batch window, goodput-optimal partition sweep. The one latency-target comparison in code is shared vs. split pools | [slo](https://spicemonkey.github.io/flare-llm/slo.html) |
 
 ---
 
@@ -49,7 +49,7 @@ A disaggregated prefill/decode pipeline with a distributed KV cache. Each device
 
 FLARE's decode predictions are cross-validated against measured production-stack Time-Per-Output-Token (TPOT) from the [InferenceX™](https://github.com/SemiAnalysisAI/InferenceX) public benchmark dataset (SemiAnalysis LLC, Apache-2.0; snapshot vendored under [`benchmark/inferenceX/`](benchmark/inferenceX/), fetched 2026-05-09). Each published driver under [`benchmark/validate/`](benchmark/validate/) pins one (model, hardware, framework) cut, sweeps concurrency *B*, and overlays the model's cost-component breakdown on the measured scatter — so the plot shows not just *whether* the prediction lands, but *which primitive* sets the floor at each operating point.
 
-Calibration is per setup: each (model, hardware, serving stack) has its own few constants, fitted on its own measured points. Two things belong to the serving stack and are shared by both setups below: the per-kernel launch time (4 µs for Dynamo+TRT-LLM) and the rule that host work adds to the GPU step instead of hiding behind it. Up to four constants are fitted per setup: *bw_eta*, which multiplies the HBM bandwidth on top of the 0.7 sustained-to-nameplate fraction the GB200 system spec already carries (so the two setups run at 0.48× and 0.43× nameplate); *c*<sub>seq</sub>, the per-sequence host-side serving work (5.5 and 4.8 µs); *c*<sub>orch</sub>, a per-step host floor that does not depend on batch (none and 0.62 ms); and the share of the kernel-launch time that overlaps GPU work (0.55 and 0.35). Treat all four as fitted residuals, not as measured hardware constants: constants fitted on one model do not carry over to another model on the same hardware and stack. Everything else is first-principles. The model's batch is that of one replica, so a measured point's client concurrency is divided by its number of decode workers. Each example below is reproducible with the single command shown.
+Calibration is per setup: each (model, hardware, serving stack) has its own few constants, fitted on its own measured points. Two things belong to the serving stack and are shared by both setups below: the per-kernel launch time (4 µs for Dynamo+TRT-LLM) and the rule that host work adds to the GPU step instead of hiding behind it. Up to four constants are fitted per setup: *bw_eta*, which multiplies the HBM bandwidth on top of the 0.7 sustained-to-nameplate fraction the GB200 system spec already carries (so the two setups run at 0.48× and 0.43× nameplate); *c*<sub>seq</sub>, the per-sequence host-side serving work (5.5 and 4.8 µs); *c*<sub>orch</sub>, a per-step host floor that does not depend on batch (none and 0.62 ms); and the kernel-launch overlap *ρ*, the fraction of the GPU stage time behind which kernel-launch time can hide (0.55 and 0.35): a stage takes *t*<sub>stage</sub> + max(0, *t*<sub>kernel</sub> − *ρ* · *t*<sub>stage</sub>). Treat all four as fitted residuals, not as measured hardware constants: constants fitted on one model do not carry over to another model on the same hardware and stack. Everything else is first-principles. The model's batch is that of one replica, so a measured point's client concurrency is divided by its number of decode workers. Each example below is reproducible with the single command shown.
 
 ### Small MoE — gpt-oss-120b on GB200
 
@@ -59,7 +59,7 @@ Calibration is per setup: each (model, hardware, serving stack) has its own few 
 python benchmark/validate/gpt_oss_120b_gb200_dynamo_trt.py
 ```
 
-120B MoE at FP4, TP=4 EP=1 on GB200 NVL72 under Dynamo+TRT-LLM, ISL/OSL = 1024/1024, one decode worker. **Mean absolute error (MAE) 5.6% over 7 measured points (B = 1…128).** The interesting feature is the nearly flat left half: through *B* ≈ 16 the deployment is *kernel-dispatch-bound* — the ~2.0 ms *t*<sub>kernel</sub> budget exceeds the GPU work, so TPOT barely moves with batch. A fitted 55% of that budget overlaps GPU work, which turns the corner where weight traffic takes over into the gradual bend the measured points show. This setup has one cut of seven points, so its four constants have no held-out check; the largest error is 15.7%, at *B* = 1.
+120B MoE at FP4, TP=4 EP=1 on GB200 NVL72 under Dynamo+TRT-LLM, ISL/OSL = 1024/1024, one decode worker. **Mean absolute error (MAE) 5.6% over 7 measured points (B = 1…128).** The interesting feature is the nearly flat left half: through *B* ≈ 16 the deployment is *kernel-dispatch-bound* — the ~2.0 ms *t*<sub>kernel</sub> budget exceeds the GPU work, so TPOT barely moves with batch. Launch time hides behind only 55% of the GPU stage time (*ρ* = 0.55), which turns the corner where weight traffic takes over into the gradual bend the measured points show; the largest error is 15.7%, at *B* = 1. The constants are fitted on these seven points. The vendored data has a second cut of the same deployment at ISL/OSL = 8192/1024 that the fit never saw: `--isl 8192` runs it with the same constants and scores **11.8% over 8 points** — seven of them within 8.5%, and one, at the highest concurrency (*B* = 512), 64% high.
 
 ### Large MoE — DeepSeek-R1 on GB200 NVL72
 
@@ -69,9 +69,9 @@ python benchmark/validate/gpt_oss_120b_gb200_dynamo_trt.py
 python benchmark/validate/dsr1_gb200_dynamo_trt.py --cut colo_tp_attn
 ```
 
-671B / 37B-active MoE + MLA at FP4 on GB200 NVL72 under Dynamo+TRT-LLM, in the **co-located TP+EP layout** (TP = EP = 8, TP attention, 4 decode workers of 8 GPUs). **MAE 4.7% over 14 measured points spanning client concurrency 4…564**, which is 1…141 in-flight requests per worker — the widest single-cut coverage in the dataset, crossing the dispatch-bound plateau and the memory-bound ramp. The plateau is the kernel-launch budget, of which a fitted share overlaps GPU work, plus a 0.62 ms per-step host floor. Calibration is per setup: four constants are fitted on the driver's eight DeepSeek-R1 cuts together (43 points, TP = EP of 8, 16 and 32 and TP = 36), which come to 12.9%; with one cut held out of the fit, that cut scores 17.3% on average.
+671B / 37B-active MoE + MLA at FP4 on GB200 NVL72 under Dynamo+TRT-LLM, in the **co-located TP+EP layout** (TP = EP = 8, TP attention, 4 decode workers of 8 GPUs). **MAE 5.0% over 14 measured points spanning client concurrency 4…564**, which is 1…141 in-flight requests per worker — the most measured points of any cut of this setup, crossing the dispatch-bound plateau and the memory-bound ramp. The plateau is the kernel-launch budget, less what hides behind 35% of the GPU stage time, plus a 0.62 ms per-step host floor. Calibration is per setup: four constants are fitted on the driver's eight DeepSeek-R1 cuts together (43 points, TP = EP of 8, 16 and 32 and TP = 36), which come to 13.0%; with one cut held out of a refit, that cut scores 14.5% on average.
 
-> Benchmark data © 2026 SemiAnalysis LLC, licensed under Apache-2.0. This is an **unofficial** analysis derived from the InferenceX public API — the canonical source is [SemiAnalysisAI/InferenceX](https://github.com/SemiAnalysisAI/InferenceX). See [`benchmark/inferenceX/NOTICE`](benchmark/inferenceX/NOTICE).
+> Benchmark data: Copyright 2025 SemiAnalysis LLC, Advanced Micro Devices, NVIDIA CORPORATION, licensed under Apache-2.0. This is an **unofficial** analysis derived from the InferenceX public API — the canonical source is [SemiAnalysisAI/InferenceX](https://github.com/SemiAnalysisAI/InferenceX). See [`benchmark/inferenceX/NOTICE`](benchmark/inferenceX/NOTICE).
 
 ---
 
@@ -80,10 +80,12 @@ python benchmark/validate/dsr1_gb200_dynamo_trt.py --cut colo_tp_attn
 ```
 .
 ├── README.md
+├── requirements.txt
 ├── notebooks/         — quickstart + Pareto-frontier case studies
 ├── benchmark/
 │   ├── inferenceX/    — vendored InferenceX measurement snapshot
 │   └── validate/      — per-cut predicted-vs-measured TPOT drivers
+├── book/              — mdBook configuration of the published book (its sources are not in this repository)
 ├── documentation/
 │   ├── api/           — generated API reference
 │   └── flare_overview_slides.pdf   — introductory slide deck
@@ -102,9 +104,9 @@ python benchmark/validate/dsr1_gb200_dynamo_trt.py --cut colo_tp_attn
 ## Quickstart
 
 ```bash
-python -m venv .llm_perf
+python -m venv .llm_perf          # Python 3.10 or newer
 source .llm_perf/bin/activate
-pip install jupyter matplotlib numpy
+pip install -r requirements.txt   # matplotlib, numpy, jupyter; the core package itself needs only the standard library
 jupyter notebook notebooks/quickstart.ipynb
 ```
 
@@ -144,11 +146,11 @@ print(f"TPOT       = {e2e.TPOT*1e3:.2f} ms")
 print(f"tok/s/GPU  = {e2e.throughput_per_gpu:.1f}")
 ```
 
-`framework` is optional — omit for `FrameworkSpec.default()` (pure roofline). Swap framework JSONs to compare stacks on the same (model, system, partition, tuner).
+`framework` is optional — omit for `FrameworkSpec.default()`, a neutral stack: ring collectives, in-network collectives where the fabric offers them, and a 1.5 µs kernel launch (so not a bare roofline; set `kernel_launch_us=0` for that). Swap framework JSONs to compare stacks on the same (model, system, partition, tuner).
 
 ### Warm and cold memory
 
-The end-to-end layer also prices key-value (KV) caches that are kept outside GPU memory: a reusable prompt prefix fetched from host memory instead of being prefilled again, and idle sessions parked in host DRAM and then on flash. A system JSON with a `host` block lists the tiers (`h200.8gpu`, `h100.8gpu` and `b200.8gpu` carry one).
+The end-to-end layer also prices key-value (KV) caches that are kept outside GPU memory: a reusable prompt prefix fetched from host memory instead of being prefilled again, and idle sessions parked in host DRAM and then on flash. A system JSON with a `host` block lists the tiers: `h200.8gpu`, `h100.8gpu` and `b200.8gpu` carry one, with host DRAM and, on the first two, flash. A CXL or remote-store tier is one more entry in that list; none ships in the database.
 
 ```python
 from llm_perf.specs.workload_spec import WorkloadSpec
@@ -180,7 +182,7 @@ print(f"sessions per server          = {e2e.warm.N_sessions:.0f}")   # 800, agai
 print(f"parked in DRAM, on flash     = {[round(n) for n in e2e.warm.N_parked_by_tier]}")   # [165, 555]
 ```
 
-Hot memory (GPU memory) is read on every decode step and is modeled by the decode and prefill calculators; warm memory (host DRAM, CXL) and cold storage (flash, a remote store) are read only when a cache moves, so they change time to first token (TTFT), prefill work and sessions per server, and never the decode step. Every move of a cache — a handoff between pools, a fetch, a store, a resume — is one transfer function over a path of stages: stage latencies add and the slowest stage sets the rate. The prefix hit rate and the idle fraction are inputs, not predictions, and there is no queue in the model. Unlike decode TPOT, these end-to-end results are not validated against measurement: no consistent public TTFT data is available. Derivation: [phase and memory disaggregation](https://spicemonkey.github.io/flare-llm/disaggregation.html).
+Hot memory (GPU memory) is read on every decode step and is modeled by the decode and prefill calculators; warm memory (host DRAM, CXL) and cold storage (flash, a remote store) are read only when a cache moves, so they change time to first token (TTFT), prefill work and sessions per server, and never the decode step. Every move of a cache — a handoff between pools, a fetch, a store, a resume — is one transfer function over a path of stages: stage latencies add and the slowest stage sets the rate. The prefix hit rate and the idle fraction are inputs, not predictions, and there is no queue in the model. Unlike decode TPOT, these end-to-end results are not validated against measurement. A comparison of the model's TTFT with the public measurements of disaggregated deployments did not meet its acceptance tests, and that data itself varies by up to 3.5× between comparable runs, so read TTFT, pool sizes and session counts as what the stated assumptions imply. Derivation: [phase and memory disaggregation](https://spicemonkey.github.io/flare-llm/disaggregation.html).
 
 ---
 
@@ -188,9 +190,9 @@ Hot memory (GPU memory) is read on every decode step and is modeled by the decod
 
 ![full (partition, B) exploration cloud vs. extracted frontier](assets/pareto_basic.png)
 
-Enumerates every valid pipeline / tensor / expert / sequence parallelism partition `(PP, TP, EP, SP)`, sweeps the batch `B` from 1 to the KV-paging max, and extracts the upper-right envelope in (interactivity, throughput/GPU) space. At baseline GB200 NVL72 with `PP_MAX = 8`: 260 valid partitions and 6,880 evaluations → 40 frontier points.
+Enumerates every valid pipeline / tensor / expert / sequence parallelism partition `(PP, TP, EP, SP)`, sweeps the batch `B` from 1 to the KV-paging max, and extracts the upper-right envelope in (interactivity, throughput/GPU) space. At baseline GB200 NVL72 with `PP_MAX = 8`: 260 valid partitions, 200 of them with a batch that fits, and 6,726 evaluations → 41 frontier points.
 
-Three partitions carry almost all of it, and all three are single-stage. The interactive end is `PP=1 TP=16 EP=1`, capped at 395 tok/s/user by the kernel-launch budget of the 120 layers; that assumes the all-reduce runs in the NVLink switch, which the default framework enables (with software collectives the ceiling is 355 tok/s/user with a tree and 251 with a ring — the second case study). From 65 to 307 tok/s/user the envelope is `PP=1 TP=16 EP=4`: a replica is then four groups of sixteen devices, each group serving its own quarter of the batch, and spreading the experts over all 64 devices cuts the expert weights each device reads per step from 56 GB to 17 GB. Below 65 tok/s/user it is `PP=1 TP=8 EP=8`, peaking at 1,539 tok/s/GPU. Pipeline depth buys batch, not speed: a token crosses every stage, so a pipeline of depth `PP` at batch `B` lands where `PP=1` at batch `B/PP` does, while holding `1/PP` of the weights and KV cache per device. Expert parallelism relieves the same memory limit without the extra stages, so depth barely appears.
+Three partitions carry almost all of it, and all three are single-stage. The interactive end is `PP=1 TP=16 EP=1`, capped at 395 tok/s/user by the kernel-launch budget of the 120 layers; that assumes the all-reduce runs in the NVLink switch, which the default framework enables (with software collectives the ceiling is 355 tok/s/user with a tree and 251 with a ring — the second case study). From 66 to 307 tok/s/user the envelope is `PP=1 TP=16 EP=4`: a replica is then four groups of sixteen devices, each group serving its own quarter of the batch, and spreading the experts over all 64 devices cuts the weights each device reads per step from about 56 GB to 17 GB at a batch large enough to reach every expert. Below 66 tok/s/user it is mostly `PP=1 TP=8 EP=8`, peaking at 1,532 tok/s/GPU. Pipeline depth buys batch, not speed: a token crosses every stage, so a pipeline of depth `PP` at batch `B` lands where `PP=1` at batch `B/PP` does, while holding `1/PP` of the weights and KV cache per device. Expert parallelism relieves the same memory limit without the extra stages, so depth barely appears.
 
 Workload: GPT-1.8T MoE @ FP4 on GB200 NVL72.
 
@@ -200,14 +202,14 @@ Workload: GPT-1.8T MoE @ FP4 on GB200 NVL72.
 
 ![TPU v5p pod vs GB200 NVL72 Pareto frontiers](assets/pareto_tpu_vs_gb200.png)
 
-Two fabrics with opposite design points, same workload: GPT-1.8T MoE @ FP4, `S_decode = 8192`, batch up to 256. A TPU v5p slice (4096 chips, 3D torus 16³, 459 TF and 2.77 TB/s HBM per chip, 100 GB/s/port Inter-Chip Interconnect) against a GB200 NVL72 (72 GPUs, single-tier NVLink crossbar, 2250 TF and 8 TB/s HBM per GPU, 900 GB/s/port). Both chips are given the same 0.7 sustained-to-nameplate memory-bandwidth fraction; the GB200 value is fitted to measured runs and the TPU has no measurement behind it, so the notebook exposes it as one knob. Any replica that fits a system is admitted, and devices left over after the last whole replica idle and still count in throughput per device. Both axes are per-device or per-user, so the 4096-vs-72 device gap doesn't distort the comparison — but aggregate throughput is not shown, and it scales with cluster size.
+Two fabrics with opposite design points, same workload: GPT-1.8T MoE @ FP4, `S_decode = 8192`, batch up to 256. A TPU v5p slice (4096 chips, 3D torus 16³, 459 TF and 2.77 TB/s HBM per chip, 100 GB/s/port Inter-Chip Interconnect) against a GB200 NVL72 (72 GPUs, single-tier NVLink crossbar, 2500 TF and 8 TB/s HBM per GPU, 900 GB/s/port). Both chips are given the same 0.7 sustained-to-nameplate memory-bandwidth fraction; the GB200 value is fitted to measured runs and the TPU has no measurement behind it, so the notebook exposes it as one knob. Any replica that fits a system is admitted, and devices left over after the last whole replica idle and still count in throughput per device. Both axes are per-device or per-user, so the 4096-vs-72 device gap doesn't distort the comparison — but aggregate throughput is not shown, and it scales with cluster size.
 
 | Fabric | Valid partitions | Peak throughput/device | Peak interactivity | Winner at peak throughput |
 |---|---|---|---|---|
 | TPU v5p slice | 1,066 | 222 tok/s/device | 109 tok/s/user | `PP=1 TP=8 EP=4 B=256` |
 | GB200 NVL72 | 260 | 724 tok/s/device | 355 tok/s/user | `PP=1 TP=16 EP=1 B=256` |
 
-The rack is ahead at every operating point: 3.3× the throughput per device at the batch-heavy end, 6.3× at 50 tok/s/user, 9.5× at 60, and past 110 tok/s/user the pod has no operating point at all. Two things separate them. Memory bandwidth per chip is 2.9× higher on GB200, and decode on a model this size is bound by reading weights. And the smaller, slower-linked chip needs wider groups: the GB200 frontier is `TP=16` with 1 to 4 expert-parallel groups over 900 GB/s links, the TPU frontier `TP=8` with 4 to 16 groups — replicas of 32 to 128 chips — over 100 GB/s links. Communication takes 23–49% of stage time along the TPU frontier against 12–37% along the GB200 one. At nameplate TPU memory bandwidth the TPU peak rises to 294 tok/s/device and the ordering is unchanged.
+The rack is ahead at every operating point: 3.3× the throughput per device at the batch-heavy end, 6.3× at 50 tok/s/user, 9.5× at 60, and past 110 tok/s/user the pod has no operating point at all. Two things separate them. Memory bandwidth per chip is 2.9× higher on GB200, and decode on a model this size is bound by reading weights. And the smaller, slower-linked chip needs wider groups: the GB200 frontier is `TP=16` with 1 to 4 expert-parallel groups over 900 GB/s links, the TPU frontier `TP=8` with 2 to 16 groups, about half of its points adding pipeline stages — replicas of 16 to several hundred chips — over 100 GB/s links. Communication takes 23–49% of stage time along the TPU frontier against 12–37% along the GB200 one. At nameplate TPU memory bandwidth the TPU peak rises to 294 tok/s/device and the ordering is unchanged.
 
 Each fabric is also swept under two collective-algorithm variants — ring everywhere versus the per-collective optimizer (double binary tree, DBT, on the crossbar; dimension-decomposed torus routing on the pod). **On GB200 the optimizer changes which partition wins**: under ring the frontier is built from `TP=8`, because a ring all-reduce over 16 ranks costs too much latency; the pipelined DBT makes `TP=16` affordable and lifts peak throughput from 688 to 724 tok/s/device and top interactivity from 251 to 355 tok/s/user. On the pod the gain is small (216 to 222 tok/s/device at the peak, 103 to 109 tok/s/user at the tail): its winning groups are small enough that a flat ring and a dimension-by-dimension walk cost nearly the same. The lesson generalizes: collective-algorithm tuning pays in proportion to the communication share, and that share is set by how wide the groups must be before the model fits.
 
@@ -215,7 +217,7 @@ Each fabric is also swept under two collective-algorithm variants — ring every
 
 ## Utilities
 
-- **HuggingFace Adapter** — converts any HF `config.json` (incl. MoE / GQA) into the `llm_perf.model` schema. See [`utils/hf_model_adapter.py`](llm_perf/utils/hf_model_adapter.py).
+- **HuggingFace Adapter** — converts a HuggingFace `config.json` into the `llm_perf.model` schema: dense and GQA models, the Qwen3, DeepSeek-V3, Mixtral and gpt-oss styles of MoE config, and heads wider than H / n_q. Latent attention is not converted (it warns; add the `mla` block by hand), and an MoE config it cannot read is an error, not a dense model. See [`utils/hf_model_adapter.py`](llm_perf/utils/hf_model_adapter.py).
 - **DRAM3D Bandwidth Calculator** — derives HBM bandwidth from die-interface parameters to evaluate future memory classes (HBM3E / HBM4 / HBM4E). See [`utils/dram3d.py`](llm_perf/utils/dram3d.py) and the [3D-stacked DRAM bandwidth](https://spicemonkey.github.io/flare-llm/dram3d.html) chapter.
 
 ---

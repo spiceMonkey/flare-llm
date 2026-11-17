@@ -86,7 +86,7 @@ Returns:
 
 ## `llm_perf.utils.dram3d`
 
-DRAM3D bandwidth utility (documentation/modeling/dram3d.md).
+DRAM3D bandwidth utility (dram3d.md).
 
 Derives HBM bandwidth from physical interface parameters and can update existing database/system/*.json files with the computed values.
 
@@ -244,6 +244,8 @@ Static registry of canonical equations (LaTeX + Python literal strings).
 ## `llm_perf.utils.plotting`
 
 Lightweight plotting helpers for llm\_perf experiments.
+
+matplotlib is imported inside the plotting functions, not at module level, so that ``import llm\_perf`` and the calculators work without it installed.
 
 ### `save_config_tps_scatter(config_labels: Sequence[str], tps_values: Sequence[float], output_path: str | Path, *, title: str | None=None, ylabel: str='TTPS (tokens/s)') -> Path`
 

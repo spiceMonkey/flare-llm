@@ -1,0 +1,19 @@
+# Python dependencies for FLARE (the `llm_perf` package, the notebooks and the validators).
+#
+# Python >= 3.10 is required: the package evaluates `X | Y` type unions when it
+# is imported, which Python 3.9 rejects.
+#
+# The `llm_perf` package itself (specs, loaders, calculators) needs only the
+# standard library, so `import llm_perf` works with none of the packages below.
+# They are needed for:
+#   matplotlib  - llm_perf.utils.plotting, the Pareto notebooks, the validator plots
+#   numpy       - the validators under benchmark/validate/
+#   jupyter     - running notebooks/*.ipynb (provides IPython, ipykernel, nbconvert)
+#
+# The lower bounds are the oldest releases the three notebooks and the two
+# validators were run against, on Python 3.10. matplotlib 3.6 and older fail in
+# the notebooks with current Jupyter (the inline plotting backend needs 3.7).
+
+matplotlib>=3.7
+numpy>=1.22
+jupyter

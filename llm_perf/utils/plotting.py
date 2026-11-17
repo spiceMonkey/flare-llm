@@ -1,11 +1,25 @@
-"""Lightweight plotting helpers for llm_perf experiments."""
+"""Lightweight plotting helpers for llm_perf experiments.
+
+matplotlib is imported inside the plotting functions, not at module level, so
+that ``import llm_perf`` and the calculators work without it installed.
+"""
 
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Sequence
 
-import matplotlib.pyplot as plt
+
+def _pyplot():
+    """Import matplotlib.pyplot on first use."""
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError as exc:
+        raise ImportError(
+            "llm_perf plotting helpers need matplotlib (pip install matplotlib); "
+            "the rest of llm_perf does not."
+        ) from exc
+    return plt
 
 
 def save_config_tps_scatter(
@@ -22,6 +36,8 @@ def save_config_tps_scatter(
         raise ValueError("config_labels and tps_values must have the same length")
     if not config_labels:
         raise ValueError("At least one data point is required to build a plot")
+
+    plt = _pyplot()
 
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)

@@ -13,15 +13,15 @@ Pure analytical model functions. Each takes (model, system, partition, tuner, fr
 
 **Fields**
 
-| Field | Type | Default |
-|---|---|---|
-| `M_theta_device` | `float` | — |
-| `M_act_device` | `float` | — |
-| `M_kv_token` | `float` | — |
-| `M_kv_device` | `float` | — |
-| `M_total_device` | `float` | — |
-| `fits_in_HBM` | `bool` | — |
-| `M_resident_per_tier` | `List[float]` | `field(default_factory=list)` |
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `M_theta_device` | `float` | — | — |
+| `M_act_device` | `float` | — | — |
+| `M_kv_token` | `float` | — | per-device, per-sequence KV memory (one resident sequence's KV history, all stage layers); matches decode.md §1.3 M\_{KV,token} |
+| `M_kv_device` | `float` | — | per-device KV memory aggregated over the sequences its group holds: (B / D\_batch) * M\_kv\_token; matches decode.md §1.3 M\_{KV,device} |
+| `M_total_device` | `float` | — | — |
+| `fits_in_HBM` | `bool` | — | legacy name; True iff every tier fits |
+| `M_resident_per_tier` | `List[float]` | `field(default_factory=list)` | bytes per tier |
 
 ### `compute_memory(model: LlmModelSpec, system: SystemSpec, partition: PartitionSpec, tuner: TuningSpec, framework: FrameworkSpec) -> MemoryResults`
 
@@ -37,7 +37,7 @@ Decode-phase performance model — consolidates flops + traffic + comm + latency
 
 Mirrors the shape of `prefill_model.py`: four pure functions on typed dataclasses, each returning a small result dataclass. Internally the phase-agnostic physics (weight/KV footprint, linear FLOPs, collective cost) lives in `core/primitives/`; this module wires those primitives together with decode-specific pieces (attention that scales with S, not S²; message sizes that are B·H·b, not S·H·b).
 
-Documentation: `documentation/modeling/decode.md`.
+Documentation: `decode.md`.
 
 Public surface (preserved from the pre-refactor four-file split):
 - compute\_flops(model, partition, tuner) → FlopsResults
@@ -59,13 +59,13 @@ Public surface (preserved from the pre-refactor four-file split):
 
 **Fields**
 
-| Field | Type | Default |
-|---|---|---|
-| `T_theta` | `float` | — |
-| `T_kv_token` | `float` | — |
-| `T_kv_device` | `float` | — |
-| `T_token_eff` | `float` | — |
-| `T_step_eff` | `float` | — |
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `T_theta` | `float` | — | per-device weight traffic per stage pass (batch-independent for dense; microbatch-aware for MoE) |
+| `T_kv_token` | `float` | — | per-device, per-token KV traffic (one active sequence's KV-history read, all stage layers); matches decode.md §2.3 T\_{KV,token} |
+| `T_kv_device` | `float` | — | per-device, per-stage-pass KV traffic aggregated over the microbatch: mb * T\_kv\_token (mb = B at PP = 1); matches decode.md §2.3 T\_{KV,device} |
+| `T_token_eff` | `float` | — | effective per-token (B=1) traffic |
+| `T_step_eff` | `float` | — | effective per-step (batched) traffic = T\_theta + T\_kv\_device |
 
 ### class `CommResults`
 
@@ -87,31 +87,31 @@ Public surface (preserved from the pre-refactor four-file split):
 
 **Fields**
 
-| Field | Type | Default |
-|---|---|---|
-| `t_compute` | `float` | — |
-| `t_compute_eff` | `float` | — |
-| `eta_TC` | `float` | — |
-| `t_mem` | `float` | — |
-| `t_local` | `float` | — |
-| `t_comm` | `float` | — |
-| `t_stage` | `float` | — |
-| `t_kernel` | `float` | — |
-| `t_LM` | `float` | — |
-| `t_step_user` | `float` | — |
-| `pp_bubble_factor` | `float` | — |
-| `TPS_single` | `float` | — |
-| `TTPS` | `float` | — |
-| `B` | `int` | — |
-| `TPOT` | `float` | — |
-| `B_star` | `float` | — |
-| `N_tok_per_step` | `float` | `1.0` |
-| `t_step_user_verify` | `float` | `0.0` |
-| `TPOT_spec` | `float` | `0.0` |
-| `t_step_seq` | `float` | `0.0` |
-| `pp_traversal_factor` | `float` | `1.0` |
-| `microbatch` | `float` | `1.0` |
-| `group_batch` | `float` | `1.0` |
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `t_compute` | `float` | — | raw roofline compute time for one stage pass = F\_step / R\_gpu |
+| `t_compute_eff` | `float` | — | Tensor-Core-derated compute time (= t\_compute / η\_TC) |
+| `eta_TC` | `float` | — | Tensor Core efficiency factor at this mb (1.0 = peak) |
+| `t_mem` | `float` | — | — |
+| `t_local` | `float` | — | max(t\_compute\_eff, t\_mem) — memory-or-compute-bound roofline |
+| `t_comm` | `float` | — | — |
+| `t_stage` | `float` | — | GPU-only step time (compute + comm + overlap) |
+| `t_kernel` | `float` | — | per-round CPU dispatch budget = L · k · τ\_launch |
+| `t_LM` | `float` | — | LM head one-shot latency on stage PP-1 (decode.md §6.2) |
+| `t_step_user` | `float` | — | — |
+| `pp_bubble_factor` | `float` | — | diagnostic: stages per in-flight microbatch, max(1, PP/B); 1.0 = pipeline full |
+| `TPS_single` | `float` | — | — |
+| `TTPS` | `float` | — | — |
+| `B` | `int` | — | — |
+| `TPOT` | `float` | — | — |
+| `B_star` | `float` | — | — |
+| `N_tok_per_step` | `float` | `1.0` | — |
+| `t_step_user_verify` | `float` | `0.0` | — |
+| `TPOT_spec` | `float` | `0.0` | — |
+| `t_step_seq` | `float` | `0.0` | — |
+| `pp_traversal_factor` | `float` | `1.0` | — |
+| `microbatch` | `float` | `1.0` | — |
+| `group_batch` | `float` | `1.0` | — |
 
 ### `effective_peak_flops_TF(system: SystemSpec, bytes_per_param: float) -> float`
 
@@ -151,12 +151,13 @@ Per-token latency and throughput (seconds, tokens/s).
 
 The per-stage roofline gives the cost of one pipeline stage processing one microbatch of `mb = decode_microbatch(B, PP)` sequences. A token is not produced until its microbatch has crossed all PP stages and the LM
 head, so the inter-token time is the traversal sum, not one stage:
-    t_step_base = PP · max(t_stage_GPU(mb), t_kernel) + t_LM(mb)
+    t_stage_with_kernel = t_stage_GPU(mb) + max(0, t_kernel - ρ_kernel · t_stage_GPU(mb))
+    t_step_base = PP · t_stage_with_kernel + t_LM(mb)
     t_step_user = t_step_base + max(0, t_step_seq
                                       - ρ_seq · t_step_base)
 Throughput is B tokens per t\_step\_user: the PP stages work on different microbatches concurrently, which is what PP buys. It does not shorten any one sequence's path through the L layers.
 
-`t_stage_GPU` is the GPU-side compute + comm time (with optional Tensor Core efficiency derate at small microbatch). `t_kernel` is the per-round CPU dispatch budget (kernel\_launch\_overhead.md §5). The two are composed via `kernel_overlap_factor` ρ\_kernel: ρ\_kernel=1 means SW is fully hidden by GPU work (just `max`), ρ\_kernel=0 means strict serialization. `t_step_seq` is the per-sequence serving runtime overhead (decode.md §7.3). Gross host work is `t_step_seq = c_seq_us · B · 1e-6`; composition via `seq_overlap_factor` ρ\_seq uses the same physics as ρ\_kernel — under CUDA-Graph replay (ρ\_seq = 1, default) the CPU runs ahead and host work hides behind GPU compute until it exceeds `t_step_base`.
+`t_stage_GPU` is the GPU-side compute + comm time (with optional Tensor Core efficiency derate at small microbatch). `t_kernel` is the per-round CPU dispatch budget (decode.md §7.1). The two are composed via `kernel_overlap_factor` ρ\_kernel, the fraction of the GPU stage time behind which launch time can hide: ρ\_kernel=1 gives `max(t_stage_GPU, t_kernel)`, ρ\_kernel=0 strict serialization. `t_step_seq` is the per-sequence serving runtime overhead (decode.md §7.3). Gross host work is `t_step_seq = (c_orch_us + c_seq_us · B) · 1e-6`, a per-step floor plus a per-sequence term; composition via `seq_overlap_factor` ρ\_seq uses the same physics as ρ\_kernel — under CUDA-Graph replay (ρ\_seq = 1, default) the CPU runs ahead and host work hides behind GPU compute until it exceeds `t_step_base`.
 
 ---
 
@@ -166,78 +167,78 @@ Throughput is B tokens per t\_step\_user: the PP stages work on different microb
 
 **Fields**
 
-| Field | Type | Default |
-|---|---|---|
-| `F_proj_prefill` | `float` | — |
-| `F_attn_kv_prefill` | `float` | — |
-| `F_ffn_prefill` | `float` | — |
-| `F_layer_prefill` | `float` | — |
-| `F_prefill_device` | `float` | — |
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `F_proj_prefill` | `float` | — | (4H² + 4HH\_kv) * S per layer |
+| `F_attn_kv_prefill` | `float` | — | 4 * S² * H per layer |
+| `F_ffn_prefill` | `float` | — | 6 * H * I\_eff * S per layer |
+| `F_layer_prefill` | `float` | — | sum per layer (before sharding) |
+| `F_prefill_device` | `float` | — | per-device total across L/PP layers |
 
 ### class `PrefillTrafficResults`
 
 **Fields**
 
-| Field | Type | Default |
-|---|---|---|
-| `T_theta_device` | `float` | — |
-| `T_kv_write_per_request` | `float` | — |
-| `T_prefill_device` | `float` | — |
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `T_theta_device` | `float` | — | weight read traffic (same as decode); B\_pf-independent |
+| `T_kv_write_per_request` | `float` | — | per-device, per-prefill-request KV write traffic (S\_input tokens worth). Mirrors decode's T\_kv\_token: the per-unit building block, NOT the batched-prefill aggregate. For B\_pf concurrent requests, the device-aggregate is B\_pf * T\_kv\_write\_per\_request. |
+| `T_prefill_device` | `float` | — | single-request per-device total traffic: T\_theta\_device + T\_kv\_write\_per\_request |
 
 ### class `PrefillCommResults`
 
 **Fields**
 
-| Field | Type | Default |
-|---|---|---|
-| `t_TP_prefill` | `float` | — |
-| `t_EP_prefill` | `float` | — |
-| `t_SP_prefill` | `float` | — |
-| `t_PP_prefill` | `float` | — |
-| `t_prefill_comm` | `float` | — |
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `t_TP_prefill` | `float` | — | — |
+| `t_EP_prefill` | `float` | — | — |
+| `t_SP_prefill` | `float` | — | — |
+| `t_PP_prefill` | `float` | — | — |
+| `t_prefill_comm` | `float` | — | total per-stage communication |
 
 ### class `PrefillLatencyResults`
 
 **Fields**
 
-| Field | Type | Default |
-|---|---|---|
-| `t_prefill_compute` | `float` | — |
-| `t_prefill_compute_eff` | `float` | — |
-| `eta_TC` | `float` | — |
-| `t_prefill_mem` | `float` | — |
-| `t_prefill_local` | `float` | — |
-| `t_prefill_comm` | `float` | — |
-| `t_kernel_per_stage` | `float` | — |
-| `t_pipeline_warmup` | `float` | — |
-| `t_LM_prefill` | `float` | — |
-| `t_prefill` | `float` | — |
-| `B_prefill` | `int` | — |
-| `t_prefill_batched` | `float` | — |
-| `chunk_size` | `int` | — |
-| `n_chunks` | `int` | — |
-| `t_prefill_chunked` | `float` | — |
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `t_prefill_compute` | `float` | — | raw F\_prefill\_device / R\_GPU |
+| `t_prefill_compute_eff` | `float` | — | Tensor-Core-derated: t\_compute / η\_TC |
+| `eta_TC` | `float` | — | Tensor Core efficiency at this prefill payload |
+| `t_prefill_mem` | `float` | — | multi-tier sum, sram.md §2.1 |
+| `t_prefill_local` | `float` | — | max(compute\_eff, mem) |
+| `t_prefill_comm` | `float` | — | — |
+| `t_kernel_per_stage` | `float` | — | per-stage CPU dispatch budget = (L/PP) · k · τ\_launch |
+| `t_pipeline_warmup` | `float` | — | (PP-1) * t\_stage, where t\_stage includes the stage's unhidden comm |
+| `t_LM_prefill` | `float` | — | LM head one-shot on stage PP-1 (prefill.md §3.4) |
+| `t_prefill` | `float` | — | full hardware prefill latency |
+| `B_prefill` | `int` | — | — |
+| `t_prefill_batched` | `float` | — | t\_prefill with B\_prefill scaling |
+| `chunk_size` | `int` | — | C (0 = no chunking) |
+| `n_chunks` | `int` | — | — |
+| `t_prefill_chunked` | `float` | — | sum of k-dependent chunk latencies |
 
 ### class `SuffixPrefillResults`
 
 **Fields**
 
-| Field | Type | Default |
-|---|---|---|
-| `S_prefix` | `int` | — |
-| `S_suffix` | `int` | — |
-| `F_suffix_device` | `float` | — |
-| `t_compute_eff` | `float` | — |
-| `t_mem` | `float` | — |
-| `t_local` | `float` | — |
-| `t_comm` | `float` | — |
-| `t_stage` | `float` | — |
-| `t_LM` | `float` | — |
-| `t_suffix` | `float` | — |
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `S_prefix` | `int` | — | tokens whose cache is already present |
+| `S_suffix` | `int` | — | new tokens prefilled: S\_input - S\_prefix |
+| `F_suffix_device` | `float` | — | per-device FLOPs across L/PP layers |
+| `t_compute_eff` | `float` | — | Tensor-Core-derated compute time |
+| `t_mem` | `float` | — | weights + KV write (suffix) + KV read (prefix) |
+| `t_local` | `float` | — | max(compute\_eff, mem) composed with the SW budget |
+| `t_comm` | `float` | — | per-stage collectives at S\_suffix tokens |
+| `t_stage` | `float` | — | t\_local + unhidden comm |
+| `t_LM` | `float` | — | LM head on the last position, once |
+| `t_suffix` | `float` | — | PP * t\_stage + t\_LM |
 
 ### `compute_prefill_flops(model: LlmModelSpec, partition: PartitionSpec, tuner: TuningSpec, framework: FrameworkSpec) -> PrefillFlopsResults`
 
-Per-device prefill FLOPs. Doc: documentation/modeling/prefill.md §1.5
+Per-device prefill FLOPs. Doc: prefill.md §1.5
 
 Linear contribution (proj + FFN + router) comes from the shared `linear_flops_per_token` primitive scaled by S\_input. Attention is phase-specific (S² scaling) and stays inline.
 
@@ -272,34 +273,34 @@ With P a multiple of C this is the chunk the chunked model prices for the same t
 
 ### class `KVPagingConfig`
 
-KV paging parameters (documentation/modeling/kv.md §2).
+KV paging parameters (kv.md §2).
 
 **Fields**
 
-| Field | Type | Default |
-|---|---|---|
-| `block_size` | `int` | `16` |
-| `beam_width` | `int` | `1` |
-| `system_overhead_GB` | `float` | `1.5` |
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `block_size` | `int` | `16` | tokens per block (B\_block) |
+| `beam_width` | `int` | `1` | W (1 = greedy, no CoW) |
+| `system_overhead_GB` | `float` | `1.5` | CUDA context + kernel workspace |
 
 ### class `KVPagingResults`
 
 **Fields**
 
-| Field | Type | Default |
-|---|---|---|
-| `M_block` | `float` | — |
-| `N_blocks_per_seq` | `int` | — |
-| `phi_avg` | `float` | — |
-| `M_HBM_KV_avail` | `float` | — |
-| `max_sequences` | `int` | — |
-| `S_max` | `float` | — |
-| `M_act_per_seq` | `float` | `0.0` |
-| `inflight_sequences` | `float` | `0.0` |
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `M_block` | `float` | — | per-block KV footprint (bytes) |
+| `N_blocks_per_seq` | `int` | — | blocks needed per sequence |
+| `phi_avg` | `float` | — | average internal fragmentation factor |
+| `M_HBM_KV_avail` | `float` | — | HBM available for KV after weights+act+sys (bytes) |
+| `max_sequences` | `int` | — | max concurrent sequences at given S |
+| `S_max` | `float` | — | max supportable context length for 1 sequence |
+| `M_act_per_seq` | `float` | `0.0` | activation working set one resident sequence adds on a device (bytes) |
+| `inflight_sequences` | `float` | `0.0` | caches in flight to the replica that were charged (sequences) |
 
 ### `compute_kv_paging(model: LlmModelSpec, system: SystemSpec, partition: PartitionSpec, tuner: TuningSpec, framework: FrameworkSpec, memory: MemoryResults, paging: KVPagingConfig, *, inflight_sequences: float=0.0) -> KVPagingResults`
 
-KV paging analysis. Doc: documentation/modeling/kv.md §2-6
+KV paging analysis. Doc: kv.md §2-6
 
 `inflight_sequences` is the number of caches in flight to this replica during a disaggregated handoff (`E2EResults.inflight_sequences`): each already holds its cache in GPU memory but is not decoded yet, so it takes the room of a resident sequence's cache without its activations.
 
@@ -454,16 +455,16 @@ d          = lambda\_rep * t\_prefill / B\_pf        fraction of wall clock spen
 
 **Fields**
 
-| Field | Type | Default |
-|---|---|---|
-| `duty` | `float` | — |
-| `TPOT` | `float` | — |
-| `gap_max` | `float` | — |
-| `t_block` | `float` | — |
-| `rate_max` | `float` | — |
-| `throughput_per_gpu_max` | `float` | — |
-| `utilisation` | `float` | — |
-| `feasible` | `bool` | — |
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `duty` | `float` | — | d: fraction of wall clock in prefill at the given rate |
+| `TPOT` | `float` | — | mean time per output token, inflated by 1 / (1 - d); inf when d >= 1 |
+| `gap_max` | `float` | — | worst gap between two tokens: one step + t\_block |
+| `t_block` | `float` | — | longest wait prefill imposes on a decode step |
+| `rate_max` | `float` | — | lambda\_max: requests/s at which the decode batch is full |
+| `throughput_per_gpu_max` | `float` | — | output tokens/s per GPU at rate\_max |
+| `utilisation` | `float` | — | rate / rate\_max |
+| `feasible` | `bool` | — | rate <= rate\_max (the decode batch can hold the requests in progress) |
 
 ### class `DeploymentPoint`
 
@@ -471,14 +472,14 @@ The best operating point of one deployment inside the latency targets.
 
 **Fields**
 
-| Field | Type | Default |
-|---|---|---|
-| `feasible` | `bool` | — |
-| `B_decode` | `int` | `0` |
-| `throughput_per_gpu` | `float` | `0.0` |
-| `requests_per_gpu` | `float` | `0.0` |
-| `TPOT` | `float` | `0.0` |
-| `gap_max` | `float` | `0.0` |
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `feasible` | `bool` | — | — |
+| `B_decode` | `int` | `0` | decode batch chosen |
+| `throughput_per_gpu` | `float` | `0.0` | output tokens/s per GPU, over every GPU of the deployment |
+| `requests_per_gpu` | `float` | `0.0` | — |
+| `TPOT` | `float` | `0.0` | mean time per output token at that point |
+| `gap_max` | `float` | `0.0` | worst gap between two tokens at that point |
 
 ### class `SharedSplitComparison`
 
@@ -540,17 +541,17 @@ Scope and limits of `kv_fetch_break_even`:
 
 **Fields**
 
-| Field | Type | Default |
-|---|---|---|
-| `S_input` | `int` | — |
-| `M_KV` | `float` | — |
-| `t_recompute` | `float` | — |
-| `BW_break_even_GBps` | `float` | — |
-| `fetch_bandwidth_GBps` | `Optional[float]` | `None` |
-| `fetch_streams` | `int` | `1` |
-| `t_fetch` | `Optional[float]` | `None` |
-| `saving` | `Optional[float]` | `None` |
-| `fetch_wins` | `Optional[bool]` | `None` |
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `S_input` | `int` | — | prompt tokens covered by the cached entry |
+| `M_KV` | `float` | — | bytes: cluster-aggregate KV cache of the prompt |
+| `t_recompute` | `float` | — | seconds: prefill time over the prompt |
+| `BW_break_even_GBps` | `float` | — | M\_KV / t\_recompute; inf when prefill takes no time |
+| `fetch_bandwidth_GBps` | `Optional[float]` | `None` | delivered rate per stream |
+| `fetch_streams` | `int` | `1` | — |
+| `t_fetch` | `Optional[float]` | `None` | seconds: alpha + M\_KV / (streams * BW\_fetch) |
+| `saving` | `Optional[float]` | `None` | seconds: t\_recompute - t\_fetch (positive = fetching wins) |
+| `fetch_wins` | `Optional[bool]` | `None` | — |
 
 ### class `PrefixFetch`
 
@@ -575,25 +576,25 @@ first, then the host stages (`core.kv_transfer`). `rule`:
 
 **Fields**
 
-| Field | Type | Default |
-|---|---|---|
-| `S_input` | `int` | — |
-| `S_prefix` | `int` | — |
-| `hit_rate` | `float` | — |
-| `rule` | `str` | — |
-| `M_KV_prefix` | `float` | — |
-| `t_prefill` | `float` | — |
-| `t_suffix` | `float` | — |
-| `t_fetch` | `float` | — |
-| `fetch_rate_GBps` | `float` | — |
-| `fetch_bottleneck` | `str` | — |
-| `t_hit` | `float` | — |
-| `fetch_taken` | `bool` | — |
-| `t_first_hit` | `float` | — |
-| `E_t_first` | `float` | — |
-| `E_t_work` | `float` | — |
-| `work_saved` | `float` | — |
-| `BW_break_even_GBps` | `float` | — |
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `S_input` | `int` | — | — |
+| `S_prefix` | `int` | — | — |
+| `hit_rate` | `float` | — | — |
+| `rule` | `str` | — | — |
+| `M_KV_prefix` | `float` | — | bytes: cluster-aggregate cache of the prefix |
+| `t_prefill` | `float` | — | seconds: prefill of the whole prompt (a miss) |
+| `t_suffix` | `float` | — | seconds: prefill of the suffix on the cached prefix |
+| `t_fetch` | `float` | — | seconds: the prefix over the path |
+| `fetch_rate_GBps` | `float` | — | delivered rate of that transfer |
+| `fetch_bottleneck` | `str` | — | stage that set it |
+| `t_hit` | `float` | — | t\_fetch + t\_suffix |
+| `fetch_taken` | `bool` | — | is a hit served from the cache (always True under "always") |
+| `t_first_hit` | `float` | — | prefill-phase time of a hit as served |
+| `E_t_first` | `float` | — | expected prefill-phase time of a request |
+| `E_t_work` | `float` | — | expected GPU prefill time of a request |
+| `work_saved` | `float` | — | 1 - E\_t\_work / t\_prefill |
+| `BW_break_even_GBps` | `float` | — | M\_KV(S\_prefix) / (t\_prefill - t\_suffix) |
 
 ### `kv_fetch_break_even(model: LlmModelSpec, system: SystemSpec, partition: PartitionSpec, tuner: TuningSpec, framework: Optional[FrameworkSpec]=None, *, fetch_bandwidth_GBps: Optional[float]=None, fetch_streams: int=1, fetch_alpha_us: float=0.0) -> KVReuseBreakEven`
 
@@ -651,28 +652,28 @@ Several tiers (warm, then cold). Idle sessions fill the first tier, then each ov
 
 **Fields**
 
-| Field | Type | Default |
-|---|---|---|
-| `tier` | `str` | — |
-| `M_KV_session` | `float` | — |
-| `capacity_bytes` | `float` | — |
-| `N_active` | `int` | — |
-| `N_parked_capacity` | `int` | — |
-| `N_sessions` | `float` | — |
-| `N_parked` | `float` | — |
-| `sessions_gain` | `float` | — |
-| `limited_by` | `str` | — |
-| `t_store` | `float` | — |
-| `t_resume_fetch` | `float` | — |
-| `store_rate_GBps` | `float` | — |
-| `fetch_rate_GBps` | `float` | — |
-| `fetch_bottleneck` | `str` | — |
-| `tiers` | `Optional[List[str]]` | `None` |
-| `N_parked_capacity_by_tier` | `Optional[List[int]]` | `None` |
-| `N_parked_by_tier` | `Optional[List[float]]` | `None` |
-| `t_resume_fetch_by_tier` | `Optional[List[float]]` | `None` |
-| `t_store_by_tier` | `Optional[List[float]]` | `None` |
-| `t_resume_fetch_mean` | `float` | `0.0` |
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `tier` | `str` | — | the tier that holds idle sessions |
+| `M_KV_session` | `float` | — | bytes: cluster-aggregate cache of one session at the context length |
+| `capacity_bytes` | `float` | — | bytes: the tier's capacity over the hosts the replica spans |
+| `N_active` | `int` | — | sequences the replica holds in GPU memory |
+| `N_parked_capacity` | `int` | — | idle caches the tier can hold |
+| `N_sessions` | `float` | — | sessions the replica serves, active and idle together |
+| `N_parked` | `float` | — | idle sessions actually parked: N\_sessions - N\_active |
+| `sessions_gain` | `float` | — | N\_sessions / N\_active (1.0 when N\_active = 0) |
+| `limited_by` | `str` | — | "idle\_fraction" \| "tier\_capacity" \| "none" |
+| `t_store` | `float` | — | seconds: one session's cache from the GPUs to the tier |
+| `t_resume_fetch` | `float` | — | seconds: back from the tier into the GPUs |
+| `store_rate_GBps` | `float` | — | — |
+| `fetch_rate_GBps` | `float` | — | — |
+| `fetch_bottleneck` | `str` | — | — |
+| `tiers` | `Optional[List[str]]` | `None` | — |
+| `N_parked_capacity_by_tier` | `Optional[List[int]]` | `None` | — |
+| `N_parked_by_tier` | `Optional[List[float]]` | `None` | — |
+| `t_resume_fetch_by_tier` | `Optional[List[float]]` | `None` | — |
+| `t_store_by_tier` | `Optional[List[float]]` | `None` | — |
+| `t_resume_fetch_mean` | `float` | `0.0` | over the parked sessions, weighted by where they sit |
 
 ### `tier_stages(host: HostSpec, tier: KVTierSpec, *, write: bool=False) -> List[PathStageSpec]`
 
@@ -696,7 +697,7 @@ Sessions one replica serves when idle caches are parked in a warm tier.
 
 `overflow_tiers` are further tiers (for example flash) that take idle sessions once `tier_name` is full, in the order given.
 
-`M_KV_session` is the whole cache of one session (all of its shards); `N_active` the sequences the replica holds in GPU memory; `n_gpus` the replica's devices, which fixes how many hosts (and so how much of the tier) it has.
+`M_KV_session` is the whole cache of one session (all of its shards); `N_active` the sequences the replica holds in GPU memory; `n_gpus` the replica's devices, which fixes its share of hosts and so how much of each tier it has (`HostSpec.hosts_for`: a replica smaller than a host gets that fraction of the host's tiers, not all of them).
 
 ---
 
@@ -726,21 +727,23 @@ A copy that is staged whole at each stage (store-and-forward) pays every stage's
 
 **Fields**
 
-| Field | Type | Default |
-|---|---|---|
-| `t_total` | `float` | — |
-| `t_alpha` | `float` | — |
-| `t_blocks` | `float` | — |
-| `t_bytes` | `float` | — |
-| `rate_GBps` | `float` | — |
-| `bottleneck` | `str` | — |
-| `n_blocks` | `int` | — |
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `t_total` | `float` | — | seconds: t\_alpha + t\_blocks + t\_bytes |
+| `t_alpha` | `float` | — | seconds: sum of the stage latencies |
+| `t_blocks` | `float` | — | seconds: per-block CPU cost |
+| `t_bytes` | `float` | — | seconds: bandwidth term |
+| `rate_GBps` | `float` | — | delivered rate of the bandwidth term (the slowest stage when pipelined) |
+| `bottleneck` | `str` | — | name of the slowest stage ("" for an empty path) |
+| `n_blocks` | `int` | — | blocks the per-block cost was charged for |
 
-### `stage_rate(stage: PathStageSpec, *, n_hosts: int=1, n_gpus: int=1, eta_busy: float=1.0) -> float`
+### `stage_rate(stage: PathStageSpec, *, n_hosts: float=1, n_gpus: int=1, eta_busy: float=1.0) -> float`
 
-Bytes per second one stage carries for a transfer into `n_gpus` GPUs on `n_hosts` hosts.
+Bytes per second one stage carries for a transfer into `n_gpus` GPUs with a share of `n_hosts` hosts.
 
-### `transfer_time(M_bytes: float, stages: Sequence[PathStageSpec], *, n_hosts: int=1, n_gpus: int=1, eta_busy: float=1.0, block_bytes: float=0.0, tau_block_us: float=0.0, pipelined: bool=True) -> TransferResult`
+`n_hosts` may be a fraction: a replica smaller than a host has that share of the host's stages (`HostSpec.hosts_for`).
+
+### `transfer_time(M_bytes: float, stages: Sequence[PathStageSpec], *, n_hosts: float=1, n_gpus: int=1, eta_busy: float=1.0, block_bytes: float=0.0, tau_block_us: float=0.0, pipelined: bool=True) -> TransferResult`
 
 Time to move `M_bytes` over `stages` (see the module docstring).
 
@@ -766,28 +769,31 @@ Neither depends on the request rate. Given a rate and a utilisation cap, the who
 
 **Fields**
 
-| Field | Type | Default |
-|---|---|---|
-| `g_prefill` | `int` | — |
-| `g_decode` | `int` | — |
-| `mu_prefill` | `float` | — |
-| `mu_decode` | `float` | — |
-| `gpu_s_prefill` | `float` | — |
-| `gpu_s_decode` | `float` | — |
-| `pool_ratio` | `float` | — |
-| `throughput_per_gpu` | `float` | — |
-| `requests_per_gpu` | `float` | — |
-| `n_prefill_replicas` | `Optional[int]` | `None` |
-| `n_decode_replicas` | `Optional[int]` | `None` |
-| `n_prefill_gpus` | `Optional[int]` | `None` |
-| `n_decode_gpus` | `Optional[int]` | `None` |
-| `n_gpus` | `Optional[int]` | `None` |
-| `utilisation_prefill` | `Optional[float]` | `None` |
-| `utilisation_decode` | `Optional[float]` | `None` |
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `g_prefill` | `int` | — | devices per prefill replica |
+| `g_decode` | `int` | — | devices per decode replica |
+| `mu_prefill` | `float` | — | B\_pf / t\_prefill; inf when prefill takes no time |
+| `mu_decode` | `float` | — | B / (S\_out * TPOT) |
+| `gpu_s_prefill` | `float` | — | g\_p / mu\_p |
+| `gpu_s_decode` | `float` | — | g\_d / mu\_d |
+| `pool_ratio` | `float` | — | G\_p / G\_d |
+| `throughput_per_gpu` | `float` | — | output tokens/s per GPU, counted over BOTH pools |
+| `requests_per_gpu` | `float` | — | requests/s per GPU, counted over both pools |
+| `n_prefill_replicas` | `Optional[int]` | `None` | — |
+| `n_decode_replicas` | `Optional[int]` | `None` | — |
+| `n_prefill_gpus` | `Optional[int]` | `None` | — |
+| `n_decode_gpus` | `Optional[int]` | `None` | — |
+| `n_gpus` | `Optional[int]` | `None` | — |
+| `utilisation_prefill` | `Optional[float]` | `None` | offered rate / pool capacity |
+| `utilisation_decode` | `Optional[float]` | `None` | — |
+| `prefill_limited_by` | `str` | `'gpu_work'` | — |
 
-### `replica_devices(partition: PartitionSpec) -> int`
+### `replica_devices(partition: PartitionSpec, framework: Optional[FrameworkSpec]=None) -> int`
 
-Devices in one replica: PP * TP * EP * SP.
+Devices in one replica (`primitives.N_replica`).
+
+PP * TP * EP * SP when TP and EP are orthogonal; PP * max(TP, EP) * SP when the stack co-locates them on the same devices. Without a framework the layout is taken as orthogonal.
 
 ### `kv_layout(model: LlmModelSpec, partition: PartitionSpec, framework: FrameworkSpec) -> Tuple[int, int, int]`
 
@@ -795,10 +801,12 @@ How one sequence's KV cache is split across a replica: (PP, D\_kv\_eff, SP).
 
 PP splits it by layer, SP by sequence position, and the KV divisor by head (or by sequence under DP-attention). A latent-attention cache is not head-structured, so under TP-attention TP does not split it (attention.md §3.6) and the divisor is 1. EP does not enter: an EP group holds whole sequences, so it changes where a cache lives and not its shape.
 
-### `compute_pools(*, t_prefill: float, B_prefill: int, TPOT: float, B_decode: int, g_prefill: int, g_decode: int, workload: WorkloadSpec) -> PoolResults`
+### `compute_pools(*, t_prefill: float, B_prefill: int, TPOT: float, B_decode: int, g_prefill: int, g_decode: int, workload: WorkloadSpec, mu_prefill_cap: float=math.inf) -> PoolResults`
 
 Size a prefill pool and a decode pool for one prompt / output shape.
 
-`t_prefill` is the time one prefill replica takes for a batch of `B_prefill` prompts; `TPOT` is the user-observed time per output token of a decode replica running `B_decode` sequences.
+`t_prefill` is the time one prefill replica takes for a batch of `B_prefill` prompts; `TPOT` is the user-observed time per output token of a decode replica running `B_decode` sequences. `mu_prefill_cap` is a
+second limit on a prefill replica's request rate that is not GPU work:
+under prefix reuse, the requests per second whose cached prefixes the replica's fetch path can carry.
 
 ---

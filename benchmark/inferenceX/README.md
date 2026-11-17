@@ -4,12 +4,7 @@ A snapshot of the public InferenceX™ benchmark dataset, used by the llm_perf
 modeling suite for cross-validation against measured production-stack
 performance.
 
-**Provenance.** All data here comes from the InferenceX public API
-(<https://inferencex.semianalysis.com/api/v1/benchmarks>). InferenceX is
-maintained by SemiAnalysis LLC and licensed under Apache 2.0
-(<https://github.com/SemiAnalysisAI/InferenceX>). See `LICENSE` and
-`NOTICE` in this directory for the upstream license text and attribution
-requirement.
+**Provenance.** All data here comes from the InferenceX public API, one request per model: `https://inferencex.semianalysis.com/api/v1/benchmarks?model=<model>` (for example `?model=gpt-oss-120b`; the endpoint answers HTTP 400 without the `model` parameter). InferenceX is maintained by SemiAnalysis LLC and licensed under Apache 2.0 (<https://github.com/SemiAnalysisAI/InferenceX>); its license names the copyright holders as "Copyright 2025 SemiAnalysis LLC, Advanced Micro Devices, NVIDIA CORPORATION". See `LICENSE` and `NOTICE` in this directory for the upstream license text and attribution requirement.
 
 ## What's here
 
@@ -117,8 +112,4 @@ upstream code; the upstream
 
 ## Relationship to llm_perf
 
-This dataset is consumed by comparison scripts in `sandbox/` and (in the
-future) regression tests under `tests/` to validate the analytical model
-against measured production-stack performance. The model spec → InferenceX
-model-identifier mapping lives in those consumers, not here — keeping the
-benchmark folder strictly upstream-derived.
+This dataset is consumed by the validation drivers under [`benchmark/validate/`](../validate/), which compare the analytical model with measured production-stack performance. The model spec → InferenceX model-identifier mapping lives in those drivers, not here — keeping the benchmark folder strictly upstream-derived.

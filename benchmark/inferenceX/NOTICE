@@ -6,9 +6,13 @@ maintained by SemiAnalysis LLC.
 
   Source repository: https://github.com/SemiAnalysisAI/InferenceX
   Live dashboard:    https://inferencex.com/
-  Public API:        https://inferencex.semianalysis.com/api/v1/benchmarks
+  Public API:        https://inferencex.semianalysis.com/api/v1/benchmarks?model=<model>
+                     (one request per model, e.g. ?model=gpt-oss-120b; the
+                     endpoint answers HTTP 400 without the model parameter)
   License:           Apache License 2.0 (see LICENSE in this directory)
-  Copyright:         Copyright 2026 SemiAnalysis LLC
+  Copyright:         Copyright 2025 SemiAnalysis LLC, Advanced Micro Devices,
+                     NVIDIA CORPORATION (as stated in the upstream LICENSE,
+                     vendored verbatim in this directory)
 
 Per Apache 2.0 §4 attribution requirement and the upstream's explicit
 attribution policy, any work derived from this data must:
@@ -26,6 +30,6 @@ publicly published benchmark measurement rows. Snapshots are not edited
 in place; if InferenceX corrects or backfills a measurement, re-run
 `fetch.py` to refresh.
 
-Local-only adapters (model-spec mappings, comparison scripts) live
-elsewhere in the llm_perf tree (e.g., `sandbox/`) and are not part of
-the InferenceX dataset.
+The code that compares this data with model predictions (model-spec
+mappings, validation drivers) lives outside this directory, under
+`benchmark/validate/`, and is not part of the InferenceX dataset.

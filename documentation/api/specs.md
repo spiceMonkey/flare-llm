@@ -15,30 +15,30 @@ MoE configuration, if the model uses experts.
 
 **Fields**
 
-| Field | Type | Default |
-|---|---|---|
-| `n_experts` | `int` | — |
-| `k_active` | `int` | — |
-| `I_moe` | `int` | — |
-| `n_moe_layers` | `Optional[int]` | `None` |
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `n_experts` | `int` | — | N\_exp |
+| `k_active` | `int` | — | k (experts per token) |
+| `I_moe` | `int` | — | I\_moe (per-expert FFN dim) |
+| `n_moe_layers` | `Optional[int]` | `None` | if only subset of L layers is MoE |
 
 ### class `MLASpec`
 
 Multi-head Latent Attention configuration (DSv3-style).
 
-When present on `LlmModelSpec.mla`, replaces the GQA per-head K/V accounting with a head-shared latent representation. The per-token KV cache stores only the joint latent `c_KV` of dimension `d_c + d_qk_rope`, not per-head K and V. Per-layer attention parameters are the sum of six matrices (W\_DQ, W\_UQ, W\_DKV, W\_UK, W\_UV, W\_O); see `documentation/modeling/attention.md §3.3`.
+When present on `LlmModelSpec.mla`, replaces the GQA per-head K/V accounting with a head-shared latent representation. The per-token KV cache stores only the joint latent `c_KV` of dimension `d_c + d_qk_rope`, not per-head K and V. Per-layer attention parameters are the sum of six matrices (W\_DQ, W\_UQ, W\_DKV, W\_UK, W\_UV, W\_O); see `attention.md §3.3`.
 
 When `mla` is set, the GQA-derived `n_kv` field on `LlmModelSpec` is ignored for KV-cache and attention-parameter accounting.
 
 **Fields**
 
-| Field | Type | Default |
-|---|---|---|
-| `d_c` | `int` | — |
-| `d_q_c` | `int` | — |
-| `d_qk_nope` | `int` | — |
-| `d_qk_rope` | `int` | — |
-| `d_v` | `int` | — |
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `d_c` | `int` | — | KV latent dimension (head-shared) |
+| `d_q_c` | `int` | — | Query latent dimension (down-projection of Q) |
+| `d_qk_nope` | `int` | — | Non-positional Q / K per-head dimension |
+| `d_qk_rope` | `int` | — | RoPE-positional Q / K per-head dim (head-shared on K side) |
+| `d_v` | `int` | — | Value per-head dimension |
 
 #### `kv_bytes_per_token_per_layer(self, bytes_per_param: float) -> float`
 
@@ -70,21 +70,22 @@ Transformer / LLM architecture spec.
 
 **Fields**
 
-| Field | Type | Default |
-|---|---|---|
-| `name` | `str` | — |
-| `L` | `int` | — |
-| `H` | `int` | — |
-| `n_q` | `int` | — |
-| `n_kv` | `int` | — |
-| `I_dense` | `int` | — |
-| `vocab_size` | `int` | — |
-| `max_seq_len` | `int` | — |
-| `bytes_per_param` | `float` | — |
-| `moe` | `Optional[MoESpec]` | `None` |
-| `mla` | `Optional[MLASpec]` | `None` |
-| `kv_bytes_per_elem` | `Optional[float]` | `None` |
-| `act_bytes_per_elem` | `Optional[float]` | `None` |
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `name` | `str` | — | — |
+| `L` | `int` | — | number of transformer layers |
+| `H` | `int` | — | hidden size |
+| `n_q` | `int` | — | query heads |
+| `n_kv` | `int` | — | KV heads (for GQA); ignored when `mla` is set |
+| `I_dense` | `int` | — | FFN dim for dense layers |
+| `vocab_size` | `int` | — | V |
+| `max_seq_len` | `int` | — | maximum sequence length (S\_max) |
+| `bytes_per_param` | `float` | — | bytes per *weight* (e.g. 2 for bf16, 1 for FP8, 0.5 for FP4) |
+| `moe` | `Optional[MoESpec]` | `None` | — |
+| `mla` | `Optional[MLASpec]` | `None` | — |
+| `kv_bytes_per_elem` | `Optional[float]` | `None` | KV-cache entries (K, V, or the MLA latent) |
+| `act_bytes_per_elem` | `Optional[float]` | `None` | activations, logits, collective payloads |
+| `head_dim` | `Optional[int]` | `None` | — |
 
 #### `kv_bytes(self) -> float`
 
@@ -96,7 +97,9 @@ Bytes per activation / logit / collective-payload element.
 
 #### `d_head(self) -> float`
 
-Head dimension d\_head = H / n\_q.
+Head dimension: `head_dim` when the model states one, else H / n\_q.
+
+Some models use heads wider than H / n\_q (Qwen3-VL-235B: H = 4096, 64 heads of 128). `head_dim` then sets the key/value width, and with it the KV cache and the K/V projections. The query and output projections and the attention-score FLOPs are still counted at width H, which under-counts them for such a model.
 
 #### `H_kv(self) -> float`
 
@@ -110,7 +113,7 @@ KV projection dimension H\_kv = n\_kv * d\_head (GQA / MHA path).
 
 One memory tier exposed by a device.
 
-Per `documentation/modeling/sram.md §1.1`, devices expose an ordered list of memory tiers, fastest first. Each tier carries a capacity, an effective peak read bandwidth, a first-byte latency, and a sustained-bandwidth deflator. The `eta_beta` deflator follows the same convention as
+Per `sram.md §1.1`, devices expose an ordered list of memory tiers, fastest first. Each tier carries a capacity, an effective peak read bandwidth, a first-byte latency, and a sustained-bandwidth deflator. The `eta_beta` deflator follows the same convention as
 collective contention (`collectives/05_contention_and_congestion.md`):
 1.0 = peak, < 1 = sustained-throughput losses (HBM refresh + bank
 conflicts ≈ 0.92, LPDDR5 ≈ 0.85, SRAM ≈ 1.0; sram.md §1.2).
@@ -119,13 +122,13 @@ The `alpha_us` first-byte cost enters the device roofline as one transaction per
 
 **Fields**
 
-| Field | Type | Default |
-|---|---|---|
-| `name` | `str` | — |
-| `capacity_GB` | `float` | — |
-| `bandwidth_GBps` | `float` | — |
-| `alpha_us` | `float` | `0.0` |
-| `eta_beta` | `float` | `1.0` |
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `name` | `str` | — | e.g. "hbm", "sram", "lpddr5" |
+| `capacity_GB` | `float` | — | per-device capacity (GB, decimal) |
+| `bandwidth_GBps` | `float` | — | peak read bandwidth (GB/s) |
+| `alpha_us` | `float` | `0.0` | first-byte latency (μs); 1 transaction / tier / step |
+| `eta_beta` | `float` | `1.0` | sustained-BW deflator ∈ (0, 1]; 1.0 = peak |
 
 ### class `DeviceSpec`
 
@@ -156,20 +159,20 @@ Auto-materialized tiers use `eta_beta = 1.0` to keep `t_mem` numerically identic
 
 **Fields**
 
-| Field | Type | Default |
-|---|---|---|
-| `name` | `str` | — |
-| `hbm_capacity_GB` | `float` | — |
-| `hbm_bandwidth_GBps` | `float` | — |
-| `peak_flops_TF` | `float` | — |
-| `sram_capacity_MB` | `Optional[float]` | `None` |
-| `sram_bandwidth_TBps` | `Optional[float]` | `None` |
-| `tiers` | `List['MemoryTierSpec']` | `field(default_factory=list)` |
-| `peak_flops_eta` | `float` | `1.0` |
-| `peak_flops_TF_by_precision` | `Optional[Dict[float, float]]` | `None` |
-| `hbm_eta_beta` | `float` | `1.0` |
-| `tensor_core_efficiency` | `Optional[Dict[int, float]]` | `None` |
-| `bw_efficiency` | `Optional[Dict[int, float]]` | `None` |
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `name` | `str` | — | — |
+| `hbm_capacity_GB` | `float` | — | capacity per device (GB, decimal) |
+| `hbm_bandwidth_GBps` | `float` | — | effective memory bandwidth (GB/s) |
+| `peak_flops_TF` | `float` | — | peak compute throughput (TFLOPs) |
+| `sram_capacity_MB` | `Optional[float]` | `None` | optional fast SRAM tier (MB) |
+| `sram_bandwidth_TBps` | `Optional[float]` | `None` | optional fast SRAM BW (TB/s) |
+| `tiers` | `List['MemoryTierSpec']` | `field(default_factory=list)` | — |
+| `peak_flops_eta` | `float` | `1.0` | — |
+| `peak_flops_TF_by_precision` | `Optional[Dict[float, float]]` | `None` | — |
+| `hbm_eta_beta` | `float` | `1.0` | — |
+| `tensor_core_efficiency` | `Optional[Dict[int, float]]` | `None` | — |
+| `bw_efficiency` | `Optional[Dict[int, float]]` | `None` | — |
 
 #### `get_tiers(self) -> List['MemoryTierSpec']`
 
@@ -184,9 +187,9 @@ Materialization order (sram.md §1.1, fastest first):
 
 One crossbar switching tier (single monolithic chip abstraction).
 
-Default topology for all existing system JSONs. `ports` is the radix — the number of ranks reachable within this tier from any single rank. Cumulative reach at tier k is the product of ports over tiers 0..k. See documentation/modeling/collectives/02\_topology\_mapping.md §2 (star) / collectives/04\_in\_network\_collectives.md (INC) for the cost forms consumed by each tier kind.
+Default topology for all existing system JSONs. `ports` is the radix — the number of ranks reachable within this tier from any single rank. Cumulative reach at tier k is the product of ports over tiers 0..k. See collectives/02\_topology\_mapping.md §2 (star) / collectives/04\_in\_network\_collectives.md (INC) for the cost forms consumed by each tier kind.
 
-Contention coefficients `eta_alpha` (≥ 1, inflates α) and `eta_beta` (∈ (0, 1], deflates BW) coarsen dynamic contention into the α–β model per documentation/modeling/contention.md. Defaults are 1.0 (ideal).
+Contention coefficients `eta_alpha` (≥ 1, inflates α) and `eta_beta` (∈ (0, 1], deflates BW) coarsen dynamic contention into the α–β model per collectives/05\_contention\_and\_congestion.md. Defaults are 1.0 (ideal).
 
 `inc` flags in-network collective support on this tier's switch ASIC:
 "none" (software collectives only), "sharp\_class" (NVLink SHARP / NVLS, Quantum SHARP, Spectrum-X SHARP — switch ALU + multicast crossbar; accelerates AR / AG / RS), or "hw\_a2a" (Tomahawk Ultra / Rubin-class crossbar scatter-gather; accelerates AR / AG / RS *and* A2A). The legacy values "nvls" and "sharp" are accepted by the loader and mapped to "sharp\_class" for backwards compatibility. When set, `inc_alpha_us` optionally overrides the switch-cut-through α used on the INC path —
@@ -195,43 +198,43 @@ captures cut-through latency).
 
 `schedule_island_ports` (default 0 = off) lets software on this single-tier fabric also group its ranks into islands of that many ports and run the hierarchical schedule (reduce-scatter in each island, a sub-all-reduce across islands, all-gather in each island) that a multi-tier chain of the same geometry is given; the dispatcher then uses the cheaper of the flat and the grouped schedule. A switch that reaches every rank in one hop can run any grouping, so this is a schedule choice, not a hardware property. Set it on an idealized flat reference fabric that is compared against a tiered one (to the tiered fabric's inner radix): without it the flat fabric is only offered one ring or tree over the whole group and can price above the fabric it is meant to bound. Use the tiered fabric's inner radix and nothing smaller: a smaller island would also regroup collectives that fit inside one island of the tiered fabric, and the two fabrics would then differ for reasons other than the tier boundary. Left at 0 on real systems, where a pinned algorithm keeps its literal single-level meaning.
 
-See documentation/modeling/collectives/04\_in\_network\_collectives.md and documentation/modeling/collectives/04\_in\_network\_collectives.md.
+See collectives/04\_in\_network\_collectives.md and collectives/04\_in\_network\_collectives.md.
 
 **Fields**
 
-| Field | Type | Default |
-|---|---|---|
-| `name` | `str` | — |
-| `ports` | `int` | — |
-| `bw_per_port_GBps` | `float` | — |
-| `alpha_us` | `float` | — |
-| `topology` | `str` | `'crossbar'` |
-| `eta_alpha` | `float` | `1.0` |
-| `eta_beta` | `float` | `1.0` |
-| `inc` | `str` | `'none'` |
-| `inc_alpha_us` | `float` | `0.0` |
-| `oversubscription` | `float` | `1.0` |
-| `schedule_island_ports` | `int` | `0` |
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `name` | `str` | — | — |
+| `ports` | `int` | — | radix at this tier (reachable ranks) |
+| `bw_per_port_GBps` | `float` | — | effective per-port bandwidth (GB/s) |
+| `alpha_us` | `float` | — | per-traversal latency (microseconds) |
+| `topology` | `str` | `'crossbar'` | — |
+| `eta_alpha` | `float` | `1.0` | contention α-inflator (≥ 1; ideal = 1) |
+| `eta_beta` | `float` | `1.0` | contention BW-deflator (∈ (0, 1]; ideal = 1) |
+| `inc` | `str` | `'none'` | "none" \| "sharp\_class" \| "hw\_a2a" |
+| `inc_alpha_us` | `float` | `0.0` | switch-cut-through α on INC path; 0 = reuse alpha\_us |
+| `oversubscription` | `float` | `1.0` | tier oversubscription ratio s ≥ 1; caps eta\_beta at 1/s |
+| `schedule_island_ports` | `int` | `0` | 0 = off; else island size for grouped (hierarchical) schedules |
 
 ### class `TorusTier`
 
 One k-D torus tier.
 
-`dims` is (D\_1, ..., D\_k); reach is prod(dims). Each node has 2k neighbor links; `bw_per_port_GBps` is the per-link single-direction bandwidth. Diameter = sum(floor(D\_i/2)); bisection cut binds the largest dim. See documentation/modeling/collectives/02\_topology\_mapping.md §3 for the dim-decomposed primitive cost forms.
+`dims` is (D\_1, ..., D\_k); reach is prod(dims). Each node has 2k neighbor links; `bw_per_port_GBps` is the per-link single-direction bandwidth. Diameter = sum(floor(D\_i/2)); bisection cut binds the largest dim. See collectives/02\_topology\_mapping.md §3 for the dim-decomposed primitive cost forms.
 
-Contention coefficients `eta_alpha`, `eta_beta` as in `CrossbarTier`; see documentation/modeling/contention.md.
+Contention coefficients `eta_alpha`, `eta_beta` as in `CrossbarTier`; see collectives/05\_contention\_and\_congestion.md.
 
 **Fields**
 
-| Field | Type | Default |
-|---|---|---|
-| `name` | `str` | — |
-| `dims` | `Tuple[int, ...]` | — |
-| `bw_per_port_GBps` | `float` | — |
-| `alpha_us` | `float` | — |
-| `topology` | `str` | `'torus'` |
-| `eta_alpha` | `float` | `1.0` |
-| `eta_beta` | `float` | `1.0` |
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `name` | `str` | — | — |
+| `dims` | `Tuple[int, ...]` | — | (D\_1, ..., D\_k) |
+| `bw_per_port_GBps` | `float` | — | per-link single-direction BW (GB/s) |
+| `alpha_us` | `float` | — | per-hop latency (μs) |
+| `topology` | `str` | `'torus'` | — |
+| `eta_alpha` | `float` | `1.0` | contention α-inflator |
+| `eta_beta` | `float` | `1.0` | contention BW-deflator |
 
 #### `ports(self) -> int`
 
@@ -247,20 +250,20 @@ One mesh tier — handles both full mesh and k-D mesh via the `full` flag.
 
 No `inc` field — mesh has no switch ASIC; INC is structurally absent.
 
-See documentation/modeling/collectives/02\_topology\_mapping.md §4 (mesh) and the explainer `02_topology_mapping.md §4` for full vs k-D mesh derivations.
+See collectives/02\_topology\_mapping.md §4 (mesh) and the explainer `02_topology_mapping.md §4` for full vs k-D mesh derivations.
 
 **Fields**
 
-| Field | Type | Default |
-|---|---|---|
-| `name` | `str` | — |
-| `dims` | `Tuple[int, ...]` | — |
-| `bw_per_port_GBps` | `float` | — |
-| `alpha_us` | `float` | — |
-| `full` | `bool` | `False` |
-| `topology` | `str` | `'mesh'` |
-| `eta_alpha` | `float` | `1.0` |
-| `eta_beta` | `float` | `1.0` |
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `name` | `str` | — | — |
+| `dims` | `Tuple[int, ...]` | — | full=True: (N,); full=False: per-axis extents |
+| `bw_per_port_GBps` | `float` | — | per-link single-direction BW (GB/s) |
+| `alpha_us` | `float` | — | per-link / per-hop latency (μs) |
+| `full` | `bool` | `False` | True for full mesh, False for k-D mesh |
+| `topology` | `str` | `'mesh'` | — |
+| `eta_alpha` | `float` | `1.0` | contention α-inflator |
+| `eta_beta` | `float` | `1.0` | contention BW-deflator |
 
 #### `ports(self) -> int`
 
@@ -289,17 +292,20 @@ Same format as a network fabric tier (`ports` in parallel, a rate per port, a la
 "host" - per host; the stage is CPU-side (a root complex, the copy
            through pinned memory) and takes `HostSpec.eta_busy`;
 "gpu"  - per GPU that receives the transfer (a PCIe link into a GPU); "path" - as written (the links between two pools, the CXL devices or
-           drives behind one path).
+           drives behind one path);
+"tier" - per host, for the memory or storage tier at the far end of a
+           host path (its capacity is per host, so its rate is too). Not
+           CPU-side: it does not take `HostSpec.eta_busy`.
 
 **Fields**
 
-| Field | Type | Default |
-|---|---|---|
-| `name` | `str` | — |
-| `bw_per_port_GBps` | `float` | — |
-| `ports` | `int` | `1` |
-| `per` | `str` | `'path'` |
-| `alpha_us` | `float` | `0.0` |
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `name` | `str` | — | — |
+| `bw_per_port_GBps` | `float` | — | rate per port (GB/s, decimal) |
+| `ports` | `int` | `1` | — |
+| `per` | `str` | `'path'` | "host" \| "gpu" \| "path" \| "tier" |
+| `alpha_us` | `float` | `0.0` | latency the stage adds per transfer (microseconds) |
 
 ### class `KVTierSpec`
 
@@ -311,15 +317,15 @@ Host DRAM and CXL memory are described this way today. A flash tier is the same 
 
 **Fields**
 
-| Field | Type | Default |
-|---|---|---|
-| `name` | `str` | — |
-| `capacity_GB` | `float` | — |
-| `read_GBps` | `float` | — |
-| `write_GBps` | `Optional[float]` | `None` |
-| `ports` | `int` | `1` |
-| `alpha_us` | `float` | `0.0` |
-| `path` | `str` | `''` |
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `name` | `str` | — | — |
+| `capacity_GB` | `float` | — | per host (GB, decimal) |
+| `read_GBps` | `float` | — | rate per port when a cache is fetched from the tier |
+| `write_GBps` | `Optional[float]` | `None` | rate per port when a cache is stored; None = read rate |
+| `ports` | `int` | `1` | parallel devices behind the tier (CXL devices, drives) |
+| `alpha_us` | `float` | `0.0` | first-byte latency per transfer (microseconds) |
+| `path` | `str` | `''` | name of the HostSpec path from the tier into the GPUs |
 
 ### class `HostSpec`
 
@@ -355,9 +361,11 @@ pipelined     True: the stages stream, the slowest sets the rate;
 
 #### `get_path(self, name: str) -> List[PathStageSpec]`
 
-#### `hosts_for(self, n_devices: int) -> int`
+#### `hosts_for(self, n_devices: int) -> float`
 
-Hosts that a replica of `n_devices` GPUs spans.
+A replica's share of hosts: `n_devices / devices_per_host`.
+
+A replica of whole hosts gets them (8 GPUs on 8-GPU hosts: 1.0). A replica smaller than a host shares that host's memory, storage and root complex with the other replicas on it and is given its proportional share (4 GPUs: 0.5); so is a replica that does not fill its last host (12 GPUs: 1.5).
 
 ### class `SystemSpec`
 
@@ -436,11 +444,11 @@ Defaults are "auto" / "auto" / "weights", which on a single-tier device collapse
 
 **Fields**
 
-| Field | Type | Default |
-|---|---|---|
-| `weights_tier` | `str` | `'auto'` |
-| `kv_tier` | `str` | `'auto'` |
-| `auto_priority` | `str` | `'weights'` |
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `weights_tier` | `str` | `'auto'` | tier name or "auto" |
+| `kv_tier` | `str` | `'auto'` | tier name or "auto" |
+| `auto_priority` | `str` | `'weights'` | "weights" or "kv" |
 
 ### class `TuningSpec`
 
@@ -453,16 +461,16 @@ Workload knobs and chip-side calibration curves. Orthogonal to:
 
 **Fields**
 
-| Field | Type | Default |
-|---|---|---|
-| `S_decode` | `int` | `2048` |
-| `B_decode` | `int` | `1` |
-| `S_input` | `int` | `0` |
-| `B_prefill` | `int` | `1` |
-| `chunk_size` | `int` | `0` |
-| `placement` | `MemoryPlacementSpec` | `field(default_factory=MemoryPlacementSpec)` |
-| `n_tok_draft` | `int` | `0` |
-| `p_accept` | `float` | `0.0` |
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `S_decode` | `int` | `2048` | — |
+| `B_decode` | `int` | `1` | — |
+| `S_input` | `int` | `0` | prefill sequence length (0 = decode only) |
+| `B_prefill` | `int` | `1` | number of requests batched in prefill |
+| `chunk_size` | `int` | `0` | chunked prefill C (0 = no chunking) |
+| `placement` | `MemoryPlacementSpec` | `field(default_factory=MemoryPlacementSpec)` | — |
+| `n_tok_draft` | `int` | `0` | — |
+| `p_accept` | `float` | `0.0` | — |
 
 ---
 
@@ -483,7 +491,7 @@ axes:
                    collective algorithms + counts + overlap, MLA mode,
                    MoE A2A pattern, INC opt-in)
 
-Any (model, system, partition, tuner, framework) tuple is a runnable deployment configuration. Pre-canned framework JSONs live in `database/framework/` and correspond 1:1 to the production stack identifiers in InferenceX measurement metadata. See `documentation/modeling/decode.md §7.1, §7.2` (host overhead), `§5` (collective algorithms), `§6` (overlap composition).
+Any (model, system, partition, tuner, framework) tuple is a runnable deployment configuration. Pre-canned framework JSONs live in `database/framework/` and correspond 1:1 to the production stack identifiers in InferenceX measurement metadata. See `decode.md §7.1, §7.2` (host overhead), `§5` (collective algorithms), `§6` (overlap composition).
 
 ### class `FrameworkSpec`
 
@@ -531,23 +539,23 @@ Neutral / no-overhead defaults — matches the legacy TuningSpec defaults before
 
 ### class `OverheadSpec`
 
-Framework / CPU-stack overhead parameters (documentation/modeling/framework.md).
+Framework / CPU-stack overhead parameters (framework.md).
 
 Scope: CPU and software-stack overheads only. Network-fabric overheads (disaggregated KV transfer, co-located repack) live in `DisaggSpec`.
 
 All values default to 0.0 (zero-overhead baseline).
 
 **`t_graph_us` is a legacy fallback.** With the kernel-launch refactor
-(kernel\_launch\_overhead.md §5), the per-round CUDA-graph dispatch budget is derived from TuningSpec (`kernels_per_layer_compute`, `kernels_per_collective_call`, `kernel_launch_us`) and surfaced as `LatencyResults.t_kernel`. The E2E calculator uses `t_graph_us` only when `LatencyResults.t_kernel == 0` (SW modeling disabled by setting `kernel_launch_us = 0` in the tuner). Setting both is harmless — the derived term takes precedence — but `t_graph_us` is now redundant for most users.
+(decode.md §7.1), the per-round CUDA-graph dispatch budget is derived from FrameworkSpec (`kernels_per_layer_compute`, `kernels_per_collective_call`, `kernel_launch_us`) and surfaced as `LatencyResults.t_kernel`. The E2E calculator uses `t_graph_us` only when `LatencyResults.t_kernel == 0` (SW modeling disabled by setting `kernel_launch_us = 0` on the framework). Setting both is harmless — the derived term takes precedence — but `t_graph_us` is now redundant for most users.
 
 **Fields**
 
-| Field | Type | Default |
-|---|---|---|
-| `t_sched_us` | `float` | `0.0` |
-| `t_tok_us` | `float` | `0.0` |
-| `t_graph_us` | `float` | `0.0` |
-| `t_detok_us` | `float` | `0.0` |
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `t_sched_us` | `float` | `0.0` | scheduling + batch assembly |
+| `t_tok_us` | `float` | `0.0` | tokenization |
+| `t_graph_us` | `float` | `0.0` | legacy CUDA graph replay constant; superseded by LatencyResults.t\_kernel |
+| `t_detok_us` | `float` | `0.0` | detokenization |
 
 ---
 
@@ -561,25 +569,25 @@ The `disaggregated` flag selects which branch applies; the other branch's fields
 
 **Fields**
 
-| Field | Type | Default |
-|---|---|---|
-| `disaggregated` | `bool` | `False` |
-| `first_token` | `str` | `'decode'` |
-| `colo_alpha_us` | `float` | `0.0` |
-| `colo_repack_GBps` | `float` | `0.0` |
-| `colo_repack_eta` | `float` | `1.0` |
-| `inter_alpha_us` | `float` | `0.0` |
-| `inter_bandwidth_GBps` | `float` | `0.0` |
-| `transfer_streams` | `int` | `1` |
-| `auto_streams` | `bool` | `False` |
-| `N_WR` | `int` | `0` |
-| `tau_WR_us` | `float` | `0.0` |
-| `overlap_rho_KV` | `float` | `0.0` |
-| `overlap_resid_us` | `float` | `0.0` |
-| `staged` | `bool` | `False` |
-| `repack_GBps` | `float` | `0.0` |
-| `repack_eta` | `float` | `1.0` |
-| `auto_repack` | `bool` | `False` |
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `disaggregated` | `bool` | `False` | — |
+| `first_token` | `str` | `'decode'` | — |
+| `colo_alpha_us` | `float` | `0.0` | α\_intra (scale-up startup) |
+| `colo_repack_GBps` | `float` | `0.0` | BW\_intra; 0 → no repack modeled |
+| `colo_repack_eta` | `float` | `1.0` | η\_repack ∈ [1, 2] |
+| `inter_alpha_us` | `float` | `0.0` | α\_inter (single round-trip) |
+| `inter_bandwidth_GBps` | `float` | `0.0` | BW\_inter (effective, delivered), per stream |
+| `transfer_streams` | `int` | `1` | — |
+| `auto_streams` | `bool` | `False` | — |
+| `N_WR` | `int` | `0` | RDMA WR count per handoff |
+| `tau_WR_us` | `float` | `0.0` | per-WR posting latency |
+| `overlap_rho_KV` | `float` | `0.0` | ρ\_KV ∈ [0, 1] |
+| `overlap_resid_us` | `float` | `0.0` | — |
+| `staged` | `bool` | `False` | — |
+| `repack_GBps` | `float` | `0.0` | BW\_intra,d (decode-side scale-up); 0 → no repack |
+| `repack_eta` | `float` | `1.0` | η\_repack ∈ [1, 2] |
+| `auto_repack` | `bool` | `False` | — |
 
 ---
 

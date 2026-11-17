@@ -1,0 +1,14 @@
+# Generic local artefacts only.
+
+# Virtual environments
+.llm_perf/
+.venv/
+
+# Python bytecode caches
+__pycache__/
+
+# Jupyter autosave
+.ipynb_checkpoints/
+
+# macOS Finder metadata
+.DS_Store

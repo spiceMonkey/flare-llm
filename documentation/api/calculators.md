@@ -48,7 +48,7 @@ Five-spec composition (`model × system × partition × tuner × framework`). `f
 
 ### class `PrefillCalculator`
 
-Prefill performance calculator (documentation/modeling/prefill.md).
+Prefill performance calculator (prefill.md).
 
 Five-spec composition (`model × system × partition × tuner × framework`), matching `InferenceCalculator`. `framework` is optional; when omitted it defaults to `FrameworkSpec.default()` (neutral roofline).
 
@@ -64,30 +64,30 @@ Five-spec composition (`model × system × partition × tuner × framework`), ma
 
 **Fields**
 
-| Field | Type | Default |
-|---|---|---|
-| `TTFT` | `float` | — |
-| `TTFT_chunked` | `float` | — |
-| `TPOT` | `float` | — |
-| `throughput_per_gpu` | `float` | — |
-| `interactivity` | `float` | — |
-| `TTPS` | `float` | — |
-| `t_second_token` | `float` | — |
-| `t_handoff` | `float` | — |
-| `t_repack` | `float` | — |
-| `M_KV_total` | `float` | — |
-| `t_sched` | `float` | — |
-| `t_framework_per_step` | `float` | — |
-| `handoff_streams` | `int` | `0` |
-| `handoff_rate_GBps` | `float` | `0.0` |
-| `handoff_bottleneck` | `str` | `''` |
-| `inflight_sequences` | `float` | `0.0` |
-| `M_KV_inflight` | `float` | `0.0` |
-| `reuse` | `Optional[Any]` | `None` |
-| `TTFT_hit` | `float` | `0.0` |
-| `TTFT_expected` | `float` | `0.0` |
-| `warm` | `Optional[WarmSessionResults]` | `None` |
-| `pools` | `Optional[PoolResults]` | `None` |
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `TTFT` | `float` | — | t\_sched + t\_prefill (+ t\_handoff; + one decode step when a disaggregated decode worker emits token 1) |
+| `TTFT_chunked` | `float` | — | TTFT with chunked prefill |
+| `TPOT` | `float` | — | user-observed inter-token time: t\_step\_user(B), or the speculative-decoding value t\_step\_user\_verify / N\_tok\_per\_step |
+| `throughput_per_gpu` | `float` | — | tokens/s per GPU |
+| `interactivity` | `float` | — | 1 / TPOT (tokens/s perceived by user) |
+| `TTPS` | `float` | — | total cluster throughput |
+| `t_second_token` | `float` | — | — |
+| `t_handoff` | `float` | — | seconds (co-lo or disagg, depending on DisaggSpec.disaggregated) |
+| `t_repack` | `float` | — | seconds (scale-up repack component; 0 if no repack) |
+| `M_KV_total` | `float` | — | bytes (cluster-aggregate KV cache) |
+| `t_sched` | `float` | — | seconds |
+| `t_framework_per_step` | `float` | — | per-step overhead (seconds) |
+| `handoff_streams` | `int` | `0` | — |
+| `handoff_rate_GBps` | `float` | `0.0` | — |
+| `handoff_bottleneck` | `str` | `''` | — |
+| `inflight_sequences` | `float` | `0.0` | — |
+| `M_KV_inflight` | `float` | `0.0` | bytes, replica-aggregate: inflight\_sequences x M\_KV\_total |
+| `reuse` | `Optional[Any]` | `None` | — |
+| `TTFT_hit` | `float` | `0.0` | — |
+| `TTFT_expected` | `float` | `0.0` | — |
+| `warm` | `Optional[WarmSessionResults]` | `None` | — |
+| `pools` | `Optional[PoolResults]` | `None` | — |
 
 ### class `E2ECalculator`
 
