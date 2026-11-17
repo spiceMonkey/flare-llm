@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 @dataclass
 class OverheadSpec:
-    """Framework / CPU-stack overhead parameters (documentation/modeling/framework.md).
+    """Framework / CPU-stack overhead parameters (framework.md).
 
     Scope: CPU and software-stack overheads only. Network-fabric overheads
     (disaggregated KV transfer, co-located repack) live in `DisaggSpec`.
@@ -12,12 +12,12 @@ class OverheadSpec:
     All values default to 0.0 (zero-overhead baseline).
 
     **`t_graph_us` is a legacy fallback.** With the kernel-launch refactor
-    (kernel_launch_overhead.md §5), the per-round CUDA-graph dispatch budget
-    is derived from TuningSpec (`kernels_per_layer_compute`,
+    (decode.md §7.1), the per-round CUDA-graph dispatch budget
+    is derived from FrameworkSpec (`kernels_per_layer_compute`,
     `kernels_per_collective_call`, `kernel_launch_us`) and surfaced as
     `LatencyResults.t_kernel`. The E2E calculator uses `t_graph_us` only when
     `LatencyResults.t_kernel == 0` (SW modeling disabled by setting
-    `kernel_launch_us = 0` in the tuner). Setting both is harmless — the
+    `kernel_launch_us = 0` on the framework). Setting both is harmless — the
     derived term takes precedence — but `t_graph_us` is now redundant for
     most users.
     """

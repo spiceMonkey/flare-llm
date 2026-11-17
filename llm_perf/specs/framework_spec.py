@@ -19,7 +19,7 @@ Any (model, system, partition, tuner, framework) tuple is a runnable
 deployment configuration. Pre-canned framework JSONs live in
 `database/framework/` and correspond 1:1 to the production stack
 identifiers in InferenceX measurement metadata. See
-`documentation/modeling/decode.md §7.1, §7.2` (host overhead),
+`decode.md §7.1, §7.2` (host overhead),
 `§5` (collective algorithms), `§6` (overlap composition).
 """
 
@@ -52,7 +52,9 @@ class FrameworkSpec:
     # token-append + KV bookkeeping. Linear in B (one inner loop per active
     # sequence per step). Stack-dependent ranges for c_seq_us:
     # - C++/CUDA-graph + orchestrator (Dynamo+TRT): 5-22 µs/seq
-    # - Mixed orchestrator + Python (Dynamo+SGLang): 25-50 µs/seq
+    # - Mixed orchestrator + Python (Dynamo+SGLang): not measured; 25-50 µs/seq
+    #   is the expectation from its Python share, and dynamo_sglang.json ships
+    #   5 µs/seq as an unmeasured starting point
     # - Raw C++ runtime (raw TRT-LLM): 50-100 µs/seq
     # - Aggressively fused C++: ~10 µs/seq lower bound
     # - Python-heavy (vLLM, SGLang eager): 30-60 µs/seq

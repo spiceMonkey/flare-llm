@@ -3,8 +3,8 @@
 Local helper extracted from the upstream-synced ``collective_cost.py``;
 the upstream module no longer carries llm_perf-specific glue (every
 function there is a pure α-β collective primitive). This file owns the
-TP/SP/EP/PP combination logic — see ``documentation/modeling/decode.md``
-§5.5 for the derivation and ``documentation/modeling/prefill.md`` §3.2
+TP/SP/EP/PP combination logic — see ``decode.md``
+§5.5 for the derivation and ``prefill.md`` §3.2
 for the prefill cross-reference.
 """
 
@@ -32,7 +32,7 @@ def aggregate_per_stage(
     The PP hop is a single inter-stage forward per step.
 
     Prefill cross-references this aggregation — see
-    ``documentation/modeling/prefill.md`` §3.2 ("Following the same
+    ``prefill.md`` §3.2 ("Following the same
     structure as decode.md §5.5").
     """
     return (L / PP) * (n_TP * t_TP + n_SP * t_SP) + (L_moe / PP) * (n_EP * t_EP) + t_PP

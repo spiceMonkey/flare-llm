@@ -139,7 +139,7 @@ def compose_check(partition: PartitionSpec, framework: FrameworkSpec) -> None:
     at the start of pipeline assembly.
 
     Raises ValueError on:
-      - tp_ep_layout='co_located' with TP != EP. Co-located layouts overlay
+      - tp_ep_layout='co_located' with TP != EP when both exceed 1. Co-located layouts overlay
         TP and EP on the same physical GPUs (e.g., DSr1 NVL72 TP=EP=8 on
         8 GPUs); asymmetric (TP, EP) on a co-located layout is not modeled.
 
@@ -149,7 +149,11 @@ def compose_check(partition: PartitionSpec, framework: FrameworkSpec) -> None:
     physical GPU set — see the module docstring's four-row lookup table
     for the resulting D_attn / D_exp / D_kv / N_replica semantics.
     """
-    if framework.tp_ep_layout == "co_located":
+    # With TP = 1 or EP = 1 there is nothing to overlay and the two layouts
+    # are the same replica (a dense model run under a stack whose default
+    # layout is co-located is the common case), so the rule applies only
+    # when both axes are in use.
+    if framework.tp_ep_layout == "co_located" and partition.TP > 1 and partition.EP > 1:
         if partition.TP != partition.EP:
             raise ValueError(
                 "compose_check: framework.tp_ep_layout='co_located' requires "

@@ -1,5 +1,5 @@
 
-"""DRAM3D bandwidth utility (documentation/modeling/dram3d.md).
+"""DRAM3D bandwidth utility (dram3d.md).
 
 Derives HBM bandwidth from physical interface parameters and can update
 existing database/system/*.json files with the computed values.

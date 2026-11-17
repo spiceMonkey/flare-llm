@@ -86,7 +86,7 @@ class PrefillLatencyResults:
 
 
 # ────────────────────────────────────────────────────────────
-# Prefill FLOPs (documentation/modeling/prefill.md §1)
+# Prefill FLOPs (prefill.md §1)
 # ────────────────────────────────────────────────────────────
 
 def compute_prefill_flops(
@@ -95,7 +95,7 @@ def compute_prefill_flops(
     tuner: TuningSpec,
     framework: FrameworkSpec,
 ) -> PrefillFlopsResults:
-    """Per-device prefill FLOPs. Doc: documentation/modeling/prefill.md §1.5
+    """Per-device prefill FLOPs. Doc: prefill.md §1.5
 
     Linear contribution (proj + FFN + router) comes from the shared
     `linear_flops_per_token` primitive scaled by S_input. Attention is
@@ -166,7 +166,7 @@ def compute_prefill_flops(
 
 
 # ────────────────────────────────────────────────────────────
-# Prefill Traffic (documentation/modeling/prefill.md §3.1)
+# Prefill Traffic (prefill.md §3.1)
 # ────────────────────────────────────────────────────────────
 
 def compute_prefill_traffic(
@@ -198,7 +198,7 @@ def compute_prefill_traffic(
 
 
 # ────────────────────────────────────────────────────────────
-# Prefill Communication (documentation/modeling/prefill.md §3.2)
+# Prefill Communication (prefill.md §3.2)
 # ────────────────────────────────────────────────────────────
 
 def compute_prefill_comm(
@@ -326,7 +326,14 @@ def compute_prefill_comm(
     # (collective_cost.py §6: M = G·shard). Uses D_kv for the head/seq divisor
     # (matches prefill.md §3.2 / decode.md §5.4).
     if SP > 1:
-        msg_SP = tokens * (2 * H_kv / d_kv) * b_kv
+        if model.mla is not None:
+            # A latent-attention cache is one latent per token per layer, not
+            # per-head keys and values; under TP-attention it is not split by
+            # head either (attention.md §3.6).
+            w_lat = model.mla.kv_bytes_per_token_per_layer(b_kv)
+            msg_SP = tokens * (w_lat if fw.attention_mode == "tp" else w_lat / d_kv)
+        else:
+            msg_SP = tokens * (2 * H_kv / d_kv) * b_kv
         t_SP = _cost("SP", "all_gather", msg_SP, SP)
     else:
         t_SP = 0.0
@@ -363,7 +370,7 @@ def compute_prefill_comm(
 
 
 # ────────────────────────────────────────────────────────────
-# Prefill Latency (documentation/modeling/prefill.md §3-5)
+# Prefill Latency (prefill.md §3-5)
 # ────────────────────────────────────────────────────────────
 
 def compute_prefill_latency(
@@ -589,7 +596,11 @@ def compute_prefill_latency(
         # Linear FLOPs per chunk (constant across chunks): the same shared
         # per-token primitive the unchunked pass uses (projections, dense and
         # MoE FFN, router; attention-variant and layout aware), × C tokens.
-        F_linear_per_chunk = linear_flops_per_token(model, partition, fw) * C
+        # The last chunk holds what is left of the prompt (S − (n−1)·C tokens),
+        # which is fewer than C unless C divides S; a chunk size above the
+        # prompt length is one chunk of S tokens.
+        F_linear_per_token = linear_flops_per_token(model, partition, fw)
+        F_linear_per_chunk = F_linear_per_token * C
 
         # Weight traffic per chunk (same each chunk — full weight read)
         T_theta_chunk = traffic.T_theta_device
@@ -610,6 +621,7 @@ def compute_prefill_latency(
 
         total_chunked = 0.0
         t_chunk_k = 0.0
+        t_chunk_max = 0.0
         for k in range(1, n_chunks + 1):
             # Attention FLOPs for chunk k. The unchunked pass charges every
             # query the full S positions (the 4·S²·H convention of prefill.md
@@ -621,15 +633,17 @@ def compute_prefill_latency(
             # itself neither adds nor removes attention work. Sharded by
             # D_kv·SP per prefill.md §1.5 / §5.1; MLA models use the
             # variant-specific score/value cost at that context length.
-            S_attn_k = (2 * k - 1) * C
+            C_k = min(C, S - (k - 1) * C)          # tokens in chunk k
+            full = C_k == C
+            S_attn_k = 2 * (k - 1) * C + C_k        # = (2k−1)·C for a full chunk
             if model.mla is not None:
                 F_sv_per_tok = mla_score_value_flops_per_layer_per_device(
                     model, partition, fw, S_attn_k, fw.mla_mode
                 )
-                F_attn_chunk_k = (L / PP) * F_sv_per_tok * C / SP
+                F_attn_chunk_k = (L / PP) * F_sv_per_tok * C_k / SP
             else:
-                F_attn_chunk_k = (L / PP) * (4 * C * S_attn_k * H) / (d_kv_pf * SP)
-            F_chunk_k = F_linear_per_chunk + F_attn_chunk_k
+                F_attn_chunk_k = (L / PP) * (4 * C_k * S_attn_k * H) / (d_kv_pf * SP)
+            F_chunk_k = (F_linear_per_chunk if full else F_linear_per_token * C_k) + F_attn_chunk_k
 
             t_chunk_compute_k = F_chunk_k / R_gpu
 
@@ -638,25 +652,34 @@ def compute_prefill_latency(
             # (sram.md §2.1): write + read folded into a single per-request
             # KV term for placement purposes.
             T_kv_read_k = kv_bytes_per_seq(model, partition, fw, (k - 1) * C)
-            T_kv_chunk_k = T_kv_write_chunk + T_kv_read_k
+            T_kv_write_k = T_kv_write_chunk if full else kv_bytes_per_seq(model, partition, fw, C_k)
+            T_kv_chunk_k = T_kv_write_k + T_kv_read_k
             t_chunk_mem_k = _t_mem(T_theta_chunk, T_kv_chunk_k, B=1)
 
             # η_TC at chunk payload (mb_chunk = B_pf · C / PP). For typical
             # C the saturated curve gives 1.0 — same caveat as unchunked.
-            mb_chunk = max(1, B_pf) * max(1, C) / max(1, PP)
+            mb_chunk = max(1, B_pf) * max(1, C_k) / max(1, PP)
             eta_TC_chunk = _eta_TC_at_mb(system.device.tensor_core_efficiency, mb_chunk)
             t_chunk_compute_eff_k = t_chunk_compute_k / eta_TC_chunk if eta_TC_chunk > 0 else float("inf")
             t_chunk_local_gpu_k = max(t_chunk_compute_eff_k, t_chunk_mem_k)
             t_chunk_local_k = _compose_SW(t_chunk_local_gpu_k)
-            t_chunk_k = t_chunk_local_k + max(0.0, t_chunk_comm - rho * t_chunk_local_k)
+            t_comm_k = t_chunk_comm if full else compute_prefill_comm(
+                model, system, partition, tuner, fw, tokens_per_step=C_k,
+            ).t_prefill_comm
+            t_chunk_k = t_chunk_local_k + max(0.0, t_comm_k - rho * t_chunk_local_k)
             total_chunked += t_chunk_k
+            t_chunk_max = max(t_chunk_max, t_chunk_k)
 
         # Chunks follow each other through the pipeline one stage apart, so
-        # the first stage sees them back to back (the sum above) and the last
-        # chunk then crosses the remaining PP − 1 stages. The LM head fires
-        # once after the last chunk (one projection per request, not per
-        # chunk), mirroring prefill.md §3.4.
-        t_chunk_tail = (PP - 1) * t_chunk_k if PP > 1 else 0.0
+        # the first stage sees them back to back (the sum above) and the
+        # remaining PP − 1 stages add the longest chunk's stage time each:
+        # every chunk takes the same time on every stage, and for such a
+        # flow the makespan is the sum plus (PP − 1) times the longest job.
+        # With whole chunks the longest is the last (attention grows with
+        # k); a short final chunk does not shorten the tail. The LM head
+        # fires once after the last chunk (one projection per request, not
+        # per chunk), mirroring prefill.md §3.4.
+        t_chunk_tail = (PP - 1) * t_chunk_max if PP > 1 else 0.0
         t_prefill_chunked = total_chunked + t_chunk_tail + t_LM_prefill
     else:
         n_chunks = 0

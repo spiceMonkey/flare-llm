@@ -14,6 +14,7 @@ from ..core.decode_model import (
     compute_comm, CommResults,
     compute_latency, LatencyResults,
 )
+from ..core.primitives.sharding_factors import compose_check
 
 
 @dataclass
@@ -50,6 +51,7 @@ class InferenceCalculator:
         self.framework = framework if framework is not None else FrameworkSpec.default()
 
     def run(self) -> InferenceResults:
+        compose_check(self.partition, self.framework)     # co-located layouts need TP == EP
         memory = compute_memory(self.model, self.system, self.partition, self.tuner, self.framework)
         flops = compute_flops(self.model, self.partition, self.tuner, self.framework)
         traffic = compute_traffic(self.model, self.partition, self.tuner, self.framework)

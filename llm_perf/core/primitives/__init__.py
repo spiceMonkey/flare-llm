@@ -4,7 +4,7 @@ These functions encode the phase-agnostic physics of a transformer inference
 pipeline: weight footprint, KV cache footprint, per-token linear FLOPs,
 and collective communication cost. Each primitive is a pure function of
 typed spec dataclasses — no side effects, no global state. See
-`documentation/modeling/decode.md` and `.../prefill.md` for the symbol
+`decode.md` and `.../prefill.md` for the symbol
 conventions and derivations.
 
 The collective_cost primitives are auto-synced from

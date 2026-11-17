@@ -13,7 +13,7 @@ from .primitives import D_batch, D_kv, group_batch
 
 @dataclass
 class KVPagingConfig:
-    """KV paging parameters (documentation/modeling/kv.md §2)."""
+    """KV paging parameters (kv.md §2)."""
     block_size: int = 16                # tokens per block (B_block)
     beam_width: int = 1                 # W (1 = greedy, no CoW)
     system_overhead_GB: float = 1.5     # CUDA context + kernel workspace
@@ -42,7 +42,7 @@ def compute_kv_paging(
     *,
     inflight_sequences: float = 0.0,
 ) -> KVPagingResults:
-    """KV paging analysis. Doc: documentation/modeling/kv.md §2-6
+    """KV paging analysis. Doc: kv.md §2-6
 
     `inflight_sequences` is the number of caches in flight to this replica
     during a disaggregated handoff (`E2EResults.inflight_sequences`): each

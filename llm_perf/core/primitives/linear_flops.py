@@ -22,7 +22,7 @@ Other terms unchanged:
 - 6HkI_moe/D_exp — MoE FFN: k active experts per token, sharded by D_exp
   (= TP*EP under orthogonal tp_ep_layout, EP under co-located).
 - 2HN_exp — MoE router gate GEMM (H → N_exp), unsharded
-  (see documentation/modeling/decode.md §3.4).
+  (see decode.md §3.4).
 
 Attention score / value FLOPs are NOT in this primitive because the
 shape differs by phase: decode sees 4·S·H/(D_kv·SP) per token (fixed S),

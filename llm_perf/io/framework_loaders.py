@@ -26,7 +26,9 @@ def _load_json(path: str | Path) -> Dict[str, Any]:
 # plus the "auto" sentinel that triggers `optimize_collective_algorithms`.
 TP_ALGORITHM_VALUES = ("ring", "tree", "tree_pipelined", "inc", "auto")
 EP_ALGORITHM_VALUES = ("ring", "inc", "auto")
-TORUS_ALGORITHM_VALUES = ("ring", "swing", "auto")
+# No "auto" for the torus: the optimizer does not resolve it, so accepting it
+# here only deferred the error to the first run.
+TORUS_ALGORITHM_VALUES = ("ring", "swing")
 # Sub-torus admission policy — see dispatch._align_to_dims. No "auto":
 # the two policies model different placement assumptions, not two
 # implementations of one thing, so there is nothing to cost-minimize over.

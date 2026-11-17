@@ -60,7 +60,7 @@ def _span_tiers_scaled(
     `bw_per_port_GBps * tier.eta_beta` to the BW-min. With the defaults
     `eta_alpha = eta_beta = 1.0` this is bit-identical to `span_tiers`
     (IEEE-754 `x * 1.0 == x` for all finite x). See
-    documentation/modeling/contention.md §4.
+    collectives/05_contention_and_congestion.md §4.
     """
     if G <= 1 or not tiers:
         return 0.0, 0.0, 0
@@ -594,7 +594,7 @@ def _crossbar_cost(
         # Single-direction A2A cost. The MoE Dispatch+Combine round-trip is
         # accounted for by the caller via n_EP=2 collectives per MoE layer
         # (one dispatch + one combine), each costing one t_EP. See
-        # documentation/modeling/decode.md §5.2 + §5.5.
+        # decode.md §5.2 + §5.5.
         if algorithm == "ring":
             return pairwise_a2a(M, G, alpha_s, bw_Bps)
         raise ValueError(f"Unsupported algorithm for moe_a2a: {algorithm!r}")
@@ -726,30 +726,32 @@ def _hierarchical_crossbar_cost(
         return t_inner_rs + t_outer + t_inner_ag
 
     if op == "all_gather":
-        # Inner AG → outer AG cascade.
-        # New AG convention: M = per-rank gathered output. After inner AG
-        # each rank holds G_inner shards = M / L bytes; after outer AG
-        # each rank holds the full M.
-        t_inner = inner_ag(
-            M / L, G_inner, alpha_inner_s, bw_inner_Bps
-        )
+        # Outer AG → inner AG (03_hierarchical_topologies.md §2.1, and the
+        # mirrored `hierarchical_all_gather_ring_ring`). M = per-rank gathered
+        # output. The outer phase runs first, while each rank still holds
+        # only its own shard, so the slow tier carries the small payload:
+        # L ranks (one per group) gather M·L/N = M / G_inner. The inner phase
+        # then gathers the full M on the fast tier.
         t_outer = outer_ag(
-            M, L, alpha_outer_s, bw_outer_Bps
+            M / G_inner, L, alpha_outer_s, bw_outer_Bps
         )
-        return t_inner + t_outer
-
-    if op == "reduce_scatter":
-        # Outer RS → inner RS cascade (time-reverse of AG).
-        # New RS convention: M = per-rank pre-scatter input. Outer RS
-        # consumes M and produces M/L; inner RS consumes M/L and produces
-        # M/(L·G_inner) = M/N.
-        t_outer = outer_rs(
-            M, L, alpha_outer_s, bw_outer_Bps
-        )
-        t_inner = inner_rs(
-            M / L, G_inner, alpha_inner_s, bw_inner_Bps
+        t_inner = inner_ag(
+            M, G_inner, alpha_inner_s, bw_inner_Bps
         )
         return t_outer + t_inner
+
+    if op == "reduce_scatter":
+        # Inner RS → outer RS: the time-reverse of AG. M = per-rank
+        # pre-scatter input. The inner phase shrinks each rank's holding
+        # from M to M / G_inner on the fast tier before anything crosses the
+        # outer tier.
+        t_inner = inner_rs(
+            M, G_inner, alpha_inner_s, bw_inner_Bps
+        )
+        t_outer = outer_rs(
+            M / G_inner, L, alpha_outer_s, bw_outer_Bps
+        )
+        return t_inner + t_outer
 
     raise AssertionError(
         f"_hierarchical_crossbar_cost: unsupported op={op!r}; AR/AG/RS only"

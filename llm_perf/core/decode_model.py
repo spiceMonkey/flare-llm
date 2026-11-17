@@ -7,7 +7,7 @@ cost) lives in `core/primitives/`; this module wires those primitives
 together with decode-specific pieces (attention that scales with S, not
 S²; message sizes that are B·H·b, not S·H·b).
 
-Documentation: `documentation/modeling/decode.md`.
+Documentation: `decode.md`.
 
 Public surface (preserved from the pre-refactor four-file split):
   - compute_flops(model, partition, tuner) → FlopsResults
@@ -117,7 +117,7 @@ def effective_peak_flops_TF(system: SystemSpec, bytes_per_param: float) -> float
 
 
 # ────────────────────────────────────────────────────────────
-# SW-overhead helpers (kernel_launch_overhead.md §5)
+# SW-overhead helpers (decode.md §7.1)
 # ────────────────────────────────────────────────────────────
 
 def _piecewise_linear_lookup(curve: Optional[Dict[int, float]], x: float) -> float:
@@ -291,7 +291,7 @@ class LatencyResults:
 
 
 # ────────────────────────────────────────────────────────────
-# Decode FLOPs (documentation/modeling/decode.md §3)
+# Decode FLOPs (decode.md §3)
 # ────────────────────────────────────────────────────────────
 
 def compute_flops(
@@ -376,7 +376,7 @@ def compute_flops(
 
 
 # ────────────────────────────────────────────────────────────
-# Decode Traffic (documentation/modeling/decode.md §4)
+# Decode Traffic (decode.md §4)
 # ────────────────────────────────────────────────────────────
 
 def compute_traffic(
@@ -431,7 +431,7 @@ def compute_traffic(
 
 
 # ────────────────────────────────────────────────────────────
-# Decode Communication (documentation/modeling/decode.md §5)
+# Decode Communication (decode.md §5)
 # ────────────────────────────────────────────────────────────
 
 def compute_comm(
@@ -575,7 +575,13 @@ def compute_comm(
     #             prefill, far too expensive for a one-token query.
     if SP > 1:
         if fw.sp_decode_mode == "pass_kv":
-            msg_SP = B * S * (2 * H_kv / d_kv) * b_kv
+            if model.mla is not None:
+                # One latent per token per layer, not head-split under
+                # TP-attention (attention.md §3.6).
+                w_lat = model.mla.kv_bytes_per_token_per_layer(b_kv)
+                msg_SP = B * S * (w_lat if fw.attention_mode == "tp" else w_lat / d_kv)
+            else:
+                msg_SP = B * S * (2 * H_kv / d_kv) * b_kv
             t_SP = _cost("SP", "all_gather", msg_SP, SP)
         else:
             msg_SP = B * (H / d_kv) * b
@@ -628,7 +634,7 @@ def compute_comm(
 
 
 # ────────────────────────────────────────────────────────────
-# Decode Latency (documentation/modeling/decode.md §6)
+# Decode Latency (decode.md §6)
 # ────────────────────────────────────────────────────────────
 
 def compute_latency(
@@ -647,7 +653,8 @@ def compute_latency(
     one microbatch of `mb = decode_microbatch(B, PP)` sequences. A token is
     not produced until its microbatch has crossed all PP stages and the LM
     head, so the inter-token time is the traversal sum, not one stage:
-        t_step_base = PP · max(t_stage_GPU(mb), t_kernel) + t_LM(mb)
+        t_stage_with_kernel = t_stage_GPU(mb) + max(0, t_kernel - ρ_kernel · t_stage_GPU(mb))
+        t_step_base = PP · t_stage_with_kernel + t_LM(mb)
         t_step_user = t_step_base + max(0, t_step_seq
                                           - ρ_seq · t_step_base)
     Throughput is B tokens per t_step_user: the PP stages work on
@@ -656,11 +663,13 @@ def compute_latency(
 
     `t_stage_GPU` is the GPU-side compute + comm time (with optional Tensor
     Core efficiency derate at small microbatch). `t_kernel` is the per-round
-    CPU dispatch budget (kernel_launch_overhead.md §5). The two are
-    composed via `kernel_overlap_factor` ρ_kernel: ρ_kernel=1 means SW is fully hidden
-    by GPU work (just `max`), ρ_kernel=0 means strict serialization.
+    CPU dispatch budget (decode.md §7.1). The two are
+    composed via `kernel_overlap_factor` ρ_kernel, the fraction of the GPU stage
+    time behind which launch time can hide: ρ_kernel=1 gives `max(t_stage_GPU,
+    t_kernel)`, ρ_kernel=0 strict serialization.
     `t_step_seq` is the per-sequence serving runtime overhead (decode.md §7.3).
-    Gross host work is `t_step_seq = c_seq_us · B · 1e-6`;
+    Gross host work is `t_step_seq = (c_orch_us + c_seq_us · B) · 1e-6`, a
+    per-step floor plus a per-sequence term;
     composition via `seq_overlap_factor` ρ_seq uses the same physics
     as ρ_kernel — under CUDA-Graph replay (ρ_seq = 1, default) the CPU runs
     ahead and host work hides behind GPU compute until it exceeds `t_step_base`.
@@ -734,7 +743,7 @@ def compute_latency(
     rho = framework.comm_overlap_factor
     t_stage = t_local + max(0.0, t_comm - rho * t_local)
 
-    # Per-microbatch per-stage CPU dispatch budget (kernel_launch_overhead.md §5).
+    # Per-microbatch per-stage CPU dispatch budget (decode.md §7.1).
     # Composed with t_stage via ρ_kernel: full overlap (default) ⇒ max(...);
     # zero overlap ⇒ t_stage + t_kernel. EP launches only fire on MoE layers
     # (mirrors the L_moe/PP factor in §5.5's t_comm formula).
