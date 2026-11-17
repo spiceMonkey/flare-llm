@@ -53,7 +53,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-86425987.js";
+            window.path_to_searchindex_js = "searchindex-e8dc7b1b.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-52454c4f.js"></script>
@@ -348,7 +348,7 @@
 <tr><td>NVIDIA Dynamo wrapping SGLang</td><td>12 µs</td><td>1</td><td>5 µs</td><td>0</td><td>1</td><td>The launch time is fitted on one measured setup; <span class="katex"><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.7167em;vertical-align:-0.2861em;"></span><span class="mord"><span class="mord mathnormal">c</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.1514em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight"><span class="mord mathrm mtight">seq</span></span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2861em;"><span></span></span></span></span></span></span></span></span></span> and the overlaps are carried over from the row above and not fitted.</td></tr>
 <tr><td>NVIDIA Dynamo wrapping vLLM</td><td>8 µs</td><td>1</td><td>5 µs</td><td>0</td><td>1</td><td>Unmeasured starting point: the launch time is a hypothesis placed between the two rows above, the rest is carried over.</td></tr>
 <tr><td>vLLM</td><td>10 µs</td><td>0.3</td><td>40 µs</td><td>0</td><td>0</td><td>Unmeasured starting point: values chosen inside the ranges reported for interpreter-driven stacks.</td></tr>
-<tr><td>SGLang</td><td>10 µs</td><td>0.3</td><td>40 µs</td><td>0</td><td>0</td><td>Unmeasured starting point, same reasoning as vLLM.</td></tr>
+<tr><td>SGLang</td><td>6 µs</td><td>0.3</td><td>40 µs</td><td>0</td><td>0</td><td>The launch time is fitted on one measured setup (three cuts, 18 points), where 10 µs would put the launch floor alone above the measured step at batch 1. That fit gives about 160 µs of host work per sequence for the setup; the 40 µs here stays a starting point.</td></tr>
 </tbody>
 </table>
 </div>
