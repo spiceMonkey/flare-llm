@@ -8,7 +8,12 @@
     "hbm_bandwidth_GBps": 4800.0,
     "peak_flops_TF": 989.0,
     "peak_flops_eta": 1.0,
-    "hbm_eta_beta": 0.7
+    "hbm_eta_beta": 0.7,
+    "peak_flops_TF_by_precision": {
+      "2.0": 989.0,
+      "1.0": 1979.0,
+      "0.5": 1979.0
+    }
   },
   "fabrics": {
     "nvlink4": {
@@ -56,5 +61,5 @@
     "eta": 1.0,
     "delta_alpha_us": 0.0
   },
-  "_comment": "NVIDIA HGX/DGX Hopper Refresh H200 multi-box deployment template (8-GPU NVLink4 islands stitched by ConnectX-7 NDR InfiniBand at ~2.5 us/50 GB/s). num_devices and ib.ports are auto-overridden by `system_with_eta(..., num_devices=N)`. Intra-box: NVLink4 900 GB/s bidir per GPU through 4 NVSwitch chips. Inter-box: ConnectX-7 NDR (50 GB/s/GPU). Same chip as h200.8gpu single-box spec."
+  "_comment": "NVIDIA HGX/DGX Hopper Refresh H200 multi-box deployment template (8-GPU NVLink4 islands stitched by ConnectX-7 NDR InfiniBand at ~2.5 us/50 GB/s). num_devices and ib.ports are auto-overridden by `system_with_eta(..., num_devices=N)`. Intra-box: NVLink4 900 GB/s bidir per GPU through 4 NVSwitch chips. Inter-box: ConnectX-7 NDR (50 GB/s/GPU). Same chip as h200.8gpu single-box spec. Checked against the vendor's product page in November 2026: Hopper publishes 1,979 TFLOPS at 16-bit and 3,958 at 8-bit, both with sparsity (989 and 1,979 dense), and has no 4-bit tensor path (NVFP4 arrived with Blackwell), so a 4-bit model computes at the 8-bit peak: `peak_flops_TF_by_precision` says so."
 }

@@ -22,7 +22,7 @@ class MLASpec:
     KV cache stores only the joint latent `c_KV` of dimension
     `d_c + d_qk_rope`, not per-head K and V. Per-layer attention
     parameters are the sum of six matrices (W_DQ, W_UQ, W_DKV, W_UK,
-    W_UV, W_O); see `documentation/modeling/attention.md §3.3`.
+    W_UV, W_O); see `attention.md §3.3`.
 
     When `mla` is set, the GQA-derived `n_kv` field on `LlmModelSpec`
     is ignored for KV-cache and attention-parameter accounting.
@@ -116,6 +116,9 @@ class LlmModelSpec:
     kv_bytes_per_elem: Optional[float] = None    # KV-cache entries (K, V, or the MLA latent)
     act_bytes_per_elem: Optional[float] = None   # activations, logits, collective payloads
 
+    # Width of one attention head when it is not H / n_q (see `d_head`).
+    head_dim: Optional[int] = None
+
     def kv_bytes(self) -> float:
         """Bytes per KV-cache element."""
         return self.bytes_per_param if self.kv_bytes_per_elem is None else self.kv_bytes_per_elem
@@ -125,8 +128,15 @@ class LlmModelSpec:
         return self.bytes_per_param if self.act_bytes_per_elem is None else self.act_bytes_per_elem
 
     def d_head(self) -> float:
-        """Head dimension d_head = H / n_q."""
-        return self.H / self.n_q
+        """Head dimension: `head_dim` when the model states one, else H / n_q.
+
+        Some models use heads wider than H / n_q (Qwen3-VL-235B: H = 4096,
+        64 heads of 128). `head_dim` then sets the key/value width, and with
+        it the KV cache and the K/V projections. The query and output
+        projections and the attention-score FLOPs are still counted at width
+        H, which under-counts them for such a model.
+        """
+        return float(self.head_dim) if self.head_dim is not None else self.H / self.n_q
 
     def H_kv(self) -> float:
         """KV projection dimension H_kv = n_kv * d_head (GQA / MHA path)."""

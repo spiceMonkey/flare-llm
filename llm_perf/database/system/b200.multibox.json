@@ -4,7 +4,7 @@
   "num_devices": 16,
   "device": {
     "name": "B200-SXM",
-    "hbm_capacity_GB": 192.0,
+    "hbm_capacity_GB": 180.0,
     "hbm_bandwidth_GBps": 8000.0,
     "peak_flops_TF": 2250.0,
     "peak_flops_eta": 1.0,
@@ -24,9 +24,9 @@
     "ib": {
       "tiers": [
         {
-          "name": "inter-box-quantum-xdr",
+          "name": "inter-box-quantum-ndr",
           "ports": 2,
-          "bw_per_port_GBps": 100.0,
+          "bw_per_port_GBps": 50.0,
           "alpha_us": 2.5
         }
       ]
@@ -56,5 +56,5 @@
     "eta": 1.0,
     "delta_alpha_us": 0.0
   },
-  "_comment": "NVIDIA HGX/DGX Blackwell B200 multi-box deployment template (8-GPU NVLink5 islands stitched by ConnectX-8 XDR InfiniBand at ~2.5 us/100 GB/s). num_devices and ib.ports are auto-overridden by `system_with_eta(..., num_devices=N)` to match the declared cluster size; the JSON's defaults (16 GPUs, 2 boxes) are nominal placeholders. Intra-box: NVLink5 1.8 TB/s bidir (900 GB/s single-direction) per GPU through 4 NVSwitch5 chips. Inter-box: ConnectX-8 XDR (800 Gbps = 100 GB/s single-direction per GPU). A collective <=8 ranks stays on nvlink5; collectives spanning multiple boxes escalate to ib (paying alpha = 0.5 + 2.5 = 3.0 us, BW-floored to 100 GB/s)."
+  "_comment": "NVIDIA HGX/DGX Blackwell B200 multi-box deployment template (8-GPU NVLink5 islands stitched by ConnectX-8 XDR InfiniBand at ~2.5 us/100 GB/s). num_devices and ib.ports are auto-overridden by `system_with_eta(..., num_devices=N)` to match the declared cluster size; the JSON's defaults (16 GPUs, 2 boxes) are nominal placeholders. Intra-box: NVLink5 1.8 TB/s bidir (900 GB/s single-direction) per GPU through 4 NVSwitch5 chips. Inter-box: ConnectX-8 XDR (800 Gbps = 100 GB/s single-direction per GPU). A collective <=8 ranks stays on nvlink5; collectives spanning multiple boxes escalate to ib (paying alpha = 0.5 + 2.5 = 3.0 us, BW-floored to 100 GB/s). Checked against the vendor's product page in November 2026: DGX B200 lists 1,440 GB of GPU memory (180 GB per GPU) and eight single-port ConnectX-7 adapters at up to 400 Gb/s, so the inter-box tier is 50 GB/s per port (it was entered as 100 GB/s, which is the ConnectX-8 rate of DGX B300)."
 }

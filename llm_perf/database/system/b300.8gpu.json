@@ -4,11 +4,16 @@
   "num_devices": 8,
   "device": {
     "name": "B300-SXM",
-    "hbm_capacity_GB": 288.0,
+    "hbm_capacity_GB": 262.0,
     "hbm_bandwidth_GBps": 8000.0,
-    "peak_flops_TF": 3750.0,
+    "peak_flops_TF": 2250.0,
     "peak_flops_eta": 1.0,
-    "hbm_eta_beta": 0.7
+    "hbm_eta_beta": 0.7,
+    "peak_flops_TF_by_precision": {
+      "2.0": 2250.0,
+      "1.0": 4500.0,
+      "0.5": 13500.0
+    }
   },
   "fabrics": {
     "nvlink5": {
@@ -34,5 +39,5 @@
     "eta": 1.0,
     "delta_alpha_us": 0.0
   },
-  "_comment": "NVIDIA HGX/DGX B300 8-GPU server: same Blackwell Ultra chip as gb300.72gpu (288 GB HBM3E @ 8 TB/s, FP16 dense 3750 TFLOPS/GPU per framework convention; FP8 = 7500, FP4 = 15000 by linear byte scaling — the published 15 PFLOPS dense FP4; hbm_eta_beta = 0.7 as on gb300.72gpu), NVLink5 1.8 TB/s bidir (900 GB/s single-direction) per GPU. Single 8-GPU NVLink5 domain via 4 NVSwitch5 chips. B_agg = 8 \u00d7 900 GB/s = 7.2 TB/s single-dir system aggregate. Cross-node would be InfiniBand (CX7 \u224850 GB/s per port). Use this spec for production 8-GPU B300 deployments instead of gb300.72gpu when modeling TP \u2264 8 \u2014 they share the same chip but differ in topology size beyond 8 GPUs (the rack-scale gb300 spans 72 GPUs in one NVLink domain; the 8-GPU server falls back to IB for cross-node). Matches the b200.8gpu / gb200.72gpu pairing pattern."
+  "_comment": "NVIDIA HGX/DGX B300 8-GPU server: same Blackwell Ultra chip as gb300.72gpu (288 GB HBM3E @ 8 TB/s, FP16 dense 3750 TFLOPS/GPU per framework convention; FP8 = 7500, FP4 = 15000 by linear byte scaling \u2014 the published 15 PFLOPS dense FP4; hbm_eta_beta = 0.7 as on gb300.72gpu), NVLink5 1.8 TB/s bidir (900 GB/s single-direction) per GPU. Single 8-GPU NVLink5 domain via 4 NVSwitch5 chips. B_agg = 8 \u00d7 900 GB/s = 7.2 TB/s single-dir system aggregate. Cross-node would be InfiniBand (CX7 \u224850 GB/s per port). Use this spec for production 8-GPU B300 deployments instead of gb300.72gpu when modeling TP \u2264 8 \u2014 they share the same chip but differ in topology size beyond 8 GPUs (the rack-scale gb300 spans 72 GPUs in one NVLink domain; the 8-GPU server falls back to IB for cross-node). Matches the b200.8gpu / gb200.72gpu pairing pattern. Checked against the vendor's product page in November 2026: DGX B300 lists 108 PFLOPS dense at 4-bit for 8 GPUs (13.5 per GPU) and 72 PFLOPS with sparsity at 8-bit (4.5 dense per GPU), so `peak_flops_TF_by_precision` carries the table (16-bit entry inferred as half of 8-bit). Memory is 2.1 TB per system, about 262 GB per GPU (288 GB nominal). DGX B300 ships ConnectX-8 at up to 800 Gb/s."
 }

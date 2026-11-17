@@ -14,5 +14,7 @@
   "n_q": 64,
   "name": "qwen3_vl_235b_fp8",
   "schema": "llm_perf.model",
-  "vocab_size": 151936
+  "vocab_size": 151936,
+  "head_dim": 128,
+  "_comment": "The published config has head_dim 128 with hidden size 4096 and 64 heads, so heads are twice H / n_q: `head_dim` sets the key/value width (the KV cache is twice what H / n_q gives). The query and output projections and the attention scores are still counted at width H."
 }

@@ -8,7 +8,12 @@
     "hbm_bandwidth_GBps": 3350.0,
     "peak_flops_TF": 989.0,
     "peak_flops_eta": 1.0,
-    "hbm_eta_beta": 0.55
+    "hbm_eta_beta": 0.55,
+    "peak_flops_TF_by_precision": {
+      "2.0": 989.0,
+      "1.0": 1979.0,
+      "0.5": 1979.0
+    }
   },
   "fabrics": {
     "nvlink4": {
@@ -68,7 +73,7 @@
         "path": "host"
       }
     ],
-    "_comment": "Host side, read only by the end-to-end layer. Each figure is the conservative end of a measured or published range (documentation/modeling/disaggregation.md \u00a71-\u00a72, \u00a78). root_complex: 26 GB/s is the rate measured for GPU reads from a CXL memory pool (Beluga), with about 47 GB/s in total into eight GPUs reported by Samsung; both are CXL-to-GPU measurements on other hosts, so this rate is an assumption to be calibrated per platform. pcie_link: PCIe 5.0 x16, about 63 GB/s per direction per GPU. dram: 2 TB (32 DIMMs), 218-246 GB/s summed over 16 channels (218 used), 78-114 ns (114 used). flash: eight 3.84 TB NVMe data-cache drives (NVIDIA DGX H100/H200 user guide), 14 GB/s sequential read and about 60 us read latency per drive (Micron 9550); no write rate is sourced, so a store is priced at the read rate."
+    "_comment": "Host side, read only by the end-to-end layer. Each figure is the conservative end of a measured or published range (disaggregation.md \u00a71-\u00a72, \u00a78). root_complex: 26 GB/s is the rate measured for GPU reads from a CXL memory pool (Beluga), with about 47 GB/s in total into eight GPUs reported by Samsung; both are CXL-to-GPU measurements on other hosts, so this rate is an assumption to be calibrated per platform. pcie_link: PCIe 5.0 x16, about 63 GB/s per direction per GPU. dram: 2 TB (32 DIMMs), 218-246 GB/s summed over 16 channels (218 used), 78-114 ns (114 used). flash: eight 3.84 TB NVMe data-cache drives (NVIDIA DGX H100/H200 user guide), 14 GB/s sequential read and about 60 us read latency per drive (Micron 9550); no write rate is sourced, so a store is priced at the read rate."
   },
-  "_comment": "NVIDIA DGX H100: 80 GB HBM3 @ 3.35 TB/s, FP16 dense 989 TFLOPS/GPU per framework convention (peak_flops_TF stores FP16 dense; FP8 = 1979 by linear byte scaling), NVLink4 900 GB/s bidir (450 GB/s single-direction). 8-GPU NVLink domain via 4 NVSwitch chips. B_agg = 8 \u00d7 450 GB/s = 3.6 TB/s single-dir system aggregate."
+  "_comment": "NVIDIA DGX H100: 80 GB HBM3 @ 3.35 TB/s, FP16 dense 989 TFLOPS/GPU per framework convention (peak_flops_TF stores FP16 dense; FP8 = 1979 by linear byte scaling), NVLink4 900 GB/s bidir (450 GB/s single-direction). 8-GPU NVLink domain via 4 NVSwitch chips. B_agg = 8 \u00d7 450 GB/s = 3.6 TB/s single-dir system aggregate. Checked against the vendor's product page in November 2026: Hopper publishes 1,979 TFLOPS at 16-bit and 3,958 at 8-bit, both with sparsity (989 and 1,979 dense), and has no 4-bit tensor path (NVFP4 arrived with Blackwell), so a 4-bit model computes at the 8-bit peak: `peak_flops_TF_by_precision` says so."
 }

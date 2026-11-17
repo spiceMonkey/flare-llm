@@ -4,11 +4,16 @@
   "num_devices": 72,
   "device": {
     "name": "GB300-NVL72",
-    "hbm_capacity_GB": 288.0,
+    "hbm_capacity_GB": 278.0,
     "hbm_bandwidth_GBps": 8000.0,
-    "peak_flops_TF": 3750.0,
+    "peak_flops_TF": 2500.0,
     "peak_flops_eta": 1.0,
-    "hbm_eta_beta": 0.7
+    "hbm_eta_beta": 0.7,
+    "peak_flops_TF_by_precision": {
+      "2.0": 2500.0,
+      "1.0": 5000.0,
+      "0.5": 15000.0
+    }
   },
   "fabrics": {
     "nvlink5": {
@@ -36,5 +41,5 @@
     "eta": 1.0,
     "delta_alpha_us": 0.0
   },
-  "_comment": "GB300 NVL72: Blackwell Ultra, 288 GB HBM3E @ 8 TB/s per chip (12-Hi HBM3E stacks vs B200's 8-Hi — capacity rises, per-stack BW unchanged from B200), FP16 dense 3750 TFLOPS/GPU per published spec (FP8 = 7500, FP4 = 15000 by linear byte scaling). NVLink5 1.8 TB/s bidir (900 GB/s single-direction), NVLS-capable per NVSwitch5. All 72 GPUs in single NVLink domain via 9 NVSwitch Gen3 chips (64.8 TB/s single-dir system aggregate). hbm_eta_beta=0.7 matches GB200's measured efficiency on the same HBM3E technology."
+  "_comment": "GB300 NVL72: Blackwell Ultra, 288 GB HBM3E @ 8 TB/s per chip (12-Hi HBM3E stacks vs B200's 8-Hi — capacity rises, per-stack BW unchanged from B200), FP16 dense 3750 TFLOPS/GPU per published spec (FP8 = 7500, FP4 = 15000 by linear byte scaling). NVLink5 1.8 TB/s bidir (900 GB/s single-direction), NVLS-capable per NVSwitch5. All 72 GPUs in single NVLink domain via 9 NVSwitch Gen3 chips (64.8 TB/s single-dir system aggregate). hbm_eta_beta=0.7 matches GB200's measured efficiency on the same HBM3E technology. Checked against the vendor's product page in November 2026: Blackwell Ultra is 15 PFLOPS dense per GPU at 4-bit (1,080 PFLOPS per GB300 NVL72 without sparsity) but 5 PFLOPS dense at 8-bit, so 4-bit is three times 8-bit and the byte-ratio rule does not hold: `peak_flops_TF_by_precision` carries the table (the 16-bit entry, half of 8-bit, is inferred; the vendor publishes no dense 16-bit figure). Memory is 20 TB per rack, 278 GB per GPU (288 GB nominal)."
 }

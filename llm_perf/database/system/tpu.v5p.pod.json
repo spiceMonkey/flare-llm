@@ -7,7 +7,12 @@
     "hbm_capacity_GB": 95.0,
     "hbm_bandwidth_GBps": 2765.0,
     "peak_flops_TF": 459.0,
-    "peak_flops_eta": 1.0
+    "peak_flops_eta": 1.0,
+    "peak_flops_TF_by_precision": {
+      "2.0": 459.0,
+      "1.0": 459.0,
+      "0.5": 459.0
+    }
   },
   "fabrics": {
     "ici": {
@@ -32,5 +37,5 @@
     "SP": "ici",
     "PP": "ici"
   },
-  "_comment": "TPU v5p slice: 16\u00d716\u00d716 = 4096 chips on a single 3D-torus ICI fabric (a full v5p pod is 8960 chips; the largest single-slice shape Google documents is 16\u00d716\u00d724 = 6144). ICI is published as 4800 Gbps per chip (= 600 GB/s per direction, 1200 GB/s bidirectional), i.e. 6 links/chip \u00d7 100 GB/s single-direction; ~1.0 us per-hop \u03b1 is an assumption, not a published figure. Every collective walks the ici fabric; collectives at group sizes that align with prefix-products of (16,16,16) route through the torus primitives (collectives/02_topology_mapping.md \u00a73). Non-prefix-aligned G falls back to the flat-ring bound with a UserWarning."
+  "_comment": "TPU v5p slice: 16\u00d716\u00d716 = 4096 chips on a single 3D-torus ICI fabric (a full v5p pod is 8960 chips; the largest single-slice shape Google documents is 16\u00d716\u00d724 = 6144). ICI is published as 4800 Gbps per chip (= 600 GB/s per direction, 1200 GB/s bidirectional), i.e. 6 links/chip \u00d7 100 GB/s single-direction; ~1.0 us per-hop \u03b1 is an assumption, not a published figure. Every collective walks the ici fabric; collectives at group sizes that align with prefix-products of (16,16,16) route through the torus primitives (collectives/02_topology_mapping.md \u00a73). Non-prefix-aligned G falls back to the flat-ring bound with a UserWarning. Checked against the vendor's product page in November 2026: the TPU v5p page lists 459 TFLOPs per chip for BF16 and the same 459 for FP8, and no 4-bit mode, so the peak does not rise at lower precision (`peak_flops_TF_by_precision`; the 4-bit entry is an assumption)."
 }

@@ -273,43 +273,57 @@ def _extract_hidden_size(cfg: Dict[str, Any]) -> int:
     raise KeyError("HF config missing 'hidden_size' / 'd_model' for text model.")
 
 
+_MOE_COUNT_KEYS = ("num_experts", "n_routed_experts", "num_local_experts")
+_MOE_ACTIVE_KEYS = ("num_experts_per_tok", "experts_per_token")
+_MLA_KEYS = ("kv_lora_rank", "qk_rope_head_dim", "qk_nope_head_dim")
+
+
+def _first(tc: Dict[str, Any], keys) -> Optional[int]:
+    for k in keys:
+        if tc.get(k) is not None:
+            return int(tc[k])
+    return None
+
+
 def _extract_moe_dict(cfg: Dict[str, Any], L: int) -> Optional[Dict[str, Any]]:
     """
-    If the text model is MoE, build the llm_perf 'moe' dict:
+    If the text model is a mixture of experts, build the llm_perf 'moe' dict:
 
-        {
-          "n_experts": ...,
-          "k_active": ...,
-          "I_moe": ...,
-          "n_moe_layers": L
-        }
+        {"n_experts": ..., "k_active": ..., "I_moe": ..., "n_moe_layers": ...}
 
-    Qwen3-VL text_config typically has:
-      * num_experts
-      * num_experts_per_tok
-      * moe_intermediate_size
+    Config styles covered:
+      * Qwen3:        num_experts, num_experts_per_tok, moe_intermediate_size
+      * DeepSeek-V3:  n_routed_experts, num_experts_per_tok, moe_intermediate_size,
+                      n_shared_experts (always active, same size as a routed
+                      expert: added to k_active), first_k_dense_replace (the
+                      first k layers are dense: n_moe_layers = L - k)
+      * Mixtral, gpt-oss: num_local_experts, num_experts_per_tok or
+                      experts_per_token; the experts use `intermediate_size`
 
-    For now, we assume all L layers are MoE (n_moe_layers = L).
-    This can be refined later if per-layer patterns are known.
+    A config with no expert count is dense (returns None). A config that has
+    an expert count but lacks the active count or an expert width is an
+    error, not a dense model.
     """
     tc = _text_cfg(cfg)
-
-    required_keys = ("num_experts", "num_experts_per_tok", "moe_intermediate_size")
-    if not all(k in tc for k in required_keys):
+    n_experts = _first(tc, _MOE_COUNT_KEYS)
+    if n_experts is None or n_experts <= 1:
         return None
-
-    try:
-        n_experts = int(tc["num_experts"])
-        k_active = int(tc["num_experts_per_tok"])
-        I_moe = int(tc["moe_intermediate_size"])
-    except (TypeError, ValueError):
-        return None
-
+    k_active = _first(tc, _MOE_ACTIVE_KEYS)
+    I_moe = _first(tc, ("moe_intermediate_size", "intermediate_size"))
+    if k_active is None or I_moe is None:
+        raise ValueError(
+            "HF config describes a mixture of experts "
+            f"({[k for k in _MOE_COUNT_KEYS if k in tc]}) but lacks "
+            f"{'the experts-per-token count' if k_active is None else 'an expert width'}; "
+            "refusing to convert it as a dense model"
+        )
+    k_active += int(tc.get("n_shared_experts") or 0)
+    n_dense = int(tc.get("first_k_dense_replace") or 0)
     return {
         "n_experts": n_experts,
         "k_active": k_active,
         "I_moe": I_moe,
-        "n_moe_layers": L,
+        "n_moe_layers": max(0, L - n_dense),
     }
 
 
@@ -369,7 +383,7 @@ def hf_config_to_llm_perf_model_dict(
 
     moe = _extract_moe_dict(cfg, L)
 
-    return {
+    out = {
         "schema": "llm_perf.model",
         "name": str(name),
         "L": L,
@@ -382,6 +396,20 @@ def hf_config_to_llm_perf_model_dict(
         "bytes_per_param": b,
         "moe": moe,
     }
+    # Heads wider than H / n_q (Qwen3-VL): the KV cache follows head_dim.
+    head_dim = tc.get("head_dim")
+    if head_dim is not None and int(head_dim) * n_q != H:
+        out["head_dim"] = int(head_dim)
+    # Latent attention (DeepSeek-V3 style) is not converted: the result
+    # would price a per-head key/value cache the model does not have.
+    if any(tc.get(k) is not None for k in _MLA_KEYS):
+        import warnings
+        warnings.warn(
+            "HF config uses latent attention (kv_lora_rank / qk_*_head_dim); the adapter does not "
+            "convert it, so add an 'mla' block to the model JSON by hand before using it",
+            stacklevel=2,
+        )
+    return out
 
 
 def convert_hf_config_to_model_json(
