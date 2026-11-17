@@ -75,6 +75,8 @@ def _per_layer_attn_params(model: LlmModelSpec) -> float:
     """
     if model.mla is not None:
         return float(model.mla.per_layer_attn_params(model.H, model.n_q))
+    if model.attn_params_per_layer is not None:
+        return float(model.attn_params_per_layer)   # an explicit attention shape states its own count
     H = model.H
     H_kv = model.H_kv()
     return 2 * H * model.H_q() + 2 * H * H_kv      # W_Q and W_O are H x H_q; H_q = H unless head_dim is set

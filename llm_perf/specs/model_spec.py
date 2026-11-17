@@ -126,6 +126,28 @@ class LlmModelSpec:
     # single-matrix count.
     tied_embeddings: bool = True
 
+    # Explicit attention shape, for models whose attention block is neither
+    # the standard GQA form (W_Q, W_O of H x H_q; W_K, W_V of H x H_kv) nor
+    # the latent-attention form of `mla`. Each field overrides one quantity
+    # the GQA formulas derive from the head counts, and may be a per-layer
+    # AVERAGE when layers differ (a model that mixes attention types):
+    #   attn_params_per_layer         projection parameters of one layer;
+    #   attn_score_width              width W in the score/value work of one
+    #                                 query against S positions, 4 * S * W
+    #                                 (n_q * head_dim for standard attention);
+    #   kv_elems_per_token_per_layer  cache elements one token adds per layer
+    #                                 (2 * n_kv * head_dim for standard
+    #                                 attention; fewer if only some layers
+    #                                 keep a per-token cache);
+    #   kv_head_split                 False when the cache is not split by
+    #                                 head (one key/value vector shared by all
+    #                                 heads): under TP-attention every rank
+    #                                 then holds all of it, as with `mla`.
+    attn_params_per_layer: Optional[float] = None
+    attn_score_width: Optional[float] = None
+    kv_elems_per_token_per_layer: Optional[float] = None
+    kv_head_split: bool = True
+
     def kv_bytes(self) -> float:
         """Bytes per KV-cache element."""
         return self.bytes_per_param if self.kv_bytes_per_elem is None else self.kv_bytes_per_elem
@@ -152,8 +174,16 @@ class LlmModelSpec:
         n_q * (H / n_q)) when there is no `head_dim`, so every formula that
         used H keeps its exact value.
         """
+        if self.attn_score_width is not None:
+            return self.attn_score_width
         return self.H if self.head_dim is None else self.n_q * self.head_dim
 
     def H_kv(self) -> float:
-        """KV projection dimension H_kv = n_kv * d_head (GQA / MHA path)."""
+        """KV projection dimension H_kv = n_kv * d_head (GQA / MHA path).
+
+        With `kv_elems_per_token_per_layer` set it is half of that, so that
+        2 * H_kv is the cache one token adds per layer.
+        """
+        if self.kv_elems_per_token_per_layer is not None:
+            return self.kv_elems_per_token_per_layer / 2
         return self.n_kv * self.d_head()

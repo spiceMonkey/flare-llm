@@ -157,7 +157,8 @@ def compute_prefill_flops(
         ) * S
     else:
         H_kv = model.H_kv()
-        F_proj = (4 * H * model.H_q() + 4 * H * H_kv) * S
+        F_proj = ((2 * model.attn_params_per_layer) if model.attn_params_per_layer is not None
+                  else (4 * H * model.H_q() + 4 * H * H_kv)) * S
         F_attn = 4 * S**2 * model.H_q()
     F_ffn_dense = 6 * H * I_dense * S
     F_layer_prefill = F_proj + F_attn + F_ffn_dense

@@ -17,7 +17,7 @@
   },
   "_comment_n_kv": "HF config sets head_dim=64 explicitly (not H/n_q=45). True KV/token = 2 * 8 * 64 * b = 1024b. Framework infers d_head=H/n_q=45, so we adjust n_kv from 8 to 11 to recover H_kv ≈ 8 * 64 = 512 (n_kv=11 gives 495, ~3% under). Attention FLOPs are approximate.",
   "_comment_bytes_per_param": "MXFP4 quantization (quant_method=mxfp4 in HF config) → b=0.5. The HF converter defaults to b=2 (BF16); overridden here to match the deployed precision.",
-  "_comment_attention_window": "Half the layers (alternating) use sliding-window attention with W=128 instead of full S=context_length attention. Framework treats all layers as full attention; KV cache and attention compute are over-estimated for context lengths > 128. Acceptable for first-cut comparison; tracked under sliding-window attention in scratch/model_specific_extensions.md.",
+  "_comment_attention_window": "Half the layers (alternating) use sliding-window attention with W=128 instead of attending to the whole context. This spec treats all layers as full attention, so the KV cache and the attention work are over-estimated for contexts longer than 128 tokens (by up to a factor of two at long context). The explicit attention-shape fields (kv_elems_per_token_per_layer, attn_score_width) could state the layer average; they are not set here because the two validators of this model were fitted with the full-attention form.",
   "_comment_moe": "All 36 layers are MoE (no dense layers). 128 experts per layer, top-k=4. I_moe = intermediate_size = 2880. SwiGLU activation.",
   "tied_embeddings": false,
   "head_dim": 64,

@@ -129,7 +129,9 @@ def enumerate_partitions(
     # is PP x max(TP, EP) x SP devices and needs TP == EP when both exceed 1.
     co_located = framework is not None and framework.tp_ep_layout == "co_located"
 
-    n_kv = model.n_kv
+    # TP-attention shards attention by key/value head, so TP <= n_kv; a cache that is not split by head is
+    # replicated instead, and TP is then limited by the query heads.
+    n_kv = model.n_kv if model.kv_head_split else model.n_q
     n_experts = model.moe.n_experts if model.moe is not None else None
 
     if tp_max_override is not None:
@@ -179,7 +181,9 @@ def describe_constraints(
     scale_up_tier_index: int = 0,
 ) -> str:
     """One-line summary of the active constraints, for notebook printouts."""
-    n_kv = model.n_kv
+    # TP-attention shards attention by key/value head, so TP <= n_kv; a cache that is not split by head is
+    # replicated instead, and TP is then limited by the query heads.
+    n_kv = model.n_kv if model.kv_head_split else model.n_q
     n_experts = model.moe.n_experts if model.moe is not None else None
     scale_up = scale_up_domain_size(system, scale_up_tier_index=scale_up_tier_index)
     if n_experts is not None:

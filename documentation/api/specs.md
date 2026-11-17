@@ -87,6 +87,10 @@ Transformer / LLM architecture spec.
 | `act_bytes_per_elem` | `Optional[float]` | `None` | activations, logits, collective payloads |
 | `head_dim` | `Optional[int]` | `None` | — |
 | `tied_embeddings` | `bool` | `True` | — |
+| `attn_params_per_layer` | `Optional[float]` | `None` | — |
+| `attn_score_width` | `Optional[float]` | `None` | — |
+| `kv_elems_per_token_per_layer` | `Optional[float]` | `None` | — |
+| `kv_head_split` | `bool` | `True` | — |
 
 #### `kv_bytes(self) -> float`
 
@@ -111,6 +115,8 @@ W\_Q is H x H\_q and W\_O is H\_q x H; a query's scores against S positions cost
 #### `H_kv(self) -> float`
 
 KV projection dimension H\_kv = n\_kv * d\_head (GQA / MHA path).
+
+With `kv_elems_per_token_per_layer` set it is half of that, so that 2 * H\_kv is the cache one token adds per layer.
 
 ---
 

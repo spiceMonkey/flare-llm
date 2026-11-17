@@ -82,7 +82,7 @@ def compute_kv_paging(
         d_kv_eff = 1 if framework.attention_mode == "tp" else d_kv
     else:
         kv_base_per_tok_per_layer = 2 * model.H_kv() * b
-        d_kv_eff = d_kv
+        d_kv_eff = 1 if (not model.kv_head_split and framework.attention_mode == "tp") else d_kv
 
     # Under DP-attention a rank holds whole sequences: a block, and a whole
     # sequence, sits on one rank and not as 1/G_TP shares on all of them.

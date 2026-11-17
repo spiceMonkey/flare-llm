@@ -134,6 +134,10 @@ def model_spec_from_json_dict(cfg: Dict[str, Any]) -> LlmModelSpec:
         act_bytes_per_elem=_optional_positive_float(cfg, "act_bytes_per_elem"),
         head_dim=int(cfg["head_dim"]) if cfg.get("head_dim") is not None else None,
         tied_embeddings=bool(cfg.get("tied_embeddings", True)),
+        attn_params_per_layer=_optional_positive_float(cfg, "attn_params_per_layer"),
+        attn_score_width=_optional_positive_float(cfg, "attn_score_width"),
+        kv_elems_per_token_per_layer=_optional_positive_float(cfg, "kv_elems_per_token_per_layer"),
+        kv_head_split=bool(cfg.get("kv_head_split", True)),
     )
 
 

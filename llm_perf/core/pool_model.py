@@ -86,7 +86,7 @@ def kv_layout(model: LlmModelSpec, partition: PartitionSpec, framework: Framewor
     (attention.md §3.6) and the divisor is 1. EP does not enter: an EP group
     holds whole sequences, so it changes where a cache lives and not its shape.
     """
-    if model.mla is not None and framework.attention_mode == "tp":
+    if (model.mla is not None or not model.kv_head_split) and framework.attention_mode == "tp":
         d_kv_eff = 1
     else:
         d_kv_eff = D_kv(partition, framework)

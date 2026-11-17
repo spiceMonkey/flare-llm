@@ -15,9 +15,12 @@
     "I_moe": 1024,
     "n_moe_layers": 60
   },
-  "_comment_arch_warning": "HYBRID linear/full attention model. layer_types alternates 3:1 linear-attention to full-attention (15 full + 45 linear of 60 total). The framework treats EVERY layer as full attention (O(S²) compute, full KV cache), which OVER-estimates attention FLOPs by ~4× and KV cache by ~4× at long context. Per scratch/model_specific_extensions.md, hybrid attention + linear-attention stacks are a documented gap; modeling-fidelity work needed for accurate predictions on this model class.",
+  "_comment_arch_warning": "HYBRID model: 15 full-attention layers interleaved with 45 linear-attention layers. The attention block is given as an explicit shape, averaged over the 60 layers from the published weights: projection parameters 114,294,784 per layer (full layers 104,857,600: query-plus-gate 4096 -> 16384, key and value 4096 -> 512 each, output 8192 -> 4096; linear layers 117,440,512), a cache of 256 elements per token per layer (1,024 on each of the 15 full layers, none on the linear ones, whose state does not grow with the context) and a score/value width of 2,048 (8,192 on the full layers). The averages are exact for a whole replica; with pipeline parallelism the stages are taken as alike, which they are not exactly.",
   "_comment_k_active": "10 routed experts + 1 shared expert (shared_expert_intermediate_size=1024 = I_moe). Shared expert approximated by k=11.",
   "_comment_n_kv": "GQA n_kv=2 (very aggressive head-grouping).",
   "tied_embeddings": false,
-  "_comment": "The input embedding and the LM head are separate matrices in the published weights (`tied_embeddings` false), so memory holds two vocabulary matrices. CAUTION: the published model interleaves 15 full-attention layers (heads of width 256) with 45 linear-attention layers that keep no per-token cache; this spec treats all 60 layers as standard attention, so its KV cache is an approximation."
+  "_comment": "The input embedding and the LM head are separate matrices in the published weights (`tied_embeddings` false), so memory holds two vocabulary matrices.",
+  "attn_params_per_layer": 114294784,
+  "attn_score_width": 2048,
+  "kv_elems_per_token_per_layer": 256
 }

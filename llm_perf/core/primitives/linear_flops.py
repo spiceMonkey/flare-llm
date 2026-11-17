@@ -67,7 +67,10 @@ def attn_proj_flops_per_token(
         )
     else:
         H_kv = model.H_kv()
-        F_attn_proj = (4 * H * model.H_q() + 4 * H * H_kv) / d_attn
+        if model.attn_params_per_layer is not None:
+            F_attn_proj = 2 * model.attn_params_per_layer / d_attn     # every projection weight is used once per token
+        else:
+            F_attn_proj = (4 * H * model.H_q() + 4 * H * H_kv) / d_attn
 
     return (L / PP) * F_attn_proj
 

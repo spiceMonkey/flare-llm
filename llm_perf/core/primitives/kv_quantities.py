@@ -75,4 +75,8 @@ def kv_bytes_per_seq(
         return (L / PP) * (n_tokens * per_tok_per_layer) / (D_kv(partition, framework) * SP)
 
     H_kv = model.H_kv()
+    if not model.kv_head_split and framework.attention_mode == "tp":
+        # One key/value vector shared by all heads: TP-attention cannot split
+        # it by head, so every rank holds it whole (as with a latent cache).
+        return (L / PP) * (2 * n_tokens * H_kv * b) / SP
     return (L / PP) * (2 * n_tokens * H_kv * b) / (D_kv(partition, framework) * SP)
