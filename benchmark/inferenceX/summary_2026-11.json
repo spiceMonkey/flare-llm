@@ -1,0 +1,50 @@
+{
+  "api_base": "https://inferencex.semianalysis.com/api/v1/benchmarks",
+  "attribution_required": true,
+  "fetched_at_utc": "2026-11-17T06:01:34.680771+00:00",
+  "license": "Apache-2.0 (see LICENSE)",
+  "models": [
+    {
+      "flat_path": "data_2026-11/flat/DeepSeek-R1-0528.csv",
+      "model": "DeepSeek-R1-0528",
+      "rows": 1333
+    },
+    {
+      "flat_path": "data_2026-11/flat/DeepSeek-V4-Pro.csv",
+      "model": "DeepSeek-V4-Pro",
+      "rows": 935
+    },
+    {
+      "flat_path": "data_2026-11/flat/GLM-5.csv",
+      "model": "GLM-5",
+      "rows": 512
+    },
+    {
+      "flat_path": "data_2026-11/flat/Kimi-K2.5.csv",
+      "model": "Kimi-K2.5",
+      "rows": 381
+    },
+    {
+      "flat_path": "data_2026-11/flat/Llama-3.3-70B-Instruct-FP8.csv",
+      "model": "Llama-3.3-70B-Instruct-FP8",
+      "rows": 681
+    },
+    {
+      "flat_path": "data_2026-11/flat/MiniMax-M2.5.csv",
+      "model": "MiniMax-M2.5",
+      "rows": 704
+    },
+    {
+      "flat_path": "data_2026-11/flat/Qwen-3.5-397B-A17B.csv",
+      "model": "Qwen-3.5-397B-A17B",
+      "rows": 1034
+    },
+    {
+      "flat_path": "data_2026-11/flat/gpt-oss-120b.csv",
+      "model": "gpt-oss-120b",
+      "rows": 439
+    }
+  ],
+  "note": "Second snapshot, kept beside the May 2026 one in data/. Flattened CSV only. The published validation numbers use data/.",
+  "total_rows": 6019
+}

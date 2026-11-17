@@ -1,7 +1,7 @@
 {
   "schema": "llm_perf.framework",
   "name": "sglang",
-  "kernel_launch_us": 10.0,
+  "kernel_launch_us": 6.0,
   "kernels_per_layer_compute": 10,
   "kernels_per_collective_call": 2,
   "kernels_per_pp_hop": 2,
@@ -22,5 +22,6 @@
   "tp_ep_layout": "orthogonal",
   "kernel_overlap_factor": 0.3,
   "c_seq_us": 40.0,
-  "seq_overlap_factor": 0.0
+  "seq_overlap_factor": 0.0,
+  "_comment": "The kernel-launch time is 6 microseconds, fitted on one measured setup (DeepSeek-R1 on B200, three cuts, 18 points); the earlier 10 was an unmeasured starting value that put the launch floor alone above the measured step at batch 1. That fit also gives host work of about 160 microseconds per sequence for that setup, well above the 40 kept here as the stack's starting point; a fit to measurement is per setup."
 }

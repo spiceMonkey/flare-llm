@@ -6,6 +6,8 @@ performance.
 
 **Provenance.** All data here comes from the InferenceX public API, one request per model: `https://inferencex.semianalysis.com/api/v1/benchmarks?model=<model>` (for example `?model=gpt-oss-120b`; the endpoint answers HTTP 400 without the `model` parameter). InferenceX is maintained by SemiAnalysis LLC and licensed under Apache 2.0 (<https://github.com/SemiAnalysisAI/InferenceX>); its license names the copyright holders as "Copyright 2025 SemiAnalysis LLC, Advanced Micro Devices, NVIDIA CORPORATION". See `LICENSE` and `NOTICE` in this directory for the upstream license text and attribution requirement.
 
+**Two snapshots.** `data/` is the snapshot of 9 May 2026, and every validation number this repository publishes is computed from it. `data_2026-11/` is a second snapshot fetched in November 2026 and kept beside the first instead of replacing it, because the upstream dataset is not append-only: between the two fetches it gained rows for new hardware and new cuts, and it also dropped or replaced rows the validators use (for example, the DeepSeek-R1 cuts on GB200 with Dynamo and TensorRT-LLM that the DeepSeek-R1 driver reads went from 43 points to 14). Keeping the first snapshot keeps the published numbers reproducible; the second serves new cuts. `python benchmark/inferenceX/fetch.py --snapshot <name>` writes a further one without touching `data/`, and the loader in `benchmark/validate/common.py` takes `snapshot="2026-11"`.
+
 ## What's here
 
 ```
@@ -28,6 +30,9 @@ inferenceX/
     │   └── gpt-oss-120b.json
     └── flat/              One CSV per model — metrics flattened to top-level
         └── (same eight files as .csv)
+├── summary_2026-11.json   Metadata of the second snapshot
+└── data_2026-11/
+    └── flat/              The same eight models, fetched in November 2026 (CSV only)
 ```
 
 The raw JSON preserves the upstream schema verbatim (with the metric

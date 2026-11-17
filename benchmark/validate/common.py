@@ -86,8 +86,13 @@ def load_measured(
     framework: str | Iterable[str] | None = None,
     hardware: str | Iterable[str] | None = None,
     precision: str | None = None,
+    snapshot: str | None = None,
 ) -> list[MeasuredPoint]:
     """Load a filtered slice of `benchmark/inferenceX/data/flat/<model>.csv`.
+
+    `snapshot` names a later snapshot kept beside the first one (for example
+    "2026-11" reads `benchmark/inferenceX/data_2026-11/flat/`). The default is
+    the May 2026 snapshot in `data/`, which every published number uses.
 
     All filter args are optional — None means "match anything". String-set
     filters (`framework`, `hardware`) accept either a single value or any
@@ -97,7 +102,8 @@ def load_measured(
     hardware, framework, deployment-shape) cut; the resulting MeasuredPoint
     list is the y-axis for the comparison plot.
     """
-    path = INFERENCEX_FLAT / f"{model}.csv"
+    flat = INFERENCEX_FLAT if snapshot is None else INFERENCEX_FLAT.parents[1] / f"data_{snapshot}" / "flat"
+    path = flat / f"{model}.csv"
     if not path.exists():
         raise FileNotFoundError(
             f"InferenceX data for {model!r} not found at {path}. "

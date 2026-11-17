@@ -28,7 +28,9 @@ offline analysis. The snapshot is regenerated from upstream via
 `fetch.py`. No InferenceX source code is vendored here — only the
 publicly published benchmark measurement rows. Snapshots are not edited
 in place; if InferenceX corrects or backfills a measurement, re-run
-`fetch.py` to refresh.
+`fetch.py` to refresh. A second snapshot, fetched in November 2026, is kept
+in `data_2026-11/` beside the first (`data/`, May 2026), because upstream
+also removes and replaces rows; both are unmodified API output.
 
 The code that compares this data with model predictions (model-spec
 mappings, validation drivers) lives outside this directory, under

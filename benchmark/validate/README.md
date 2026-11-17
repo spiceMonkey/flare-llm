@@ -68,7 +68,8 @@ Empirical anchors observed across the validator suite:
 | `dynamo-trt` | about 5 µs/seq | Aggressive C++ with graph replay. The two published drivers fit 5.5 (gpt-oss-120b) and 4.9 (DeepSeek-R1). |
 | `dynamo-sglang` | not measured | Expected above `dynamo-trt` from its Python share; the framework JSON ships 5 µs/seq as a starting point. |
 | `trt`, `trt-llm` (raw) | 50–100 µs/seq | No Dynamo orchestrator; more individual kernel launches per step. |
-| `sglang`, `vllm` (raw) | 30–60 µs/seq (estimated) | Python interpreter dominates. |
+| `sglang` (raw) | about 160 µs/seq on the one setup fitted | Python interpreter dominates. Fitted on DeepSeek-R1 on B200 (three cuts, two of them from the November 2026 snapshot), together with a kernel-launch time of 6 µs. |
+| `vllm` (raw) | 30–60 µs/seq (estimated) | Not fitted. |
 
 `bw_eta` ranges by chip (the driver multiplier; multiply by the system spec's `hbm_eta_beta` to get the fraction of nameplate):
 

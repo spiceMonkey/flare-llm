@@ -57,6 +57,7 @@ MODELS = [
 ROOT = Path(__file__).resolve().parent
 DATA_RAW = ROOT / "data" / "raw"
 DATA_FLAT = ROOT / "data" / "flat"
+SUMMARY = ROOT / "summary.json"
 
 
 def _http_get(url: str, *, timeout: int = 60) -> bytes:
@@ -174,14 +175,14 @@ def write_summary(per_model_counts: dict[str, int]) -> None:
             {
                 "model": m,
                 "rows": per_model_counts.get(m, 0),
-                "raw_path": f"data/raw/{m}.json",
-                "flat_path": f"data/flat/{m}.csv",
+                "raw_path": str((DATA_RAW / f"{m}.json").relative_to(ROOT)),
+                "flat_path": str((DATA_FLAT / f"{m}.csv").relative_to(ROOT)),
             }
             for m in sorted(per_model_counts)
         ],
         "total_rows": sum(per_model_counts.values()),
     }
-    (ROOT / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True))
+    SUMMARY.write_text(json.dumps(summary, indent=2, sort_keys=True))
 
 
 def main() -> int:
@@ -192,7 +193,16 @@ def main() -> int:
         action="store_true",
         help="Scrape JS bundles for new model identifiers and report (does not fetch)",
     )
+    ap.add_argument(
+        "--snapshot",
+        help="Write a separate snapshot to data_<name>/ and summary_<name>.json (for example 2026-11) "
+             "and leave data/ and summary.json, which the published validation numbers use, untouched",
+    )
     args = ap.parse_args()
+    if args.snapshot:
+        global DATA_RAW, DATA_FLAT, SUMMARY
+        DATA_RAW, DATA_FLAT = ROOT / f"data_{args.snapshot}" / "raw", ROOT / f"data_{args.snapshot}" / "flat"
+        SUMMARY = ROOT / f"summary_{args.snapshot}.json"
 
     if args.discover:
         print("Scanning dashboard JS bundles for model identifiers...")
