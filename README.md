@@ -12,6 +12,8 @@ A five-stage roofline pipeline (memory → FLOPs → traffic → comm → latenc
 
 This README is a navigation guide; the methodology is published as the [Decode Modeling book](https://spicemonkey.github.io/flare-llm/) (see **Tutorial** below), starting with [decode](https://spicemonkey.github.io/flare-llm/decode.html).
 
+**Overview slides:** [`documentation/flare_overview_slides.pdf`](documentation/flare_overview_slides.pdf) — a 30-slide introduction to what FLARE models and what it leaves out: one decode step as a roofline, splitting a model across devices, software overhead, prefill and decode pools, caches in host memory and on flash, the check against InferenceX™ measurements, and a Pareto sweep as an example of exploring an architecture.
+
 **Tutorial:** [**Decode Modeling**](https://spicemonkey.github.io/flare-llm/) — a walkthrough of the decode-phase derivation (decode + attention + memory hierarchy + 3D-stacked DRAM) and the serving layer above it (KV cache management, framework overhead, SLO feasibility), with a pointer to the upstream collective-communication tutorial.
 
 **API reference:** [`documentation/api/`](documentation/api/) — generated reference for the public `llm_perf` classes and functions (specs, calculators, core models, loaders, utilities).
