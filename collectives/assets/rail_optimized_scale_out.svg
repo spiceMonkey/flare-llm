@@ -151,7 +151,7 @@
   <g transform="translate(40, 495)">
     <text x="0" y="0" font-size="12" font-weight="bold" fill="#222">Why rail-optimized?</text>
     <text x="0" y="20" font-size="11" fill="#444">
-      • Cross-rack "GPU i ↔ GPU i" all-reduce stays on Rail i — single ToR hop, no spine.
+      • Cross-rack "GPU i ↔ GPU i" all-reduce stays on Rail i — 2 hops through one ToR, no spine.
     </text>
     <text x="0" y="38" font-size="11" fill="#444">
       • Cross-rail traffic (e.g., GPU 0 → GPU 1) uses the local scale-up switch;
