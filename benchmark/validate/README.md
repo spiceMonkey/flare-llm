@@ -10,10 +10,10 @@ The published set is the two per-cut drivers the root README walks through.
 
 | Driver | Model spec | System | Framework | Cuts |
 |---|---|---|---|---|
-| `gpt_oss_120b_gb200_dynamo_trt.py` | `gpt_oss_120b` | `gb200.72gpu` | dynamo-trt | TP=4 EP=1 dec=4 — mean absolute error (MAE) 5.6% over the 7 points of the fitted cut (ISL 1024); 11.8% over the 8 points of the held-out cut (`--isl 8192`) |
-| `dsr1_gb200_dynamo_trt.py` | `deepseek_r1_0528` | `gb200.72gpu` | dynamo-trt | EXACT (TP=36 EP=1), CO-LOCATED with DP-attention (TP=EP={8,16,32}), CO-LOCATED with TP-attention (TP=EP=8, four replicas, `--cut colo_tp_attn`) — 5.0% MAE over 14 points on the TP-attention cut; 13.0% over all 43 points; 14.5% on a cut held out of a refit |
+| `gpt_oss_120b_gb200_dynamo_trt.py` | `gpt_oss_120b` | `gb200.72gpu` | dynamo-trt | TP=4 EP=1 dec=4 — mean absolute error (MAE) 5.6% over the 7 points of the fitted cut (ISL 1024); 12.4% over the 8 points of the held-out cut (`--isl 8192`) |
+| `dsr1_gb200_dynamo_trt.py` | `deepseek_r1_0528` | `gb200.72gpu` | dynamo-trt | EXACT (TP=36 EP=1), CO-LOCATED with DP-attention (TP=EP={8,16,32}), CO-LOCATED with TP-attention (TP=EP=8, four replicas, `--cut colo_tp_attn`) — 4.7% MAE over 14 points on the TP-attention cut; 13.6% over all 43 points; 15.1% on a cut held out of the fit |
 
-Both are calibrated per setup: `bw_eta`, `c_seq`, the per-step host floor `c_orch` and the kernel-launch overlap `kernel_overlap_factor` are fitted per (model, hardware, framework) cell on that cell's InferenceX rows (least mean absolute error, 2026-11-16), while the per-kernel launch time and the additive host composition (`seq_overlap_factor = 0`) are shared by every cut on that serving stack. Constants fitted on one model do not carry over to another model on the same hardware and stack (mean errors of 16% to 41% when tried), so a fitted error is a statement about calibration quality; the error on a cut held out of the fit is the closer thing to a prediction test. The measured `conc` is the client concurrency of the whole endpoint, so `load_measured` divides it by `decode_num_workers` to get the per-replica batch the model works in. Everything else is first-principles. `bw_eta` multiplies on top of the `hbm_eta_beta` the system spec already carries (0.7 on GB200), so the shipped 0.69 and 0.62 mean 0.48× and 0.43× nameplate HBM bandwidth; it is a fitted residual, not a measured hardware constant. Accuracy on an *uncalibrated* cell is materially worse: the constants of another setup, or the unfitted values of a framework JSON, give errors of 20% and more on these same points.
+Both are calibrated per setup: `bw_eta`, `c_seq`, the per-step host floor `c_orch` and the kernel-launch overlap `kernel_overlap_factor` are fitted per (model, hardware, framework) cell on that cell's InferenceX rows (least mean absolute error, 2026-11-16), while the per-kernel launch time and the additive host composition (`seq_overlap_factor = 0`) are shared by every cut on that serving stack. Constants fitted on one model do not carry over to another model on the same hardware and stack (mean errors of 16% to 44% when tried), so a fitted error is a statement about calibration quality; the error on a cut held out of the fit is the closer thing to a prediction test. The measured `conc` is the client concurrency of the whole endpoint, so `load_measured` divides it by `decode_num_workers` to get the per-replica batch the model works in. Everything else is first-principles. `bw_eta` multiplies on top of the `hbm_eta_beta` the system spec already carries (0.7 on GB200), so the shipped 0.69 and 0.60 mean 0.48× and 0.42× nameplate HBM bandwidth; it is a fitted residual, not a measured hardware constant. Accuracy on an *uncalibrated* cell is materially worse: the constants of another setup, or the unfitted values of a framework JSON, give errors of 20% and more on these same points.
 
 ## Running
 
@@ -65,7 +65,7 @@ Empirical anchors observed across the validator suite:
 
 | Framework | Typical c_seq | Notes |
 |---|---|---|
-| `dynamo-trt` | about 5 µs/seq | Aggressive C++ with graph replay. The two published drivers fit 5.5 (gpt-oss-120b) and 4.8 (DeepSeek-R1). |
+| `dynamo-trt` | about 5 µs/seq | Aggressive C++ with graph replay. The two published drivers fit 5.5 (gpt-oss-120b) and 4.9 (DeepSeek-R1). |
 | `dynamo-sglang` | not measured | Expected above `dynamo-trt` from its Python share; the framework JSON ships 5 µs/seq as a starting point. |
 | `trt`, `trt-llm` (raw) | 50–100 µs/seq | No Dynamo orchestrator; more individual kernel launches per step. |
 | `sglang`, `vllm` (raw) | 30–60 µs/seq (estimated) | Python interpreter dominates. |
@@ -74,7 +74,7 @@ Empirical anchors observed across the validator suite:
 
 | Chip | `bw_eta` range observed |
 |---|---|
-| HBM3e on Blackwell (B200/GB200) | 0.62–1.05 once the host floor is fitted separately |
+| HBM3e on Blackwell (B200/GB200) | 0.60–1.07 once the host floor is fitted separately |
 | HBM3e on Blackwell Ultra (B300/GB300) | similar; less data |
 | HBM3 on Hopper (H100/H200) | 0.55–1.05; the low end is from fits that had no separate host floor |
 | Dense models on raw TRT | as low as 0.4 |

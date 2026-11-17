@@ -42,8 +42,9 @@ ISL, OSL = 1024, 1024
 CO_LOCATED_WORKLOADS = [(1024, 1024), (8192, 1024)]
 
 # Calibration is per setup (model, hardware, serving stack). Four constants,
-# fitted on 2026-11-16 by least mean absolute error on all eight cuts of this
-# setup together (43 points):
+# fitted by least mean absolute error on all eight cuts of this setup
+# together (43 points); the first three were refit on 2026-11-16 after the
+# model corrections of that day, with the overlap kept:
 #   bw_eta                 multiplies the memory bandwidth, on top of the 0.7
 #                          sustained fraction the GB200 system spec carries;
 #   c_seq                  host work per sequence per step (microseconds);
@@ -60,10 +61,11 @@ CO_LOCATED_WORKLOADS = [(1024, 1024), (8192, 1024)]
 # from the rank that holds them, not gathered to every rank first.
 # The data itself is noisy in places (for example 11.88 ms at B = 128 against
 # 7.74 ms at B = 144 on the TP = 36 cut), which bounds what any fit can reach.
-DEFAULT_BW_ETA = 0.62
-DEFAULT_C_SEQ_US = 4.8
+# Refit three constants on 2026-11-16 (final model): fitted error 13.6%, 15.1% on a cut held out of the fit.
+DEFAULT_BW_ETA = 0.6
+DEFAULT_C_SEQ_US = 4.9
 DEFAULT_KERNEL_LAUNCH_US = 4.0
-DEFAULT_C_ORCH_US = 620.0
+DEFAULT_C_ORCH_US = 640.0
 DEFAULT_SEQ_OVERLAP = 0.0
 DEFAULT_KERNEL_OVERLAP = 0.35
 DEFAULT_MOE_A2A_PATTERN = "scatter"
