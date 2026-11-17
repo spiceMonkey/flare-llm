@@ -8,7 +8,7 @@ from ..specs.partition_spec import PartitionSpec
 from ..specs.tuner_spec import TuningSpec
 from ..utils import GB_TO_BYTES
 from .memory_model import MemoryResults
-from .primitives import D_batch, D_kv, group_batch
+from .primitives import D_batch, D_kv, group_batch, kv_batch
 
 
 @dataclass
@@ -84,8 +84,13 @@ def compute_kv_paging(
         kv_base_per_tok_per_layer = 2 * model.H_kv() * b
         d_kv_eff = d_kv
 
+    # Under DP-attention a rank holds whole sequences: a block, and a whole
+    # sequence, sits on one rank and not as 1/G_TP shares on all of them.
+    # `whole` is G_TP there and 1 under TP-attention.
+    whole = kv_batch(1.0, partition, framework)
+
     # Per-block KV footprint: block_size tokens × base × (L/PP) / (d_kv_eff*SP)
-    M_block = block_size * kv_base_per_tok_per_layer * (L / PP) / (d_kv_eff * SP)
+    M_block = block_size * kv_base_per_tok_per_layer * (L / PP) / (d_kv_eff * SP) * whole
 
     # Blocks per sequence
     N_blocks_per_seq = math.ceil(S / block_size)
@@ -121,13 +126,15 @@ def compute_kv_paging(
     # Sequences one device can hold, times the device groups the batch is
     # divided across (EP under the orthogonal layout, else 1) — the replica's
     # concurrent-sequence capacity, in the same units as B_decode.
-    max_sequences = (
-        max(0, int((M_room - M_inflight_dev) / (M_per_seq + M_act_per_seq))) * n_groups
-        if M_per_seq > 0 else 0
-    )
+    n_dev = max(0, int((M_room - M_inflight_dev) / (M_per_seq + M_act_per_seq))) if M_per_seq > 0 else 0
+    if whole != 1.0:
+        # DP-attention: every rank of the group holds the same whole number
+        # of sequences, so the group's count is a multiple of G_TP.
+        n_dev = (n_dev // int(whole)) * int(whole)
+    max_sequences = n_dev * n_groups
 
     # Max context length for a single sequence (with paging fragmentation)
-    S_max = M_HBM_KV_avail / (M_per_token_kv * phi_avg) if M_per_token_kv > 0 else 0.0
+    S_max = M_HBM_KV_avail / (M_per_token_kv * whole * phi_avg) if M_per_token_kv > 0 else 0.0
 
     return KVPagingResults(
         M_block=M_block,

@@ -29,6 +29,8 @@ from .primitives import (
     G_TP,
     G_EP,
     group_batch,
+    attn_rank_batch,
+    kv_batch,
     moe_expert_flops_per_token,
 )
 
@@ -126,6 +128,10 @@ def compute_prefill_flops(
         F_attn_device = (L / PP) * F_sv_per_layer_per_device_per_token * S / SP
     else:
         F_attn_device = (L / PP) * (4 * S**2 * model.H_q()) / (D_kv(partition, fw) * SP)
+    # Under DP-attention a rank holds whole requests, so the rank that
+    # prefills this request does all of its attention, not a 1/G_TP share
+    # (the factor is G_TP there and 1 under TP-attention).
+    F_attn_device *= kv_batch(1.0, partition, fw)
 
     F_prefill_device = F_linear_device + F_attn_device
 
@@ -516,7 +522,10 @@ def compute_prefill_latency(
     mb_prefill = max(1, B_pf) * max(1, S) / max(1, PP)
     eta_TC = _eta_TC_at_mb(system.device.tensor_core_efficiency, mb_prefill)
     t_prefill_compute_eff = t_prefill_compute / eta_TC if eta_TC > 0 else float("inf")
-    t_prefill_mem = _t_mem(traffic.T_theta_device, traffic.T_kv_write_per_request, B=1)
+    # DP-attention: the rank that holds a request writes its whole cache.
+    f_dp = kv_batch(1.0, partition, fw)
+    dp_rank = f_dp != 1.0
+    t_prefill_mem = _t_mem(traffic.T_theta_device, traffic.T_kv_write_per_request * f_dp, B=1)
     t_prefill_local_gpu = max(t_prefill_compute_eff, t_prefill_mem)
     t_prefill_local = _compose_SW(t_prefill_local_gpu)
     t_prefill_comm = comm.t_prefill_comm
@@ -550,21 +559,20 @@ def compute_prefill_latency(
         # requests' attention, dense FFN and router, while the expert FFN
         # sees every request's tokens routed to its shard.
         Bg_pf = group_batch(B_pf, partition, fw)
-        if fw.attention_mode == "dp" and partition.TP > 1:
-            B_attn = Bg_pf / partition.TP
-        else:
-            B_attn = Bg_pf
+        # Requests the busiest rank prefills: Bg_pf / G_TP floored at one
+        # under DP-attention, all Bg_pf under TP-attention.
+        B_attn = attn_rank_batch(Bg_pf, partition, fw)
         if D_batch(partition, fw) == 1:
             F_batched_total = (
                 B_attn * F_attn_proj_pp
-                + B_pf * F_attn_sv_pp
+                + (B_attn if dp_rank else B_pf) * F_attn_sv_pp
                 + B_pf * F_ffn_pp
             )
         else:
             F_moe_expert_pp = moe_expert_flops_per_token(model, partition, fw) * S
             F_batched_total = (
                 B_attn * F_attn_proj_pp
-                + Bg_pf * F_attn_sv_pp
+                + (B_attn if dp_rank else Bg_pf) * F_attn_sv_pp
                 + Bg_pf * (F_ffn_pp - F_moe_expert_pp)
                 + B_pf * F_moe_expert_pp
             )
@@ -574,7 +582,7 @@ def compute_prefill_latency(
         # Traffic: weights loaded once + B_pf * KV writes per request
         # (multi-tier sum; placement re-resolved at this B).
         t_batched_mem = _t_mem(
-            traffic.T_theta_device, traffic.T_kv_write_per_request, B=Bg_pf,
+            traffic.T_theta_device, traffic.T_kv_write_per_request * f_dp, B=B_attn if dp_rank else Bg_pf,
         )
         t_batched_local_gpu = max(t_batched_compute_eff, t_batched_mem)
         t_batched_local = _compose_SW(t_batched_local_gpu)
@@ -648,6 +656,7 @@ def compute_prefill_latency(
                 F_attn_chunk_k = (L / PP) * F_sv_per_tok * C_k / SP
             else:
                 F_attn_chunk_k = (L / PP) * (4 * C_k * S_attn_k * model.H_q()) / (d_kv_pf * SP)
+            F_attn_chunk_k *= f_dp
             F_chunk_k = (F_linear_per_chunk if full else F_linear_per_token * C_k) + F_attn_chunk_k
 
             t_chunk_compute_k = F_chunk_k / R_gpu
@@ -659,7 +668,7 @@ def compute_prefill_latency(
             T_kv_read_k = kv_bytes_per_seq(model, partition, fw, (k - 1) * C)
             T_kv_write_k = T_kv_write_chunk if full else kv_bytes_per_seq(model, partition, fw, C_k)
             T_kv_chunk_k = T_kv_write_k + T_kv_read_k
-            t_chunk_mem_k = _t_mem(T_theta_chunk, T_kv_chunk_k, B=1)
+            t_chunk_mem_k = _t_mem(T_theta_chunk, T_kv_chunk_k * f_dp, B=1)
 
             # η_TC at chunk payload (mb_chunk = B_pf · C / PP). For typical
             # C the saturated curve gives 1.0 — same caveat as unchunked.
@@ -786,10 +795,12 @@ def compute_suffix_prefill(
         F_attn = (L / PP) * mla_score_value_flops_per_layer_per_device(model, partition, fw, S_attn, fw.mla_mode) * C / SP
     else:
         F_attn = (L / PP) * (4 * C * S_attn * model.H_q()) / (d_kv * SP)
+    f_dp = kv_batch(1.0, partition, fw)      # DP-attention: the rank holding the request does all of it
+    F_attn *= f_dp
     F_suffix = F_linear + F_attn
     t_compute = F_suffix / R_gpu
 
-    T_kv = kv_bytes_per_seq(model, partition, fw, C) + kv_bytes_per_seq(model, partition, fw, P)
+    T_kv = (kv_bytes_per_seq(model, partition, fw, C) + kv_bytes_per_seq(model, partition, fw, P)) * f_dp
     plc = resolve_placement(
         T_theta_device=traffic.T_theta_device,
         T_kv_per_request_device=T_kv,
