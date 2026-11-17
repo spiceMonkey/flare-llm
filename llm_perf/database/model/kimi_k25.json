@@ -1,7 +1,6 @@
 {
   "schema": "llm_perf.model",
   "name": "Kimi-K2.5",
-
   "L": 61,
   "H": 7168,
   "n_q": 64,
@@ -10,14 +9,12 @@
   "vocab_size": 163840,
   "max_seq_len": 262144,
   "bytes_per_param": 1,
-
   "moe": {
     "n_experts": 384,
     "k_active": 9,
     "I_moe": 2048,
     "n_moe_layers": 60
   },
-
   "mla": {
     "d_c": 512,
     "d_q_c": 1536,
@@ -25,9 +22,10 @@
     "d_qk_rope": 64,
     "d_v": 128
   },
-
   "_comment_arch": "DeepSeek-V3 architecture (MLA + MoE) per text_config. Vision tower (vt_*) parameters not modeled — multimodal extension off the language path.",
   "_comment_mla": "Multi-head Latent Attention (DSv3 family): kv_lora_rank → d_c=512, qk_nope_head_dim=128, qk_rope_head_dim=64, v_head_dim=128, q_lora_rank → d_q_c=1536. Per-token-per-layer KV = (d_c + d_qk_rope) bytes at FP8 = 576 B. n_kv is the canonical n_q=64 and is ignored when mla is present.",
   "_comment_k_active": "8 routed experts + 1 shared expert (always active). Shared expert approximated by k=9.",
-  "_comment_n_moe_layers": "first_k_dense_replace=1 → first layer is dense, remaining 60 are MoE."
+  "_comment_n_moe_layers": "first_k_dense_replace=1 → first layer is dense, remaining 60 are MoE.",
+  "tied_embeddings": false,
+  "_comment": "The input embedding and the LM head are separate matrices in the published weights (`tied_embeddings` false), so memory holds two vocabulary matrices."
 }

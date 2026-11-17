@@ -1,7 +1,6 @@
 {
   "schema": "llm_perf.model",
   "name": "Qwen-3.5-397B-A17B",
-
   "L": 60,
   "H": 4096,
   "n_q": 32,
@@ -10,15 +9,15 @@
   "vocab_size": 248320,
   "max_seq_len": 262144,
   "bytes_per_param": 1,
-
   "moe": {
     "n_experts": 512,
     "k_active": 11,
     "I_moe": 1024,
     "n_moe_layers": 60
   },
-
   "_comment_arch_warning": "HYBRID linear/full attention model. layer_types alternates 3:1 linear-attention to full-attention (15 full + 45 linear of 60 total). The framework treats EVERY layer as full attention (O(S²) compute, full KV cache), which OVER-estimates attention FLOPs by ~4× and KV cache by ~4× at long context. Per scratch/model_specific_extensions.md, hybrid attention + linear-attention stacks are a documented gap; modeling-fidelity work needed for accurate predictions on this model class.",
   "_comment_k_active": "10 routed experts + 1 shared expert (shared_expert_intermediate_size=1024 = I_moe). Shared expert approximated by k=11.",
-  "_comment_n_kv": "GQA n_kv=2 (very aggressive head-grouping)."
+  "_comment_n_kv": "GQA n_kv=2 (very aggressive head-grouping).",
+  "tied_embeddings": false,
+  "_comment": "The input embedding and the LM head are separate matrices in the published weights (`tied_embeddings` false), so memory holds two vocabulary matrices. CAUTION: the published model interleaves 15 full-attention layers (heads of width 256) with 45 linear-attention layers that keep no per-token cache; this spec treats all 60 layers as standard attention, so its KV cache is an approximation."
 }

@@ -133,6 +133,7 @@ def model_spec_from_json_dict(cfg: Dict[str, Any]) -> LlmModelSpec:
         kv_bytes_per_elem=_optional_positive_float(cfg, "kv_bytes_per_elem"),
         act_bytes_per_elem=_optional_positive_float(cfg, "act_bytes_per_elem"),
         head_dim=int(cfg["head_dim"]) if cfg.get("head_dim") is not None else None,
+        tied_embeddings=bool(cfg.get("tied_embeddings", True)),
     )
 
 

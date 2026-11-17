@@ -396,6 +396,10 @@ def hf_config_to_llm_perf_model_dict(
         "bytes_per_param": b,
         "moe": moe,
     }
+    # Separate input-embedding and LM-head matrices: memory holds both.
+    tie = tc.get("tie_word_embeddings", cfg.get("tie_word_embeddings"))
+    if tie is not None:
+        out["tied_embeddings"] = bool(tie)
     # Heads wider than H / n_q (Qwen3-VL): the KV cache follows head_dim.
     head_dim = tc.get("head_dim")
     if head_dim is not None and int(head_dim) * n_q != H:

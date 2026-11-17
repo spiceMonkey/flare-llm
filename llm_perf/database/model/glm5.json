@@ -1,7 +1,6 @@
 {
   "schema": "llm_perf.model",
   "name": "GLM-5",
-
   "L": 78,
   "H": 6144,
   "n_q": 64,
@@ -10,24 +9,23 @@
   "vocab_size": 154880,
   "max_seq_len": 202752,
   "bytes_per_param": 1,
-
   "moe": {
     "n_experts": 256,
     "k_active": 9,
     "I_moe": 2048,
     "n_moe_layers": 75
   },
-
   "mla": {
     "d_c": 512,
-    "d_q_c": 1536,
-    "d_qk_nope": 128,
+    "d_q_c": 2048,
+    "d_qk_nope": 192,
     "d_qk_rope": 64,
-    "d_v": 128
+    "d_v": 256
   },
-
   "_comment_mla": "Multi-head Latent Attention (DSv3-family dimensions): kv_lora_rank → d_c=512, qk_rope_head_dim=64, qk_nope_head_dim=128, v_head_dim=128; q_lora_rank → d_q_c=1536. Per-token-per-layer KV = (512+64) bytes at FP8 = 576 B. n_kv is set to canonical n_q=64 and is ignored when mla is present.",
   "_comment_k_active": "8 routed experts + 1 shared expert (always active). Shared expert approximated by k=9.",
   "_comment_n_moe_layers": "first_k_dense_replace=3 → first 3 layers are dense, remaining 75 are MoE.",
-  "_comment_caveats": "DeepSeek Sparse Attention (DSA) with index_topk=2048 not modeled — reduces real attention FLOPs at long context (see attention.md §5); framework treats attention as full O(S) score / value compute over the MLA latent."
+  "_comment_caveats": "DeepSeek Sparse Attention (DSA) with index_topk=2048 not modeled — reduces real attention FLOPs at long context (see attention.md §5); framework treats attention as full O(S) score / value compute over the MLA latent.",
+  "tied_embeddings": false,
+  "_comment": "The input embedding and the LM head are separate matrices in the published weights (`tied_embeddings` false), so memory holds two vocabulary matrices. Latent-attention widths follow the published config: query latent 2048, per-head key width 192 + 64 rotary, value width 256, cache latent 512 + 64."
 }

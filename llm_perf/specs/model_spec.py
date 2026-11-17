@@ -119,6 +119,13 @@ class LlmModelSpec:
     # Width of one attention head when it is not H / n_q (see `d_head`).
     head_dim: Optional[int] = None
 
+    # Whether the input token embedding and the output (LM head) matrix are
+    # one shared V x H matrix. Most current decoder models keep two; then
+    # memory must hold both, while a decode step still reads only the output
+    # matrix (the input side is a row lookup). True keeps the historical
+    # single-matrix count.
+    tied_embeddings: bool = True
+
     def kv_bytes(self) -> float:
         """Bytes per KV-cache element."""
         return self.bytes_per_param if self.kv_bytes_per_elem is None else self.kv_bytes_per_elem
@@ -131,12 +138,21 @@ class LlmModelSpec:
         """Head dimension: `head_dim` when the model states one, else H / n_q.
 
         Some models use heads wider than H / n_q (Qwen3-VL-235B: H = 4096,
-        64 heads of 128). `head_dim` then sets the key/value width, and with
-        it the KV cache and the K/V projections. The query and output
-        projections and the attention-score FLOPs are still counted at width
-        H, which under-counts them for such a model.
+        64 heads of 128). `head_dim` then sets the key/value width `H_kv`
+        (the KV cache and the K/V projections) and the query width `H_q`
+        (the Q/O projections and the attention scores).
         """
         return float(self.head_dim) if self.head_dim is not None else self.H / self.n_q
+
+    def H_q(self):
+        """Query projection width n_q * d_head: H unless the model states a `head_dim`.
+
+        W_Q is H x H_q and W_O is H_q x H; a query's scores against S
+        positions cost 4 * S * H_q FLOPs. Returns `H` itself (not
+        n_q * (H / n_q)) when there is no `head_dim`, so every formula that
+        used H keeps its exact value.
+        """
+        return self.H if self.head_dim is None else self.n_q * self.head_dim
 
     def H_kv(self) -> float:
         """KV projection dimension H_kv = n_kv * d_head (GQA / MHA path)."""

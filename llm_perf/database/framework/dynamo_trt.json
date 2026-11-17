@@ -24,5 +24,6 @@
   "tp_ep_layout": "co_located",
   "kernel_overlap_factor": 1.0,
   "c_seq_us": 5.0,
-  "seq_overlap_factor": 1.0
+  "seq_overlap_factor": 0.0,
+  "_comment": "Host work adds to the GPU step (`seq_overlap_factor` 0): every validator of this stack that has been fitted to measurement uses that rule, and with full overlap the same constants score markedly worse on the measured points. The other host constants here are starting points for the stack; a fit to measurement is per setup (model, hardware and stack) and lives in the validators under benchmark/validate/."
 }

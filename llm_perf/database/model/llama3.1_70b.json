@@ -9,6 +9,7 @@
   "vocab_size": 128256,
   "max_seq_len": 131072,
   "bytes_per_param": 2,
-
-  "moe": null
+  "moe": null,
+  "tied_embeddings": false,
+  "_comment": "The input embedding and the LM head are separate matrices in the published weights (`tied_embeddings` false), so memory holds two vocabulary matrices."
 }

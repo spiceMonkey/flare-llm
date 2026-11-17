@@ -1,7 +1,6 @@
 {
   "schema": "llm_perf.model",
   "name": "DeepSeek-V4-Pro",
-
   "L": 61,
   "H": 7168,
   "n_q": 128,
@@ -10,14 +9,12 @@
   "vocab_size": 129280,
   "max_seq_len": 1048576,
   "bytes_per_param": 0.5,
-
   "moe": {
     "n_experts": 384,
     "k_active": 7,
     "I_moe": 3072,
     "n_moe_layers": 61
   },
-
   "mla": {
     "d_c": 512,
     "d_q_c": 1536,
@@ -25,8 +22,9 @@
     "d_qk_rope": 64,
     "d_v": 128
   },
-
   "_comment_mla": "Multi-head Latent Attention (DSv3 family). Real KV cache stores the head-shared latent (d_c + d_qk_rope) = 576 dims at FP4 = 288 bytes/tok/layer; matches the DSv3 worked example in attention.md §3.8. n_kv is set to canonical n_q and is ignored when mla is present.",
   "_comment_k_active": "6 routed experts + 1 shared expert (always active). Shared expert approximated by k=7.",
-  "_comment_caveats": "Architecture-specific extensions NOT modeled: Compressed Sparse Attention (CSA), Heavily Compressed Attention (HCA), Multi-Token Prediction (MTP) head with num_nextn_predict_layers=1, sliding_window=128 on attention. These reduce real per-token compute and KV traffic vs the framework's MLA + MoE generic forms; predicted decode latency is therefore an upper bound."
+  "_comment_caveats": "Architecture-specific extensions NOT modeled: Compressed Sparse Attention (CSA), Heavily Compressed Attention (HCA), Multi-Token Prediction (MTP) head with num_nextn_predict_layers=1, sliding_window=128 on attention. These reduce real per-token compute and KV traffic vs the framework's MLA + MoE generic forms; predicted decode latency is therefore an upper bound.",
+  "tied_embeddings": false,
+  "_comment": "The input embedding and the LM head are separate matrices in the published weights (`tied_embeddings` false), so memory holds two vocabulary matrices. CAUTION: the attention block here is the DeepSeek-V3 latent-attention shape. The published V4 attention differs (128 heads of width 512, a single shared key/value vector of width 512 per token, a low-rank query path and a grouped output projection), which this spec format cannot express; the cache per token is about 11% smaller than modelled."
 }

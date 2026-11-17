@@ -16,5 +16,6 @@
   "schema": "llm_perf.model",
   "vocab_size": 151936,
   "head_dim": 128,
-  "_comment": "The published config has head_dim 128 with hidden size 4096 and 64 heads, so heads are twice H / n_q: `head_dim` sets the key/value width (the KV cache is twice what H / n_q gives). The query and output projections and the attention scores are still counted at width H."
+  "_comment": "The published config has head_dim 128 with hidden size 4096 and 64 heads, so heads are twice H / n_q: `head_dim` sets the key/value width (the KV cache is twice what H / n_q gives). The query and output projections and the attention scores are still counted at width H. The input embedding and the LM head are separate matrices in the published weights (`tied_embeddings` false), so memory holds two vocabulary matrices.",
+  "tied_embeddings": false
 }

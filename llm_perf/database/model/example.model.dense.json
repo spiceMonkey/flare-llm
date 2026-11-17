@@ -9,6 +9,7 @@
   "vocab_size": 128256,
   "max_seq_len": 8192,
   "bytes_per_param": 2,
-
-  "moe": null
+  "moe": null,
+  "tied_embeddings": false,
+  "_comment": "Two vocabulary matrices are counted (`tied_embeddings` false), as in current decoder models."
 }
