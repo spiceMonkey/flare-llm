@@ -29,8 +29,8 @@ OSL = 1024
 TP, EP, NUM = 4, 1, 4
 
 # Calibration is per setup (model, hardware, serving stack). Four constants,
-# fitted on 2026-11-16 by least mean absolute error on the seven points of the
-# ISL 1024 cut:
+# fitted by least mean absolute error on the seven points of the ISL 1024 cut
+# (bw_eta and c_seq refit on 2026-11-17 on the decoding batch, see below):
 #   bw_eta                 multiplies the memory bandwidth, on top of the 0.7
 #                          sustained fraction the GB200 system spec carries;
 #   c_seq                  host work per sequence per step (microseconds);
@@ -46,12 +46,11 @@ TP, EP, NUM = 4, 1, 4
 # the graph-replay optimum near 1.5 and the eager-mode floor near 4.5) and
 # host work that adds to the GPU step instead of hiding behind it
 # (seq_overlap_factor = 0).
-# The constants predate the model's sliding-window layers (half the layers
-# keep and read a 128-token cache) and were kept when those were added: with
-# them the fitted cut scores 5.9% and the held-out cut 7.0% (12.4% before);
-# a refit gives 5.3% and 7.6%, no better where it counts.
-DEFAULT_BW_ETA = 0.69
-DEFAULT_C_SEQ_US = 5.5
+# The batch is the number of requests decoding on the replica, not the client
+# concurrency (common.load_measured: concurrency x decoding share / workers).
+# On that batch the fitted cut scores 5.6% and the held-out ISL 8192 cut 6.3%.
+DEFAULT_BW_ETA = 0.79
+DEFAULT_C_SEQ_US = 10.1
 DEFAULT_KERNEL_LAUNCH_US = 4.0
 DEFAULT_C_ORCH_US = 0.0
 DEFAULT_SEQ_OVERLAP = 0.0

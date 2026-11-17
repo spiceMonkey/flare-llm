@@ -54,7 +54,7 @@ DEFAULT_RESULTS_DIR = _REPO_ROOT / "benchmark" / "results"
 class MeasuredPoint:
     """One InferenceX measurement row (subset of fields used by drivers)."""
 
-    B: int                  # in-flight requests per decode worker: conc / decode_num_workers (≈ per-step batch of one replica)
+    B: int                  # requests DECODING on one decode worker: conc × decoding_share / decode_num_workers (the per-step batch of one replica)
     tpot_ms: float          # `mean_tpot` × 1000 — primary y-axis quantity
     isl: int
     osl: int
@@ -67,6 +67,18 @@ class MeasuredPoint:
     hardware: str
     conc: int = 0           # `conc` — client concurrency across the whole deployment
     num_workers: int = 1    # `decode_num_workers` — decode replicas sharing that concurrency
+    decoding_share: float = 1.0   # 1 − mean_ttft / mean_e2el: the part of a request's time spent decoding
+
+
+def _decoding_share(row: dict) -> float:
+    """Share of a request's end-to-end time spent decoding: 1 − mean_ttft / mean_e2el (1.0 when either is missing)."""
+    try:
+        ttft, e2e = float(row["mean_ttft"]), float(row["mean_e2el"])
+    except (KeyError, TypeError, ValueError):
+        return 1.0
+    if not (e2e > 0 and ttft >= 0):
+        return 1.0
+    return min(1.0, max(0.0, 1.0 - ttft / e2e))
 
 
 def _to_bool(v: str) -> bool:
@@ -141,15 +153,25 @@ def load_measured(
                 if not row.get("mean_tpot"):
                     continue  # drop incomplete runs
                 # `conc` is the load generator's concurrency for the whole
-                # endpoint. The model's B is the batch of ONE replica, so a
-                # deployment with several decode workers sees conc / workers
-                # each (assuming the router balances them).
+                # endpoint: it keeps that many requests in the system. Each
+                # spends its time to first token queued and in prefill, and
+                # the rest of its end-to-end time decoding, so the requests
+                # decoding at any moment are conc × (1 − TTFT / E2E), both
+                # from this same row. At light load that share is about 95%;
+                # once requests queue it falls well below (30% at the highest
+                # concurrencies in the data), and taking conc itself would
+                # ask the model for a batch the server never ran. The model's
+                # B is the batch of ONE replica, so a deployment with several
+                # decode workers sees that divided by the workers (assuming
+                # the router balances them).
                 conc = int(row["conc"])
                 workers = max(1, int(float(row.get("decode_num_workers") or 1)))
+                share = _decoding_share(row)
                 out.append(MeasuredPoint(
-                    B=max(1, round(conc / workers)),
+                    B=max(1, round(conc * share / workers)),
                     conc=conc,
                     num_workers=workers,
+                    decoding_share=share,
                     tpot_ms=float(row["mean_tpot"]) * 1000.0,
                     isl=int(row["isl"]),
                     osl=int(row["osl"]),
@@ -589,7 +611,7 @@ def plot_tpot_vs_B(
                                 textcoords="offset points", xytext=dxy,
                                 fontsize=6*f_scale, color=color, alpha=0.7)
 
-    ax.set_xlabel("In-flight requests per decode worker (B); labels show client concurrency c", fontsize=12*f_scale)
+    ax.set_xlabel("Requests decoding per decode worker (B); labels show client concurrency c", fontsize=12*f_scale)
     ax.set_ylabel("Time per decode step (ms)", fontsize=12*f_scale)
     ax.tick_params(axis="both", labelsize=10*f_scale)
     ax.set_xscale("log")
