@@ -75,3 +75,20 @@ class DisaggSpec:
     # whatever the repack rate. False (default) charges it whenever a repack
     # rate is set, as before.
     auto_repack: bool = False
+
+    def __post_init__(self) -> None:
+        if self.first_token not in ("decode", "prefill"):
+            raise ValueError(f"DisaggSpec.first_token must be 'decode' or 'prefill', got {self.first_token!r}")
+        if not 0.0 <= self.overlap_rho_KV <= 1.0:
+            raise ValueError(f"DisaggSpec.overlap_rho_KV must be in [0, 1], got {self.overlap_rho_KV!r}")
+        if int(self.transfer_streams) != self.transfer_streams or self.transfer_streams < 1:
+            raise ValueError(f"DisaggSpec.transfer_streams must be a positive integer, got {self.transfer_streams!r}")
+        if int(self.N_WR) != self.N_WR or self.N_WR < 0:
+            raise ValueError(f"DisaggSpec.N_WR must be a non-negative integer, got {self.N_WR!r}")
+        for name in ("colo_alpha_us", "colo_repack_GBps", "inter_alpha_us", "inter_bandwidth_GBps", "tau_WR_us",
+                     "overlap_resid_us", "repack_GBps"):
+            if getattr(self, name) < 0.0:
+                raise ValueError(f"DisaggSpec.{name} must be >= 0, got {getattr(self, name)!r}")
+        for name in ("colo_repack_eta", "repack_eta"):
+            if not getattr(self, name) > 0.0:
+                raise ValueError(f"DisaggSpec.{name} must be > 0, got {getattr(self, name)!r}")

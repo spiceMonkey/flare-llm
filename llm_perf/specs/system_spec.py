@@ -7,7 +7,7 @@ from typing import Dict, List, Optional, Tuple, Union
 class MemoryTierSpec:
     """One memory tier exposed by a device.
 
-    Per `documentation/modeling/sram.md §1.1`, devices expose an ordered list
+    Per `sram.md §1.1`, devices expose an ordered list
     of memory tiers, fastest first. Each tier carries a capacity, an effective
     peak read bandwidth, a first-byte latency, and a sustained-bandwidth
     deflator. The `eta_beta` deflator follows the same convention as
@@ -176,11 +176,11 @@ class CrossbarTier:
     Default topology for all existing system JSONs. `ports` is the radix —
     the number of ranks reachable within this tier from any single rank.
     Cumulative reach at tier k is the product of ports over tiers 0..k.
-    See documentation/modeling/collectives/02_topology_mapping.md §2 (star) / collectives/04_in_network_collectives.md (INC) for the cost forms consumed by each tier kind.
+    See collectives/02_topology_mapping.md §2 (star) / collectives/04_in_network_collectives.md (INC) for the cost forms consumed by each tier kind.
 
     Contention coefficients `eta_alpha` (≥ 1, inflates α) and `eta_beta`
     (∈ (0, 1], deflates BW) coarsen dynamic contention into the α–β model
-    per documentation/modeling/contention.md. Defaults are 1.0 (ideal).
+    per collectives/05_contention_and_congestion.md. Defaults are 1.0 (ideal).
 
     `inc` flags in-network collective support on this tier's switch ASIC:
     "none" (software collectives only), "sharp_class" (NVLink SHARP / NVLS,
@@ -211,8 +211,8 @@ class CrossbarTier:
     systems, where a pinned algorithm keeps its literal single-level
     meaning.
 
-    See documentation/modeling/collectives/04_in_network_collectives.md and
-    documentation/modeling/collectives/04_in_network_collectives.md.
+    See collectives/04_in_network_collectives.md and
+    collectives/04_in_network_collectives.md.
     """
 
     name: str
@@ -235,10 +235,10 @@ class TorusTier:
     `dims` is (D_1, ..., D_k); reach is prod(dims). Each node has 2k neighbor
     links; `bw_per_port_GBps` is the per-link single-direction bandwidth.
     Diameter = sum(floor(D_i/2)); bisection cut binds the largest dim.
-    See documentation/modeling/collectives/02_topology_mapping.md §3 for the dim-decomposed primitive cost forms.
+    See collectives/02_topology_mapping.md §3 for the dim-decomposed primitive cost forms.
 
     Contention coefficients `eta_alpha`, `eta_beta` as in `CrossbarTier`;
-    see documentation/modeling/contention.md.
+    see collectives/05_contention_and_congestion.md.
     """
 
     name: str
@@ -279,7 +279,7 @@ class MeshTier:
 
     No `inc` field — mesh has no switch ASIC; INC is structurally absent.
 
-    See documentation/modeling/collectives/02_topology_mapping.md §4 (mesh) and the
+    See collectives/02_topology_mapping.md §4 (mesh) and the
     explainer `02_topology_mapping.md §4` for full vs k-D mesh derivations.
     """
 
@@ -357,7 +357,7 @@ def span_tiers(
 COLLECTIVES: Tuple[str, ...] = ("TP", "EP", "SP", "PP")
 
 
-PATH_STAGE_SCOPES: Tuple[str, ...] = ("host", "gpu", "path")
+PATH_STAGE_SCOPES = ("host", "gpu", "path", "tier")
 
 
 @dataclass
@@ -375,13 +375,16 @@ class PathStageSpec:
                through pinned memory) and takes `HostSpec.eta_busy`;
       "gpu"  - per GPU that receives the transfer (a PCIe link into a GPU);
       "path" - as written (the links between two pools, the CXL devices or
-               drives behind one path).
+               drives behind one path);
+      "tier" - per host, for the memory or storage tier at the far end of a
+               host path (its capacity is per host, so its rate is too). Not
+               CPU-side: it does not take `HostSpec.eta_busy`.
     """
 
     name: str
     bw_per_port_GBps: float        # rate per port (GB/s, decimal)
     ports: int = 1
-    per: str = "path"              # "host" | "gpu" | "path"
+    per: str = "path"              # "host" | "gpu" | "path" | "tier"
     alpha_us: float = 0.0          # latency the stage adds per transfer (microseconds)
 
     def __post_init__(self) -> None:
@@ -497,9 +500,16 @@ class HostSpec:
             raise ValueError(f"unknown host path {name!r}; known: {sorted(self.paths)}")
         return self.paths[name]
 
-    def hosts_for(self, n_devices: int) -> int:
-        """Hosts that a replica of `n_devices` GPUs spans."""
-        return -(-max(1, n_devices) // self.devices_per_host)
+    def hosts_for(self, n_devices: int) -> float:
+        """A replica's share of hosts: `n_devices / devices_per_host`.
+
+        A replica of whole hosts gets them (8 GPUs on 8-GPU hosts: 1.0). A
+        replica smaller than a host shares that host's memory, storage and
+        root complex with the other replicas on it and is given its
+        proportional share (4 GPUs: 0.5); so is a replica that does not fill
+        its last host (12 GPUs: 1.5).
+        """
+        return max(1, n_devices) / self.devices_per_host
 
 
 @dataclass

@@ -78,7 +78,7 @@ class WarmSessionResults:
 def tier_stages(host: HostSpec, tier: KVTierSpec, *, write: bool = False) -> List[PathStageSpec]:
     """The path between a tier and the GPUs: the tier itself, then its host path."""
     rate = tier.write_GBps if write and tier.write_GBps is not None else tier.read_GBps
-    first = PathStageSpec(name=tier.name, bw_per_port_GBps=rate, ports=tier.ports, per="path", alpha_us=tier.alpha_us)
+    first = PathStageSpec(name=tier.name, bw_per_port_GBps=rate, ports=tier.ports, per="tier", alpha_us=tier.alpha_us)
     return [first] + (list(host.get_path(tier.path)) if tier.path else [])
 
 
@@ -125,8 +125,9 @@ def warm_sessions(
 
     `M_KV_session` is the whole cache of one session (all of its shards);
     `N_active` the sequences the replica holds in GPU memory; `n_gpus` the
-    replica's devices, which fixes how many hosts (and so how much of the
-    tier) it has.
+    replica's devices, which fixes its share of hosts and so how much of
+    each tier it has (`HostSpec.hosts_for`: a replica smaller than a host
+    gets that fraction of the host's tiers, not all of them).
     """
     if not 0.0 <= idle_fraction < 1.0:
         raise ValueError(f"idle_fraction must be in [0, 1), got {idle_fraction!r}")

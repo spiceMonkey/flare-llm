@@ -30,6 +30,7 @@ from ..specs.model_spec import LlmModelSpec
 from ..specs.partition_spec import PartitionSpec
 from ..specs.workload_spec import WorkloadSpec
 from .primitives import D_kv
+from .primitives.sharding_factors import N_replica
 
 
 @dataclass
@@ -59,11 +60,21 @@ class PoolResults:
     n_gpus: Optional[int] = None
     utilisation_prefill: Optional[float] = None     # offered rate / pool capacity
     utilisation_decode: Optional[float] = None
+    # What sets mu_prefill: the GPU work of prefill ("gpu_work") or, under
+    # prefix reuse, the rate at which the fetch path delivers caches ("fetch_path").
+    prefill_limited_by: str = "gpu_work"
 
 
-def replica_devices(partition: PartitionSpec) -> int:
-    """Devices in one replica: PP * TP * EP * SP."""
-    return partition.PP * partition.TP * partition.EP * partition.SP
+def replica_devices(partition: PartitionSpec, framework: Optional[FrameworkSpec] = None) -> int:
+    """Devices in one replica (`primitives.N_replica`).
+
+    PP * TP * EP * SP when TP and EP are orthogonal; PP * max(TP, EP) * SP
+    when the stack co-locates them on the same devices. Without a framework
+    the layout is taken as orthogonal.
+    """
+    if framework is None:
+        return partition.PP * partition.TP * partition.EP * partition.SP
+    return N_replica(partition, framework)
 
 
 def kv_layout(model: LlmModelSpec, partition: PartitionSpec, framework: FrameworkSpec) -> Tuple[int, int, int]:
@@ -100,12 +111,16 @@ def compute_pools(
     g_prefill: int,
     g_decode: int,
     workload: WorkloadSpec,
+    mu_prefill_cap: float = math.inf,
 ) -> PoolResults:
     """Size a prefill pool and a decode pool for one prompt / output shape.
 
     `t_prefill` is the time one prefill replica takes for a batch of
     `B_prefill` prompts; `TPOT` is the user-observed time per output token of
-    a decode replica running `B_decode` sequences.
+    a decode replica running `B_decode` sequences. `mu_prefill_cap` is a
+    second limit on a prefill replica's request rate that is not GPU work:
+    under prefix reuse, the requests per second whose cached prefixes the
+    replica's fetch path can carry.
     """
     if TPOT <= 0.0:
         raise ValueError(f"compute_pools needs TPOT > 0, got {TPOT!r}")
@@ -118,7 +133,10 @@ def compute_pools(
         )
     S_out = workload.output_tokens
 
-    mu_p = B_prefill / t_prefill if t_prefill > 0.0 else math.inf
+    if not mu_prefill_cap > 0.0:
+        raise ValueError(f"compute_pools needs mu_prefill_cap > 0, got {mu_prefill_cap!r}")
+    mu_work = B_prefill / t_prefill if t_prefill > 0.0 else math.inf
+    mu_p = min(mu_work, mu_prefill_cap)
     mu_d = B_decode / (S_out * TPOT)
     gpu_s_p = g_prefill / mu_p          # 0 when prefill takes no time
     gpu_s_d = g_decode / mu_d
@@ -134,6 +152,7 @@ def compute_pools(
         pool_ratio=gpu_s_p / gpu_s_d,
         throughput_per_gpu=S_out / gpu_s,
         requests_per_gpu=1.0 / gpu_s,
+        prefill_limited_by="fetch_path" if mu_prefill_cap < mu_work else "gpu_work",
     )
 
     rate = workload.request_rate

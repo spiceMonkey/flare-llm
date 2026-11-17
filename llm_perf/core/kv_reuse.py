@@ -48,6 +48,7 @@ from ..utils import GB_TO_BYTES, MB_TO_BYTES
 from .kv_transfer import transfer_time
 from .prefill_model import compute_suffix_prefill
 from .primitives import kv_bytes_cluster
+from .primitives.sharding_factors import N_replica
 
 FETCH_RULES = ("auto", "always")
 
@@ -203,7 +204,7 @@ def kv_prefix_reuse(
                 if S_prefix < S else 0.0)
 
     M = kv_bytes_cluster(model, S_prefix)
-    n_gpus = partition.PP * partition.TP * partition.EP * partition.SP
+    n_gpus = N_replica(partition, framework)
     host = system.host
     if host is not None:
         tr = transfer_time(M, fetch.stages, n_hosts=host.hosts_for(n_gpus), n_gpus=n_gpus, eta_busy=host.eta_busy,

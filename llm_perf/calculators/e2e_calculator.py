@@ -1,4 +1,5 @@
 
+import math
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -150,6 +151,7 @@ class E2ECalculator:
         self.workload = workload
         self.prefill_system = prefill_system if prefill_system is not None else system
         self.prefill_partition = prefill_partition if prefill_partition is not None else partition
+        self._framework_given = framework is not None
         self.framework = framework if framework is not None else FrameworkSpec.default()
         self.prefill_framework = prefill_framework if prefill_framework is not None else self.framework
         self.offload = offload
@@ -162,6 +164,7 @@ class E2ECalculator:
         oh = self.overhead
         dg = self.disagg
         dec = self.decode.latency
+        self._check_configuration()
 
         # Framework overhead.
         # `oh.t_graph_us` is the legacy flat per-step CUDA-graph constant;
@@ -175,8 +178,12 @@ class E2ECalculator:
         t_framework_per_step = (t_graph_legacy_us + oh.t_detok_us) * US_TO_S
 
         # Prefill latency (0 if no prefill results)
+        # A prefill replica runs B_prefill prompts in one pass and every one
+        # of them waits for the whole pass (prefill.md §3.5), so the time that
+        # enters TTFT, the handoff overlap and the pool's service rate is that
+        # of the batch. It equals the single-prompt time at B_prefill = 1.
         if self.prefill is not None:
-            t_prefill = self.prefill.latency.t_prefill
+            t_prefill = self.prefill.latency.t_prefill_batched
             t_prefill_chunked = self.prefill.latency.t_prefill_chunked
         else:
             t_prefill = 0.0
@@ -189,7 +196,7 @@ class E2ECalculator:
         # KV handoff: branch on DisaggSpec.disaggregated (prefill.md §6.3 / §6.4)
         self._transfer: Optional[TransferResult] = None
         t_handoff, t_repack = self._compute_handoff(M_KV_total, t_prefill)
-        handoff_streams = self._streams() if dg.disaggregated and dg.inter_bandwidth_GBps > 0 else 0
+        handoff_streams = self._streams() if dg.disaggregated else 0
 
         # TTFT assembly (prefill.md §6.5; e2e.md §2). t_prefill ends with the
         # LM head on the last prompt position, so the prefill pass itself
@@ -252,7 +259,7 @@ class E2ECalculator:
                 S_prefix=wl.prefix_tokens, hit_rate=wl.prefix_hit_rate, fetch=self.prefix_fetch,
                 t_prefill=t_prefill,
             )
-        TTFT_hit = t_sched + reuse.t_first_hit + t_after_prefill if reuse is not None else 0.0
+        TTFT_hit = t_sched + reuse.t_first_hit + t_after_prefill if reuse is not None else TTFT
         TTFT_expected = t_sched + reuse.E_t_first + t_after_prefill if reuse is not None else TTFT
 
         # Two-pool sizing: GPU time per request in each pool, the balanced
@@ -260,14 +267,23 @@ class E2ECalculator:
         # prefill pool's work per request is the expected one.
         pools = None
         if self.workload is not None and self.prefill is not None:
+            # Under reuse a prefill replica is also limited by its fetch
+            # path: it cannot serve more requests per second than the path
+            # delivers cached prefixes for (hit_rate x M_KV(prefix) bytes per
+            # request). This binds when the suffix is short, where the GPU
+            # work per request falls toward zero.
+            mu_fetch = math.inf
+            if reuse is not None and reuse.fetch_taken and reuse.hit_rate > 0.0 and reuse.M_KV_prefix > 0.0:
+                mu_fetch = reuse.fetch_rate_GBps * GB_TO_BYTES / (reuse.hit_rate * reuse.M_KV_prefix)
             pools = compute_pools(
                 t_prefill=reuse.E_t_work if reuse is not None else t_prefill,
                 B_prefill=self.tuner.B_prefill,
                 TPOT=TPOT,
                 B_decode=self.tuner.B_decode,
-                g_prefill=replica_devices(self.prefill_partition),
-                g_decode=replica_devices(self.partition),
+                g_prefill=replica_devices(self.prefill_partition, self.prefill_framework),
+                g_decode=replica_devices(self.partition, self.framework),
                 workload=self.workload,
+                mu_prefill_cap=mu_fetch,
             )
 
         # Caches in flight to one decode replica (Little's law: arrival rate
@@ -303,7 +319,7 @@ class E2ECalculator:
                 M_KV_session=kv_bytes_cluster(self.model, self.tuner.S_decode),
                 N_active=paged.max_sequences,
                 idle_fraction=self.workload.idle_fraction,
-                n_gpus=replica_devices(self.partition),
+                n_gpus=replica_devices(self.partition, self.framework),
                 overflow_tiers=self.offload.overflow_tiers,
             )
 
@@ -332,11 +348,54 @@ class E2ECalculator:
             warm=warm,
         )
 
+    def _check_configuration(self) -> None:
+        """Refuse settings that would silently price nothing.
+
+        Each of these used to switch a feature off without a word: the run
+        returned, and the result looked like one where the feature had no
+        effect.
+        """
+        dg, off, wl = self.disagg, self.offload, self.workload
+        if dg.disaggregated and not dg.inter_bandwidth_GBps > 0.0:
+            raise ValueError(
+                "DisaggSpec.disaggregated needs the delivered rate of the link between the pools "
+                f"(inter_bandwidth_GBps > 0), got {dg.inter_bandwidth_GBps!r}"
+            )
+        if dg.disaggregated and dg.staged:
+            host = self.system.host
+            if host is None or not host.handoff_path:
+                raise ValueError(
+                    "DisaggSpec.staged prices the handoff through the decode host's path, but the decode "
+                    "system has no host block with a handoff_path"
+                )
+        if off is not None and off.prefix_tier and self.prefill_system.host is None:
+            raise ValueError(
+                f"KVOffloadSpec.prefix_tier={off.prefix_tier!r}, but the prefill system has no host block to hold it"
+            )
+        if off is not None and off.idle_tier:
+            if self.system.host is None:
+                raise ValueError(
+                    f"KVOffloadSpec.idle_tier={off.idle_tier!r}, but the decode system has no host block to hold it"
+                )
+            if wl is None:
+                raise ValueError("KVOffloadSpec.idle_tier needs a WorkloadSpec (its idle_fraction) to park sessions")
+        uses_framework = (
+            (wl is not None and self.prefill is not None and self.prefix_fetch is not None
+             and wl.prefix_hit_rate > 0.0 and wl.prefix_tokens > 0)
+            or (off is not None and off.idle_tier)
+        )
+        if uses_framework and not self._framework_given:
+            raise ValueError(
+                "prefix reuse and parked sessions are priced with the serving stack (suffix prefill, KV paging): "
+                "pass `framework=` (the one the decode and prefill calculators ran with) to E2ECalculator"
+            )
+
     def _streams(self) -> int:
         """Device pairs that carry the disaggregated transfer in parallel."""
         dg = self.disagg
         if dg.auto_streams:
-            return min(replica_devices(self.prefill_partition), replica_devices(self.partition))
+            return min(replica_devices(self.prefill_partition, self.prefill_framework),
+                       replica_devices(self.partition, self.framework))
         return max(1, int(dg.transfer_streams))
 
     def _needs_repack(self) -> bool:
@@ -352,8 +411,6 @@ class E2ECalculator:
 
         if dg.disaggregated:
             # §6.4 disaggregated transfer
-            if dg.inter_bandwidth_GBps <= 0:
-                return 0.0, 0.0
             # The path: the link between pools (device pairs transferring in
             # parallel each carry their own shard), then, for a staged
             # transfer, the decode host's path from host memory into the GPUs.
@@ -363,7 +420,7 @@ class E2ECalculator:
             host = self.system.host
             kw = {}
             if dg.staged and host is not None and host.handoff_path:
-                g_d = replica_devices(self.partition)
+                g_d = replica_devices(self.partition, self.framework)
                 stages += host.get_path(host.handoff_path)
                 kw = dict(n_hosts=host.hosts_for(g_d), n_gpus=g_d, eta_busy=host.eta_busy,
                           block_bytes=host.block_MB * MB_TO_BYTES, tau_block_us=host.tau_block_us,

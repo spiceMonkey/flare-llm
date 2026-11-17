@@ -47,9 +47,13 @@ class TransferResult:
     n_blocks: int           # blocks the per-block cost was charged for
 
 
-def stage_rate(stage: PathStageSpec, *, n_hosts: int = 1, n_gpus: int = 1, eta_busy: float = 1.0) -> float:
-    """Bytes per second one stage carries for a transfer into `n_gpus` GPUs on `n_hosts` hosts."""
-    if stage.per == "host":
+def stage_rate(stage: PathStageSpec, *, n_hosts: float = 1, n_gpus: int = 1, eta_busy: float = 1.0) -> float:
+    """Bytes per second one stage carries for a transfer into `n_gpus` GPUs with a share of `n_hosts` hosts.
+
+    `n_hosts` may be a fraction: a replica smaller than a host has that share
+    of the host's stages (`HostSpec.hosts_for`).
+    """
+    if stage.per in ("host", "tier"):
         units = stage.ports * n_hosts
     elif stage.per == "gpu":
         units = stage.ports * n_gpus
@@ -65,7 +69,7 @@ def transfer_time(
     M_bytes: float,
     stages: Sequence[PathStageSpec],
     *,
-    n_hosts: int = 1,
+    n_hosts: float = 1,
     n_gpus: int = 1,
     eta_busy: float = 1.0,
     block_bytes: float = 0.0,
@@ -75,8 +79,8 @@ def transfer_time(
     """Time to move `M_bytes` over `stages` (see the module docstring)."""
     if M_bytes < 0.0:
         raise ValueError(f"transfer_time needs M_bytes >= 0, got {M_bytes!r}")
-    if n_hosts < 1 or n_gpus < 1:
-        raise ValueError(f"transfer_time needs n_hosts >= 1 and n_gpus >= 1, got {n_hosts}, {n_gpus}")
+    if not n_hosts > 0 or n_gpus < 1:
+        raise ValueError(f"transfer_time needs n_hosts > 0 and n_gpus >= 1, got {n_hosts}, {n_gpus}")
     if not 0.0 < eta_busy <= 1.0:
         raise ValueError(f"transfer_time needs eta_busy in (0, 1], got {eta_busy!r}")
     if block_bytes < 0.0 or tau_block_us < 0.0:
