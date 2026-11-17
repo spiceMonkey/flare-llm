@@ -91,6 +91,8 @@ Transformer / LLM architecture spec.
 | `attn_score_width` | `Optional[float]` | `None` | — |
 | `kv_elems_per_token_per_layer` | `Optional[float]` | `None` | — |
 | `kv_head_split` | `bool` | `True` | — |
+| `attn_window` | `Optional[int]` | `None` | — |
+| `n_window_layers` | `int` | `0` | — |
 
 #### `kv_bytes(self) -> float`
 
@@ -111,6 +113,12 @@ Some models use heads wider than H / n\_q (Qwen3-VL-235B: H = 4096, 64 heads of 
 Query projection width n\_q * d\_head: H unless the model states a `head_dim`.
 
 W\_Q is H x H\_q and W\_O is H\_q x H; a query's scores against S positions cost 4 * S * H\_q FLOPs. Returns `H` itself (not n\_q * (H / n\_q)) when there is no `head_dim`, so every formula that used H keeps its exact value.
+
+#### `attn_tokens(self, n)`
+
+Context tokens an attention layer keeps and reads, averaged over the layers, for a context of `n` tokens.
+
+`n` itself without window layers; otherwise the window layers count min(n, attn\_window): n * (1 - f) + min(n, W) * f with f the share of window layers. Every cache size and every score/value term takes its context length through this.
 
 #### `H_kv(self) -> float`
 

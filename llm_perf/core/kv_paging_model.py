@@ -63,7 +63,7 @@ def compute_kv_paging(
 
     L = model.L
     b = model.kv_bytes()
-    S = tuner.S_decode
+    S = model.attn_tokens(tuner.S_decode)       # tokens a layer keeps, averaged over layers (window layers keep their window)
     PP = partition.PP
     SP = partition.SP
 

@@ -17,9 +17,11 @@
   },
   "_comment_n_kv": "HF config sets head_dim=64 explicitly (not H/n_q=45). True KV/token = 2 * 8 * 64 * b = 1024b. Framework infers d_head=H/n_q=45, so we adjust n_kv from 8 to 11 to recover H_kv ≈ 8 * 64 = 512 (n_kv=11 gives 495, ~3% under). Attention FLOPs are approximate.",
   "_comment_bytes_per_param": "MXFP4 quantization (quant_method=mxfp4 in HF config) → b=0.5. The HF converter defaults to b=2 (BF16); overridden here to match the deployed precision.",
-  "_comment_attention_window": "Half the layers (alternating) use sliding-window attention with W=128 instead of attending to the whole context. This spec treats all layers as full attention, so the KV cache and the attention work are over-estimated for contexts longer than 128 tokens (by up to a factor of two at long context). The explicit attention-shape fields (kv_elems_per_token_per_layer, attn_score_width) could state the layer average; they are not set here because the two validators of this model were fitted with the full-attention form.",
   "_comment_moe": "All 36 layers are MoE (no dense layers). 128 experts per layer, top-k=4. I_moe = intermediate_size = 2880. SwiGLU activation.",
   "tied_embeddings": false,
   "head_dim": 64,
-  "_comment": "The input embedding and the LM head are separate matrices in the published weights (`tied_embeddings` false), so memory holds two vocabulary matrices. The published config has 64 query heads and 8 key/value heads of width 64 with hidden size 2880, so heads are wider than H / n_q: `head_dim` 64 and `n_kv` 8 give the exact key/value width of 512 (the earlier `n_kv` 11 approximated it as 495) and query/output projections of 2880 x 4096."
+  "attn_window": 128,
+  "n_window_layers": 18,
+  "_comment": "The input embedding and the LM head are separate matrices in the published weights (`tied_embeddings` false), so memory holds two vocabulary matrices. The published config has 64 query heads and 8 key/value heads of width 64 with hidden size 2880, so heads are wider than H / n_q: `head_dim` 64 and `n_kv` 8 give the exact key/value width of 512 (the earlier `n_kv` 11 approximated it as 495) and query/output projections of 2880 x 4096.",
+  "_comment_attention_window": "Every other layer (18 of 36, starting with the first) uses sliding-window attention over the last 128 tokens; the rest attend to the whole context (layer_types and sliding_window of the published config). A window layer keeps and reads a cache of at most 128 tokens and scores at most 128 positions per query."
 }

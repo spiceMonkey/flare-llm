@@ -123,11 +123,12 @@ def compute_prefill_flops(
     if model.mla is not None:
         from .primitives.mla_flops import mla_score_value_flops_per_layer_per_device
         F_sv_per_layer_per_device_per_token = (
-            mla_score_value_flops_per_layer_per_device(model, partition, fw, S, fw.mla_mode)
+            mla_score_value_flops_per_layer_per_device(model, partition, fw, model.attn_tokens(S), fw.mla_mode)
         )
         F_attn_device = (L / PP) * F_sv_per_layer_per_device_per_token * S / SP
     else:
-        F_attn_device = (L / PP) * (4 * S**2 * model.H_q()) / (D_kv(partition, fw) * SP)
+        # S queries, each against the positions its layer sees (all S, or the window on a window layer).
+        F_attn_device = (L / PP) * (4 * S * model.attn_tokens(S) * model.H_q()) / (D_kv(partition, fw) * SP)
     # Under DP-attention a rank holds whole requests, so the rank that
     # prefills this request does all of its attention, not a 1/G_TP share
     # (the factor is G_TP there and 1 under TP-attention).
@@ -153,13 +154,13 @@ def compute_prefill_flops(
         F_proj_per_token = mla_proj_flops_per_layer_per_device(model, partition, fw, fw.mla_mode)
         F_proj = F_proj_per_token * S
         F_attn = mla_score_value_flops_per_layer_per_device(
-            model, partition, fw, S, fw.mla_mode
+            model, partition, fw, model.attn_tokens(S), fw.mla_mode
         ) * S
     else:
         H_kv = model.H_kv()
         F_proj = ((2 * model.attn_params_per_layer) if model.attn_params_per_layer is not None
                   else (4 * H * model.H_q() + 4 * H * H_kv)) * S
-        F_attn = 4 * S**2 * model.H_q()
+        F_attn = 4 * S * model.attn_tokens(S) * model.H_q()
     F_ffn_dense = 6 * H * I_dense * S
     F_layer_prefill = F_proj + F_attn + F_ffn_dense
 
@@ -652,11 +653,11 @@ def compute_prefill_latency(
             S_attn_k = 2 * (k - 1) * C + C_k        # = (2k−1)·C for a full chunk
             if model.mla is not None:
                 F_sv_per_tok = mla_score_value_flops_per_layer_per_device(
-                    model, partition, fw, S_attn_k, fw.mla_mode
+                    model, partition, fw, model.attn_tokens(S_attn_k), fw.mla_mode
                 )
                 F_attn_chunk_k = (L / PP) * F_sv_per_tok * C_k / SP
             else:
-                F_attn_chunk_k = (L / PP) * (4 * C_k * S_attn_k * model.H_q()) / (d_kv_pf * SP)
+                F_attn_chunk_k = (L / PP) * (4 * C_k * model.attn_tokens(S_attn_k) * model.H_q()) / (d_kv_pf * SP)
             F_attn_chunk_k *= f_dp
             F_chunk_k = (F_linear_per_chunk if full else F_linear_per_token * C_k) + F_attn_chunk_k
 
@@ -793,9 +794,9 @@ def compute_suffix_prefill(
     S_attn = 2 * P + C
     if model.mla is not None:
         from .primitives.mla_flops import mla_score_value_flops_per_layer_per_device
-        F_attn = (L / PP) * mla_score_value_flops_per_layer_per_device(model, partition, fw, S_attn, fw.mla_mode) * C / SP
+        F_attn = (L / PP) * mla_score_value_flops_per_layer_per_device(model, partition, fw, model.attn_tokens(S_attn), fw.mla_mode) * C / SP
     else:
-        F_attn = (L / PP) * (4 * C * S_attn * model.H_q()) / (d_kv * SP)
+        F_attn = (L / PP) * (4 * C * model.attn_tokens(S_attn) * model.H_q()) / (d_kv * SP)
     f_dp = kv_batch(1.0, partition, fw)      # DP-attention: the rank holding the request does all of it
     F_attn *= f_dp
     F_suffix = F_linear + F_attn

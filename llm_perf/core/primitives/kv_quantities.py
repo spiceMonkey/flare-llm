@@ -40,6 +40,7 @@ def kv_bytes_cluster(model: LlmModelSpec, n_tokens: int) -> float:
     cache tier stores for a reusable prompt.
     """
     b = model.kv_bytes()
+    n_tokens = model.attn_tokens(n_tokens)      # window layers keep at most their window
     if model.mla is not None:
         return model.L * n_tokens * model.mla.kv_bytes_per_token_per_layer(b)
     return 2 * model.L * n_tokens * model.H_kv() * b
@@ -67,6 +68,7 @@ def kv_bytes_per_seq(
     b = model.kv_bytes()
     PP = partition.PP
     SP = partition.SP
+    n_tokens = model.attn_tokens(n_tokens)      # window layers keep at most their window
 
     if model.mla is not None:
         per_tok_per_layer = model.mla.kv_bytes_per_token_per_layer(b)

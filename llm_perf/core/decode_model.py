@@ -332,11 +332,12 @@ def compute_flops(
     if model.mla is not None:
         from .primitives.mla_flops import mla_score_value_flops_per_layer_per_device
         F_sv_per_layer = mla_score_value_flops_per_layer_per_device(
-            model, partition, framework, S, framework.mla_mode
+            model, partition, framework, model.attn_tokens(S), framework.mla_mode
         )
         F_attn_sv_per_token = (L / PP) * F_sv_per_layer / SP
     else:
-        F_attn_sv_per_token = (L / PP) * (4 * S * model.H_q()) / (D_kv(partition, framework) * SP)
+        # A query scores the positions its layer sees: all S, or the window on a window layer.
+        F_attn_sv_per_token = (L / PP) * (4 * model.attn_tokens(S) * model.H_q()) / (D_kv(partition, framework) * SP)
 
     F_attn_per_token = F_attn_proj_per_token + F_attn_sv_per_token
     F_token_device = F_attn_per_token + F_ffn_per_token
@@ -587,9 +588,9 @@ def compute_comm(
                 # One latent per token per layer, not head-split under
                 # TP-attention (attention.md §3.6).
                 w_lat = model.mla.kv_bytes_per_token_per_layer(b_kv)
-                msg_SP = B * S * (w_lat if fw.attention_mode == "tp" else w_lat / d_kv)
+                msg_SP = B * model.attn_tokens(S) * (w_lat if fw.attention_mode == "tp" else w_lat / d_kv)
             else:
-                msg_SP = B * S * (2 * H_kv / d_kv) * b_kv
+                msg_SP = B * model.attn_tokens(S) * (2 * H_kv / d_kv) * b_kv
             t_SP = _cost("SP", "all_gather", msg_SP, SP)
         else:
             msg_SP = B * (H / d_kv) * b

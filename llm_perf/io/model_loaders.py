@@ -138,7 +138,21 @@ def model_spec_from_json_dict(cfg: Dict[str, Any]) -> LlmModelSpec:
         attn_score_width=_optional_positive_float(cfg, "attn_score_width"),
         kv_elems_per_token_per_layer=_optional_positive_float(cfg, "kv_elems_per_token_per_layer"),
         kv_head_split=bool(cfg.get("kv_head_split", True)),
+        attn_window=_window(cfg)[0],
+        n_window_layers=_window(cfg)[1],
     )
+
+
+def _window(cfg):
+    """(attn_window, n_window_layers) of a model JSON; (None, 0) when it has no sliding-window layers."""
+    w, n = cfg.get("attn_window"), int(cfg.get("n_window_layers", 0) or 0)
+    if w is None and n == 0:
+        return None, 0
+    if w is None or int(w) < 1 or n < 1 or n > int(cfg["L"]):
+        raise ValueError(
+            f"attn_window and n_window_layers go together: a window of at least 1 token on 1..L layers "
+            f"(got attn_window={w!r}, n_window_layers={n!r}, L={cfg['L']})")
+    return int(w), n
 
 
 def _optional_positive_float(cfg: Dict[str, Any], key: str) -> Optional[float]:

@@ -148,6 +148,12 @@ class LlmModelSpec:
     kv_elems_per_token_per_layer: Optional[float] = None
     kv_head_split: bool = True
 
+    # Sliding-window attention: `n_window_layers` of the L layers attend to
+    # the last `attn_window` tokens only, and keep and read a cache of that
+    # many tokens; the other layers see the whole context. Default: none.
+    attn_window: Optional[int] = None
+    n_window_layers: int = 0
+
     def kv_bytes(self) -> float:
         """Bytes per KV-cache element."""
         return self.bytes_per_param if self.kv_bytes_per_elem is None else self.kv_bytes_per_elem
@@ -177,6 +183,19 @@ class LlmModelSpec:
         if self.attn_score_width is not None:
             return self.attn_score_width
         return self.H if self.head_dim is None else self.n_q * self.head_dim
+
+    def attn_tokens(self, n):
+        """Context tokens an attention layer keeps and reads, averaged over the layers, for a context of `n` tokens.
+
+        `n` itself without window layers; otherwise the window layers count
+        min(n, attn_window): n * (1 - f) + min(n, W) * f with f the share of
+        window layers. Every cache size and every score/value term takes its
+        context length through this.
+        """
+        if not self.attn_window or self.n_window_layers <= 0:
+            return n
+        f = self.n_window_layers / self.L
+        return n * (1.0 - f) + min(n, self.attn_window) * f
 
     def H_kv(self) -> float:
         """KV projection dimension H_kv = n_kv * d_head (GQA / MHA path).

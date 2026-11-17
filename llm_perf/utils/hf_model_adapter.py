@@ -404,6 +404,13 @@ def hf_config_to_llm_perf_model_dict(
     head_dim = tc.get("head_dim")
     if head_dim is not None and int(head_dim) * n_q != H:
         out["head_dim"] = int(head_dim)
+    # Sliding-window layers (gpt-oss): only when the config says which layers
+    # use the window; a bare `sliding_window` value is often unused.
+    layer_types = tc.get("layer_types") or []
+    n_win = sum(1 for t in layer_types if "sliding" in str(t))
+    if n_win and tc.get("sliding_window"):
+        out["attn_window"] = int(tc["sliding_window"])
+        out["n_window_layers"] = n_win
     # Latent attention (DeepSeek-V3 style) is not converted: the result
     # would price a per-head key/value cache the model does not have.
     if any(tc.get(k) is not None for k in _MLA_KEYS):

@@ -32,7 +32,7 @@ A disaggregated prefill/decode pipeline with a distributed KV cache. Each device
 
 | Layer | Variants | Doc |
 |---|---|---|
-| **Attention** | MHA, GQA, MQA, MLA (DeepSeek) | [attention](https://spicemonkey.github.io/flare-llm/attention.html) |
+| **Attention** | MHA, GQA, MQA, MLA (DeepSeek), sliding-window layers (gpt-oss), and an explicit per-layer shape for blocks that are none of these (DeepSeek-V4, Qwen3.5 hybrid) | [attention](https://spicemonkey.github.io/flare-llm/attention.html) |
 | **Memory hierarchy** | single-tier HBM, multi-tier HBM + SRAM, hypothetical 3D-stacked | [sram](https://spicemonkey.github.io/flare-llm/sram.html), [dram3d](https://spicemonkey.github.io/flare-llm/dram3d.html) |
 | **Collectives** | ring / tree (double binary tree, plain and pipelined) / hierarchical / torus / INC (NVLS, Quantum SHARP, hw_a2a) | [collectives](https://spicemonkey.github.io/flare-llm/collective_comm.html) |
 | **Fabric topology** | crossbar (NVSwitch / IB / PCIe), torus (TPU ICI), full mesh, k-D mesh | [collectives](https://spicemonkey.github.io/flare-llm/collective_comm.html) |
@@ -59,7 +59,7 @@ Calibration is per setup: each (model, hardware, serving stack) has its own few 
 python benchmark/validate/gpt_oss_120b_gb200_dynamo_trt.py
 ```
 
-120B MoE at FP4, TP=4 EP=1 on GB200 NVL72 under Dynamo+TRT-LLM, ISL/OSL = 1024/1024, one decode worker. **Mean absolute error (MAE) 5.6% over 7 measured points (B = 1…128).** The interesting feature is the nearly flat left half: through *B* ≈ 16 the deployment is *kernel-dispatch-bound* — the ~2.0 ms *t*<sub>kernel</sub> budget exceeds the GPU work, so TPOT barely moves with batch. Launch time hides behind only 55% of the GPU stage time (*ρ* = 0.55), which turns the corner where weight traffic takes over into the gradual bend the measured points show; the largest error is 15.9%, at *B* = 1. The constants are fitted on these seven points. The vendored data has a second cut of the same deployment at ISL/OSL = 8192/1024 that the fit never saw: `--isl 8192` runs it with the same constants and scores **12.4% over 8 points** — seven of them within 8.7%, and one, at the highest concurrency (*B* = 512), 66% high.
+120B MoE at FP4, TP=4 EP=1 on GB200 NVL72 under Dynamo+TRT-LLM, ISL/OSL = 1024/1024, one decode worker. **Mean absolute error (MAE) 5.9% over 7 measured points (B = 1…128).** The interesting feature is the nearly flat left half: through *B* ≈ 16 the deployment is *kernel-dispatch-bound* — the ~2.0 ms *t*<sub>kernel</sub> budget exceeds the GPU work, so TPOT barely moves with batch. Launch time hides behind only 55% of the GPU stage time (*ρ* = 0.55), which turns the corner where weight traffic takes over into the gradual bend the measured points show; the largest error is 15.9%, at *B* = 1. The constants are fitted on these seven points. The vendored data has a second cut of the same deployment at ISL/OSL = 8192/1024 that the fit never saw: `--isl 8192` runs it with the same constants and scores **7.0% over 8 points** — seven of them within 8.5%, and one, at the highest concurrency (*B* = 512), 31% high. Half of this model's layers attend to a 128-token window, so they keep and read a cache of 128 tokens however long the prompt is; the model prices that, and it is what lets constants fitted at 1,024 prompt tokens carry to 8,192.
 
 ### Large MoE — DeepSeek-R1 on GB200 NVL72
 
@@ -217,7 +217,7 @@ Each fabric is also swept under two collective-algorithm variants — ring every
 
 ## Utilities
 
-- **HuggingFace Adapter** — converts a HuggingFace `config.json` into the `llm_perf.model` schema: dense and GQA models, the Qwen3, DeepSeek-V3, Mixtral and gpt-oss styles of MoE config, and heads wider than H / n_q. Latent attention is not converted (it warns; add the `mla` block by hand), and an MoE config it cannot read is an error, not a dense model. See [`utils/hf_model_adapter.py`](llm_perf/utils/hf_model_adapter.py).
+- **HuggingFace Adapter** — converts a HuggingFace `config.json` into the `llm_perf.model` schema: dense and GQA models, the Qwen3, DeepSeek-V3, Mixtral and gpt-oss styles of MoE config, heads wider than H / n_q, and sliding-window layers. Latent attention is not converted (it warns; add the `mla` block by hand), and an MoE config it cannot read is an error, not a dense model. See [`utils/hf_model_adapter.py`](llm_perf/utils/hf_model_adapter.py).
 - **DRAM3D Bandwidth Calculator** — derives HBM bandwidth from die-interface parameters to evaluate future memory classes (HBM3E / HBM4 / HBM4E). See [`utils/dram3d.py`](llm_perf/utils/dram3d.py) and the [3D-stacked DRAM bandwidth](https://spicemonkey.github.io/flare-llm/dram3d.html) chapter.
 
 ---

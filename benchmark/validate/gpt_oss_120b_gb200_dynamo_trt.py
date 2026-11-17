@@ -46,6 +46,10 @@ TP, EP, NUM = 4, 1, 4
 # the graph-replay optimum near 1.5 and the eager-mode floor near 4.5) and
 # host work that adds to the GPU step instead of hiding behind it
 # (seq_overlap_factor = 0).
+# The constants predate the model's sliding-window layers (half the layers
+# keep and read a 128-token cache) and were kept when those were added: with
+# them the fitted cut scores 5.9% and the held-out cut 7.0% (12.4% before);
+# a refit gives 5.3% and 7.6%, no better where it counts.
 DEFAULT_BW_ETA = 0.69
 DEFAULT_C_SEQ_US = 5.5
 DEFAULT_KERNEL_LAUNCH_US = 4.0
