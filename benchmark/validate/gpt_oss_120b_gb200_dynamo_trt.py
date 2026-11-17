@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 """gpt-oss-120b on GB200 / Dynamo-TRT — framework vs InferenceX.
 
-Single cut: TP=4 EP=1 on 4 GPUs (the densest "exact-modelable" bucket in
-the dataset, no co-located complications). Calibration anchor for the
-Dynamo-TRT-LLM serving stack — best-fit `c_seq ≈ 22 µs/seq` per
-`decode.md §7.3` calibration table.
+One deployment: TP=4 EP=1 on 4 GPUs, one decode worker. The vendored data
+holds two cuts of it, which differ only in prompt length:
+
+  --isl 1024   (default) ISL/OSL 1024/1024, 7 points. The constants below are
+               fitted on this cut.
+  --isl 8192   ISL/OSL 8192/1024, 8 points. Not used in the fit: running it
+               with the same constants is the held-out check for this setup.
 
 Usage:
     python benchmark/validate/gpt_oss_120b_gb200_dynamo_trt.py
-    python benchmark/validate/gpt_oss_120b_gb200_dynamo_trt.py --c-seq-us 22
+    python benchmark/validate/gpt_oss_120b_gb200_dynamo_trt.py --isl 8192
 """
 import argparse
 import sys
@@ -22,49 +25,32 @@ from common import (
 MODEL = "gpt-oss-120b"
 SYSTEM = "gb200.72gpu"
 PRECISION = "fp4"
-ISL, OSL = 1024, 1024
+OSL = 1024
 TP, EP, NUM = 4, 1, 4
 
-# Per-stack calibration. Dynamo+TRT anchor case. The previous super-nameplate
-# bw_eta=1.4286 (physically impossible) was a tuning hack compensating for the
-# pre-`moe_weight_traffic_bytes` over-count of T_theta (full N_exp footprint
-# read every step regardless of B). With T_theta(B) correctly modeled as the
-# expectation of touched experts, bw_eta resets to a realistic 0.7 (matches
-# the DSr1 GB200 calibration on the same hardware). The residual ~38% MAE
-# reflects a remaining slope/offset gap: at B=1 the model under-predicts
-# (~0.8 ms vs measured 1.9 ms — suggests a B-independent per-step overhead
-# not captured), and at large B it over-predicts (predicted curve rises
-# faster than measured). Resolving this likely requires a fixed per-step
-# overhead term or precision-aware kernel-launch budget; documented as a
-# §5 Limitation.
+# Calibration is per setup (model, hardware, serving stack). Four constants,
+# fitted on 2026-11-16 by least mean absolute error on the seven points of the
+# ISL 1024 cut:
+#   bw_eta                 multiplies the memory bandwidth, on top of the 0.7
+#                          sustained fraction the GB200 system spec carries;
+#   c_seq                  host work per sequence per step (microseconds);
+#   c_orch                 host work per step that does not depend on batch;
+#   kernel_overlap_factor  the fraction of the GPU stage time behind which
+#                          kernel-launch time can hide:
+#                          t = t_stage + max(0, t_kernel - rho * t_stage).
+#                          Below one it turns the hard corner of
+#                          max(t_stage, t_kernel) into the gradual bend the
+#                          measured points show.
+# Two things are properties of the Dynamo + TRT-LLM stack and shared with the
+# DeepSeek-R1 validator: the per-kernel launch time (4 microseconds, between
+# the graph-replay optimum near 1.5 and the eager-mode floor near 4.5) and
+# host work that adds to the GPU step instead of hiding behind it
+# (seq_overlap_factor = 0).
 DEFAULT_BW_ETA = 0.69
-# 5 µs/seq — Dynamo+TRT stack default (matches dynamo_trt.json and the
-# DSr1 Dynamo+TRT validator). At panel-(a) max B=128, c_seq·B = 0.64 ms
-# vs t_step_base ~5-10 ms → fully hidden by the overlap gate (ρ_seq=1),
-# so the value does not affect MAE. Previous value 22 µs was a tuning hack
-# under the old additive (no-overlap) model; with the overlap gate the
-# stack-wide 5 µs default is the consistent choice.
 DEFAULT_C_SEQ_US = 5.5
-# 4.0 µs — Dynamo-orchestrator calibrated effective per-kernel cost (same
-# as the DSr1 Dynamo+TRT validator). Sits between CUDA-Graph optimum
-# (1.5 µs) and TaxBreak's eager-mode floor (4.5-4.7 µs); the spread
-# absorbs the per-step scheduler-tick path and MoE kernel-count
-# under-count. Lifts panel-(a) small-B prediction (B=1..4) from
-# ~0.8 ms to ~1.8 ms, matching measured ~1.9 ms.
 DEFAULT_KERNEL_LAUNCH_US = 4.0
-# Host-side composition (recalibrated 2026-11 with the per-worker batch):
-#   - seq_overlap_factor = 0: host work adds to the GPU step instead of hiding
-#     behind it. With full overlap the fitted bw_eta has to absorb the host
-#     cost, and then drifts from cut to cut.
-#   - c_orch: per-step floor that does not depend on batch, fitted per cut
-#     alongside bw_eta. c_seq and kernel_launch_us stay shared by every
-#     Dynamo+TRT cut.
 DEFAULT_C_ORCH_US = 0.0
 DEFAULT_SEQ_OVERLAP = 0.0
-# Recalibrated 2026-11-16 against the InferenceX rows of this setup (least mean absolute error):
-# calibration is per setup. Four knobs (bw_eta, c_seq, c_orch, kernel_overlap_factor): mean error
-# 9.0% -> 5.6%. A launch overlap below one replaces the hard max(t_stage, t_kernel) corner near batch 16 with a
-# gradual one, which is what the measured points show. One cut of seven points, so no held-out check exists.
 DEFAULT_KERNEL_OVERLAP = 0.55
 
 
@@ -72,7 +58,10 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
     add_common_cli(ap, default_bw_eta=DEFAULT_BW_ETA, default_c_seq_us=DEFAULT_C_SEQ_US,
                    default_c_orch_us=DEFAULT_C_ORCH_US)
+    ap.add_argument("--isl", type=int, default=1024, choices=(1024, 8192),
+                    help="prompt length of the cut: 1024 (fitted) or 8192 (held out of the fit)")
     args = ap.parse_args()
+    ISL = args.isl
 
     measured = load_measured(
         MODEL, isl=ISL, osl=OSL, precision=PRECISION,
@@ -106,12 +95,13 @@ def main() -> int:
             num_devices=NUM, S_decode=ISL + OSL // 2, B=m.B,
             flops_eta=args.flops_eta, bw_eta=args.bw_eta,
             c_seq_us=args.c_seq_us, c_orch_us=args.c_orch_us,
-        seq_overlap_factor=DEFAULT_SEQ_OVERLAP,
+            seq_overlap_factor=DEFAULT_SEQ_OVERLAP,
             kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US, kernel_overlap_factor=DEFAULT_KERNEL_OVERLAP,
         )
         rows.append((f"TP={TP} EP={EP}", m.B, m.tpot_ms, pred))
 
-    out = args.out_dir / f"gpt_oss_120b_dynamo_trt_tp{TP}_ep{EP}_dec{NUM}{eta_filename_tag(args.flops_eta, args.bw_eta, args.c_seq_us)}.png"
+    cut = "" if ISL == 1024 else f"_isl{ISL}"
+    out = args.out_dir / f"gpt_oss_120b_dynamo_trt_tp{TP}_ep{EP}_dec{NUM}{cut}{eta_filename_tag(args.flops_eta, args.bw_eta, args.c_seq_us)}.png"
     plot_tpot_vs_B(
         framework=framework, measured=measured,
         title=f"gpt-oss-120b / GB200 / Dynamo-TRT — TP={TP} EP={EP} dec={NUM}",

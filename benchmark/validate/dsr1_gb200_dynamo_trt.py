@@ -12,16 +12,15 @@ triple:
      PartitionSpec(tp_ep_layout="co_located", attention_mode="dp"). InferenceX
      publishes three replica sizes — 8, 16, 32 GPU.
 
-  3. ORTHO multi-replica (TP=8 EP=8 dec=32, dp_attn=False): the
-     framework runs 4 replicas of 8 GPUs each (N_replica = 32 / 8) under
-     TP-attention. Same shape as the gb300/dynamo-trt ORTHO cut. Useful
-     for cross-rack-generation comparison and small-B sensitivity testing.
+  3. CO-LOCATED, TP-attention (dec_tp=dec_ep=8 on 8 GPUs, dp_attn=False,
+     32 decode GPUs): four replicas of eight GPUs each, TP and EP on the same
+     devices. The cut the root README shows.
 
 Usage:
     python benchmark/validate/dsr1_gb200_dynamo_trt.py
     python benchmark/validate/dsr1_gb200_dynamo_trt.py --cut exact
     python benchmark/validate/dsr1_gb200_dynamo_trt.py --cut colocated --bw-eta 0.6
-    python benchmark/validate/dsr1_gb200_dynamo_trt.py --cut ortho
+    python benchmark/validate/dsr1_gb200_dynamo_trt.py --cut colo_tp_attn
 """
 import argparse
 import sys
@@ -42,67 +41,28 @@ ISL, OSL = 1024, 1024
 # kernel_launch_us are hardware/stack properties, not workload knobs.
 CO_LOCATED_WORKLOADS = [(1024, 1024), (8192, 1024)]
 
-# Per-stack calibration. Production DSv3/R1 on Dynamo+TRT-LLM with
-# DP-attention uses scatter-direct MoE A2A (decode.md §5.2): dispatch
-# operates on per-rank attention-sharded tokens of size B/G_TP rather
-# than gathering full B to every rank. The framework models this via
-# moe_a2a_pattern="scatter" on the tuner. Combined with a moderate
-# Dynamo-stack host overhead (c_seq ≈ 5 µs/seq, kernel_launch ≈ 7
-# µs) and bw_eta ≈ 0.6 for HBM3e on Blackwell, fits to ~21% MAE
-# overall across all three cuts (n=34 measurement points).
-# Per-cut breakdown:
-#   TP=36 EP=1 EXACT:        22% MAE (limited by data variance — e.g.
-#                                     B=128: 11.88 ms vs B=144: 7.74 ms;
-#                                     no model fits such non-monotonicity)
-#   TP=EP=8  colocated:      25% MAE (n=2; B=4300/4301 measured 54/44 ms,
-#                                     ~23% disagreement on consecutive
-#                                     integer batch sizes is measurement noise)
-#   TP=EP=16 colocated:      23% MAE (scatter-direct here vs gather)
-#   TP=EP=32 colocated:      22% MAE
-#   TP=8 EP=8 dec=32 ORTHO:  19% MAE (4 replicas of 8 GPUs, TP-attn —
-#                                     scatter inert here)
-#
-# Recalibrated post-MLA-migration (mla(stage 1-3): real MLASpec on
-# deepseek_r1_0528 added ~5 GB to per-rank M_theta and shifted attention
-# compute to absorbed-mode latent-space score/value). Previous (0.6, 5.0)
-# gave 25.1% overall MAE with a 116% outlier at TP=EP=16 B=4301; new
-# (0.5, 0.0) gives 22.7% / max 53.8%. The c_seq 5→0 shift carries
-# the bulk of the improvement: Dynamo+TRT absorbs per-seq host work into
-# the CUDA-graph launch, so the framework's per-seq overhead term
-# over-counts at large B (the offending TP=EP=16,32 cells run at B≥4000).
+# Calibration is per setup (model, hardware, serving stack). Four constants,
+# fitted on 2026-11-16 by least mean absolute error on all eight cuts of this
+# setup together (43 points):
+#   bw_eta                 multiplies the memory bandwidth, on top of the 0.7
+#                          sustained fraction the GB200 system spec carries;
+#   c_seq                  host work per sequence per step (microseconds);
+#   c_orch                 host work per step that does not depend on batch;
+#   kernel_overlap_factor  the fraction of the GPU stage time behind which
+#                          kernel-launch time can hide:
+#                          t = t_stage + max(0, t_kernel - rho * t_stage).
+# Two things are properties of the Dynamo + TRT-LLM stack and shared with the
+# gpt-oss-120b validator: the per-kernel launch time (4 microseconds, between
+# the graph-replay optimum near 1.5 and the eager-mode floor of 4.5 to 4.7
+# measured on Hopper, arXiv 2603.12465) and host work that adds to the GPU
+# step instead of hiding behind it (seq_overlap_factor = 0).
+# DP-attention cuts use scatter-direct MoE dispatch: tokens are dispatched
+# from the rank that holds them, not gathered to every rank first.
+# The data itself is noisy in places (for example 11.88 ms at B = 128 against
+# 7.74 ms at B = 144 on the TP = 36 cut), which bounds what any fit can reach.
 DEFAULT_BW_ETA = 0.62
-# 5 µs/seq — stack-realistic floor for Dynamo+TRT under CUDA-Graph replay.
-# Below the panel break-even at every measured operating point: at B=4300
-# (largest panel-(c) measured) c_seq·B = 21.5 ms < t_step_base ~25 ms,
-# so the overlap gate clips the contribution to 0 and the value doesn't
-# affect MAE. Setting >0 makes the t_step_seq curve visible in the cost-
-# component plot (was previously 0 → suppressed by the plot helper's
-# any(t_step_seq_ms > 0) guard). Sits at the lower end of decode.md §7.2's
-# 5-22 µs C++/CUDA-graph + orchestrator range.
 DEFAULT_C_SEQ_US = 4.8
-# kernel_launch_us: 4.0 µs — calibrated Dynamo-orchestrator effective per-
-# kernel cost on H100/H200. Sits between the CUDA-Graph optimum (1.5 µs)
-# and TaxBreak's measured eager-mode floor (4.5-4.7 µs on H100/H200, arxiv
-# 2603.12465). Production Dynamo+TRT at small B apparently does not hit
-# the CUDA-Graph optimum, likely because (a) MoE-routing dispatch isn't
-# fully captured by the graph, (b) the per-step scheduler-tick path runs
-# outside the graph, and (c) the framework's flat kernels_per_layer_compute=10
-# under-counts MoE kernel fanout (TaxBreak: MoE models dispatch 8-11×
-# more kernels per token than dense). 4.0 µs absorbs all three effects.
-# Same value used for Dynamo+SGLang (the orchestrator behavior dominates
-# the underlying runtime distinction).
 DEFAULT_KERNEL_LAUNCH_US = 4.0
-# Host-side composition (recalibrated 2026-11 with the per-worker batch):
-#   - seq_overlap_factor = 0: host work adds to the GPU step instead of hiding
-#     behind it. With full overlap the fitted bw_eta has to absorb the host
-#     cost, and then drifts from cut to cut.
-#   - c_orch: per-step floor that does not depend on batch, fitted per cut
-#     alongside bw_eta. c_seq and kernel_launch_us stay shared by every
-#     Dynamo+TRT cut.
-# Recalibrated 2026-11-16 against the InferenceX rows of this setup (least mean absolute error):
-# calibration is per setup. Four knobs fitted on all eight cuts together (bw_eta, c_seq, c_orch,
-# kernel_overlap_factor): mean error 15.1% -> 12.9%; with one cut held out of the fit, that cut scores 17.3% on
-# average. Part of what the 2.5 ms per-step floor carried is now kernel-launch time that does not overlap.
 DEFAULT_C_ORCH_US = 620.0
 DEFAULT_SEQ_OVERLAP = 0.0
 DEFAULT_KERNEL_OVERLAP = 0.35
