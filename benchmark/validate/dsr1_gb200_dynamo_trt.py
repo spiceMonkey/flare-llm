@@ -70,7 +70,7 @@ CO_LOCATED_WORKLOADS = [(1024, 1024), (8192, 1024)]
 # the bulk of the improvement: Dynamo+TRT absorbs per-seq host work into
 # the CUDA-graph launch, so the framework's per-seq overhead term
 # over-counts at large B (the offending TP=EP=16,32 cells run at B≥4000).
-DEFAULT_BW_ETA = 0.75
+DEFAULT_BW_ETA = 0.62
 # 5 µs/seq — stack-realistic floor for Dynamo+TRT under CUDA-Graph replay.
 # Below the panel break-even at every measured operating point: at B=4300
 # (largest panel-(c) measured) c_seq·B = 21.5 ms < t_step_base ~25 ms,
@@ -79,7 +79,7 @@ DEFAULT_BW_ETA = 0.75
 # component plot (was previously 0 → suppressed by the plot helper's
 # any(t_step_seq_ms > 0) guard). Sits at the lower end of decode.md §7.2's
 # 5-22 µs C++/CUDA-graph + orchestrator range.
-DEFAULT_C_SEQ_US = 5.0
+DEFAULT_C_SEQ_US = 4.8
 # kernel_launch_us: 4.0 µs — calibrated Dynamo-orchestrator effective per-
 # kernel cost on H100/H200. Sits between the CUDA-Graph optimum (1.5 µs)
 # and TaxBreak's measured eager-mode floor (4.5-4.7 µs on H100/H200, arxiv
@@ -99,8 +99,13 @@ DEFAULT_KERNEL_LAUNCH_US = 4.0
 #   - c_orch: per-step floor that does not depend on batch, fitted per cut
 #     alongside bw_eta. c_seq and kernel_launch_us stay shared by every
 #     Dynamo+TRT cut.
-DEFAULT_C_ORCH_US = 2500.0
+# Recalibrated 2026-11-16 against the InferenceX rows of this setup (least mean absolute error):
+# calibration is per setup. Four knobs fitted on all eight cuts together (bw_eta, c_seq, c_orch,
+# kernel_overlap_factor): mean error 15.1% -> 12.9%; with one cut held out of the fit, that cut scores 17.3% on
+# average. Part of what the 2.5 ms per-step floor carried is now kernel-launch time that does not overlap.
+DEFAULT_C_ORCH_US = 620.0
 DEFAULT_SEQ_OVERLAP = 0.0
+DEFAULT_KERNEL_OVERLAP = 0.35
 DEFAULT_MOE_A2A_PATTERN = "scatter"
 
 
@@ -128,7 +133,7 @@ def run_exact(args) -> tuple[list[tuple], int]:
         c_seq_us=args.c_seq_us, c_orch_us=args.c_orch_us,
         seq_overlap_factor=DEFAULT_SEQ_OVERLAP,
         moe_a2a_pattern=DEFAULT_MOE_A2A_PATTERN,
-        kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US,
+        kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US, kernel_overlap_factor=DEFAULT_KERNEL_OVERLAP,
         bytes_per_param=0.5,
     )
 
@@ -143,7 +148,7 @@ def run_exact(args) -> tuple[list[tuple], int]:
             c_seq_us=args.c_seq_us, c_orch_us=args.c_orch_us,
         seq_overlap_factor=DEFAULT_SEQ_OVERLAP,
             moe_a2a_pattern=DEFAULT_MOE_A2A_PATTERN,
-            kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US,
+            kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US, kernel_overlap_factor=DEFAULT_KERNEL_OVERLAP,
             bytes_per_param=0.5,
         )
         rows.append((f"TP={bucket[0]} EP=1", m.B, m.tpot_ms, pred))
@@ -180,7 +185,7 @@ def _run_colocated_workload(args, tp_ep: int, isl: int, osl: int):
         c_seq_us=args.c_seq_us, c_orch_us=args.c_orch_us,
         seq_overlap_factor=DEFAULT_SEQ_OVERLAP,
         moe_a2a_pattern=DEFAULT_MOE_A2A_PATTERN,
-        kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US,
+        kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US, kernel_overlap_factor=DEFAULT_KERNEL_OVERLAP,
         bytes_per_param=0.5,
     )
     rows = []
@@ -194,7 +199,7 @@ def _run_colocated_workload(args, tp_ep: int, isl: int, osl: int):
             c_seq_us=args.c_seq_us, c_orch_us=args.c_orch_us,
         seq_overlap_factor=DEFAULT_SEQ_OVERLAP,
             moe_a2a_pattern=DEFAULT_MOE_A2A_PATTERN,
-            kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US,
+            kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US, kernel_overlap_factor=DEFAULT_KERNEL_OVERLAP,
             bytes_per_param=0.5,
         )
         rows.append((f"TP=EP={tp_ep} {isl}/{osl}", m.B, m.tpot_ms, pred))
@@ -273,7 +278,7 @@ def run_colo_tp_attn(args) -> tuple[list[tuple], int]:
         c_seq_us=args.c_seq_us, c_orch_us=args.c_orch_us,
         seq_overlap_factor=DEFAULT_SEQ_OVERLAP,
         moe_a2a_pattern=DEFAULT_MOE_A2A_PATTERN,
-        kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US,
+        kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US, kernel_overlap_factor=DEFAULT_KERNEL_OVERLAP,
         bytes_per_param=0.5,
     )
     for m in measured:
@@ -286,7 +291,7 @@ def run_colo_tp_attn(args) -> tuple[list[tuple], int]:
             c_seq_us=args.c_seq_us, c_orch_us=args.c_orch_us,
         seq_overlap_factor=DEFAULT_SEQ_OVERLAP,
             moe_a2a_pattern=DEFAULT_MOE_A2A_PATTERN,
-            kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US,
+            kernel_launch_us=DEFAULT_KERNEL_LAUNCH_US, kernel_overlap_factor=DEFAULT_KERNEL_OVERLAP,
             bytes_per_param=0.5,
         )
         rows.append(("TP=EP=8 dec=32 colo TP-attn", m.B, m.tpot_ms, pred))
